@@ -1,0 +1,126 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Tenant {
+  id                     String              @id @default(uuid())
+  companyName            String              @map("company_name")
+  subdomain              String              @unique
+  registrationNumber     String              @map("registration_number")
+  gstNumber              String?             @map("gst_number")
+  address                String
+  city                   String?
+  state                  String?
+  adminEmail             String              @map("admin_email")
+  primaryColor           String?             @map("primary_color")
+  customDomain           String?             @map("custom_domain")
+  features               Json?
+  status                 TenantStatus        @default(PROVISIONING)
+  schemaName             String?             @map("schema_name")
+  plan                   SubscriptionPlan?   @map("plan")
+  billingCycle           BillingCycle?       @map("billing_cycle")
+  trialDays              Int?                @map("trial_days")
+  trialEndsAt            DateTime?           @map("trial_ends_at")
+  subscriptionStartsAt   DateTime?           @map("subscription_starts_at")
+  monthlyAmount          Decimal?            @map("monthly_amount") @db.Decimal(10, 2)
+  subscriptionStatus     SubscriptionStatus? @map("subscription_status")
+  createdAt              DateTime            @default(now()) @map("created_at")
+  updatedAt              DateTime            @updatedAt @map("updated_at")
+  users                  User[]
+  loans                  Loan[]
+
+  @@map("tenants")
+}
+
+model User {
+  id            String          @id @default(uuid())
+  email         String          @unique
+  password      String
+  firstName     String?         @map("first_name")
+  lastName      String?         @map("last_name")
+  role          Role            @default(BORROWER)
+  tenantId      String?         @map("tenant_id")
+  totpSecret    String?         @map("totp_secret")
+  totpEnabled   Boolean         @default(false) @map("totp_enabled")
+  createdAt     DateTime        @default(now()) @map("created_at")
+  updatedAt     DateTime        @updatedAt @map("updated_at")
+  tenant        Tenant?         @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  loans         Loan[]
+  loginAuditLogs LoginAuditLog[]
+
+  @@map("users")
+}
+
+model LoginAuditLog {
+  id        String   @id @default(uuid())
+  userId    String?  @map("user_id")
+  email     String
+  ipAddress String   @map("ip_address")
+  success   Boolean
+  reason    String?
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("login_audit_logs")
+}
+
+model Loan {
+  id           String     @id @default(uuid())
+  userId       String     @map("user_id")
+  tenantId     String     @map("tenant_id")
+  amount       Decimal    @db.Decimal(12, 2)
+  interestRate Decimal    @map("interest_rate") @db.Decimal(5, 2)
+  termMonths   Int        @map("term_months")
+  status       LoanStatus @default(PENDING)
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant       Tenant     @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@map("loans")
+}
+
+enum Role {
+  BORROWER
+  LENDER
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum TenantStatus {
+  PROVISIONING
+  ACTIVE
+  SUSPENDED
+  FAILED
+}
+
+enum LoanStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  ACTIVE
+  CLOSED
+}
+
+enum SubscriptionPlan {
+  STARTER
+  PROFESSIONAL
+  ENTERPRISE
+}
+
+enum BillingCycle {
+  MONTHLY
+  QUARTERLY
+  ANNUALLY
+}
+
+enum SubscriptionStatus {
+  TRIAL
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+}

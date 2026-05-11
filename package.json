@@ -1,0 +1,19 @@
+{
+  "name": "lendershub",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n backend,frontend -c blue,green --kill-others-on-fail \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "npm --prefix backend run start:dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:mobile": "npm --prefix mobile run start",
+    "docker:up": "docker compose up db redis -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f db redis",
+    "docker:reset": "docker compose down -v && docker compose up db redis -d",
+    "install:all": "npm i --prefix backend && npm i --prefix frontend && npm i --prefix mobile"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
