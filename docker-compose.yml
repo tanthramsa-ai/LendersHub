@@ -67,10 +67,11 @@ services:
     build:
       context: ./frontend
       dockerfile: ../docker/Dockerfile.frontend
+      args:
+        # NEXT_PUBLIC_* vars must be passed at build time — they get inlined into JS bundles
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4001}
     container_name: lendershub-frontend
     restart: unless-stopped
-    environment:
-      NEXT_PUBLIC_API_URL: http://localhost:4001
     ports:
       - "3000:3000"
     networks:

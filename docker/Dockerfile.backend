@@ -5,7 +5,8 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 
-# Generate Prisma client before compiling
+# Copy Prisma config + schema before generating client
+COPY prisma.config.ts ./
 COPY prisma ./prisma
 RUN npx prisma generate
 
@@ -19,14 +20,18 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev
 
-# Copy prisma schema + migrations (needed for migrate deploy at runtime)
+# prisma.config.ts provides DATABASE_URL to prisma migrate deploy (Prisma 7)
+COPY prisma.config.ts ./
 COPY prisma ./prisma
 RUN npx prisma generate
+
+# Copy prisma CLI from builder so migrate deploy works without devDeps
+COPY --from=builder /app/node_modules/.bin/prisma ./node_modules/.bin/prisma
+COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
 
 # Copy compiled output
 COPY --from=builder /app/dist ./dist
 
 EXPOSE 4001
 
-# Run pending migrations then start the server
-CMD sh -c "npx prisma migrate deploy && node dist/src/main"
+CMD ["sh", "-c", "npx prisma migrate deploy && node dist/main"]
