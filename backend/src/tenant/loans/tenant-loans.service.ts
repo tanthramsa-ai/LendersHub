@@ -65,8 +65,10 @@ export class TenantLoansService {
   async list(user: TenantJwtPayload, page: number, limit: number, status?: string) {
     return this.withSchema(user.schemaName, async (client) => {
       const offset = (page - 1) * limit;
-      const whereClause = status ? `WHERE l.status = $3` : '';
-      const params = status ? [limit, offset, status] : [limit, offset];
+      const dataWhere = status ? `WHERE l.status = $3` : '';
+      const countWhere = status ? `WHERE l.status = $1` : '';
+      const dataParams = status ? [limit, offset, status] : [limit, offset];
+      const countParams = status ? [status] : [];
 
       const [dataRes, countRes] = await Promise.all([
         client.query(`
@@ -77,13 +79,12 @@ export class TenantLoansService {
           FROM loans l
           JOIN customers c ON c.id = l.customer_id
           LEFT JOIN installments i ON i.loan_id = l.id
-          ${whereClause}
+          ${dataWhere}
           GROUP BY l.id, c.first_name, c.last_name, c.phone
           ORDER BY l.created_at DESC
           LIMIT $1 OFFSET $2
-        `, params),
-        client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM loans l ${whereClause}`,
-          status ? [status] : []),
+        `, dataParams),
+        client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM loans l ${countWhere}`, countParams),
       ]);
 
       return {
