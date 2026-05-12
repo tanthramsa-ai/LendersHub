@@ -36,22 +36,27 @@ export class TenantCustomersService {
       const offset = (page - 1) * limit;
       const searchParam = search ? `%${search}%` : null;
 
-      const whereClause = searchParam
+      // Data query: $1=limit, $2=offset, $3=search (when present)
+      // Count query: $1=search (when present) — separate clause with $1
+      const dataWhere = searchParam
         ? `WHERE (first_name ILIKE $3 OR last_name ILIKE $3 OR phone ILIKE $3 OR customer_code ILIKE $3)`
         : '';
-      const params = searchParam ? [limit, offset, searchParam] : [limit, offset];
+      const countWhere = searchParam
+        ? `WHERE (first_name ILIKE $1 OR last_name ILIKE $1 OR phone ILIKE $1 OR customer_code ILIKE $1)`
+        : '';
+      const dataParams = searchParam ? [limit, offset, searchParam] : [limit, offset];
+      const countParams = searchParam ? [searchParam] : [];
 
       const [dataRes, countRes] = await Promise.all([
         client.query(`
           SELECT id, customer_code, first_name, last_name, email, phone,
                  pan_number, credit_score, city, state, is_active, created_at
           FROM customers
-          ${whereClause}
+          ${dataWhere}
           ORDER BY created_at DESC
           LIMIT $1 OFFSET $2
-        `, params),
-        client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM customers ${whereClause}`,
-          searchParam ? [searchParam] : []),
+        `, dataParams),
+        client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM customers ${countWhere}`, countParams),
       ]);
 
       return {

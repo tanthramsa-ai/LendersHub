@@ -46,7 +46,8 @@ export default function NewLoanPage() {
       const res = await getCustomers(1, 10, q);
       setCustomers(res.data);
     } catch (e) {
-      console.error(e);
+      setCustomers([]);
+      console.error('Customer search failed:', e);
     }
   }, []);
 
