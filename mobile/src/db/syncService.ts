@@ -1,4 +1,4 @@
-import { getPendingPayments, markPaymentSynced, markPaymentFailed } from './database';
+import { getPendingPayments, markPaymentSynced, markPaymentFailed, resetFailedPayments } from './database';
 import { recordPaymentOnline } from '../api/collections';
 
 export async function syncPendingPayments(): Promise<{ synced: number; failed: number }> {
@@ -18,4 +18,9 @@ export async function syncPendingPayments(): Promise<{ synced: number; failed: n
   }
 
   return { synced, failed };
+}
+
+export async function retryFailedPayments(): Promise<{ synced: number; failed: number }> {
+  await resetFailedPayments();
+  return syncPendingPayments();
 }

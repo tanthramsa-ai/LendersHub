@@ -4,6 +4,7 @@ import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
+import { useCollectionStore } from '../../store/collectionStore';
 import { CollectionsStackParamList } from '../../types';
 import { BRAND, ACCENT } from '../../utils/constants';
 
@@ -13,6 +14,7 @@ type Props = {
 };
 
 export default function ReceiptCameraScreen({ navigation }: Props) {
+  const { setPendingReceiptUri } = useCollectionStore();
   const [permission, requestPermission] = useCameraPermissions();
   const [facing, setFacing] = useState<CameraType>('back');
   const [capturedUri, setCapturedUri] = useState<string | null>(null);
@@ -48,8 +50,7 @@ export default function ReceiptCameraScreen({ navigation }: Props) {
   }
 
   function handleConfirm() {
-    // In production: upload capturedUri to backend or attach to payment
-    Alert.alert('Receipt saved', 'Receipt captured and attached to this payment.');
+    if (capturedUri) setPendingReceiptUri(capturedUri);
     navigation.goBack();
   }
 

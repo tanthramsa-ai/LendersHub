@@ -5,8 +5,10 @@ import { BRAND } from '../utils/constants';
 
 import CollectionsListScreen from '../screens/collections/CollectionsListScreen';
 import CollectionDetailScreen from '../screens/collections/CollectionDetailScreen';
+import RouteMapScreen from '../screens/collections/RouteMapScreen';
 import PaymentCaptureScreen from '../screens/payments/PaymentCaptureScreen';
 import ReceiptCameraScreen from '../screens/payments/ReceiptCameraScreen';
+import PaymentHistoryScreen from '../screens/reports/PaymentHistoryScreen';
 
 const Stack = createNativeStackNavigator<CollectionsStackParamList>();
 
@@ -23,12 +25,17 @@ export default function CollectionsNavigator() {
       <Stack.Screen
         name="CollectionsList"
         component={CollectionsListScreen}
-        options={{ title: 'My Collections' }}
+        options={{ title: 'Collection Dashboard' }}
       />
       <Stack.Screen
         name="CollectionDetail"
         component={CollectionDetailScreen}
         options={{ title: 'Collection Detail' }}
+      />
+      <Stack.Screen
+        name="RouteMap"
+        component={RouteMapScreen}
+        options={{ title: 'Today\'s Route' }}
       />
       <Stack.Screen
         name="PaymentCapture"
@@ -39,6 +46,11 @@ export default function CollectionsNavigator() {
         name="ReceiptCamera"
         component={ReceiptCameraScreen}
         options={{ title: 'Capture Receipt', headerShown: false }}
+      />
+      <Stack.Screen
+        name="PaymentHistory"
+        component={PaymentHistoryScreen}
+        options={{ title: 'Payment History' }}
       />
     </Stack.Navigator>
   );

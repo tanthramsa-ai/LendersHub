@@ -3,13 +3,17 @@ import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, Switch,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import { useNavigation } from '@react-navigation/native';
+import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { useAuthStore } from '../../store/authStore';
 import { clearSession } from '../../api/auth';
 import { syncPendingPayments } from '../../db/syncService';
 import { BRAND, ACCENT, DANGER, GRAY, GRAY_BORDER, GRAY_LIGHT } from '../../utils/constants';
+import { MainTabParamList } from '../../types';
 
 export default function ProfileScreen() {
   const { session, logout } = useAuthStore();
+  const navigation = useNavigation<BottomTabNavigationProp<MainTabParamList>>();
   const [notifications, setNotifications] = useState(true);
   const [locationTracking, setLocationTracking] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -122,11 +126,14 @@ export default function ProfileScreen() {
           </View>
           <Text style={styles.actionChevron}>›</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.actionRow, { borderBottomWidth: 0 }]}>
+        <TouchableOpacity
+          style={[styles.actionRow, { borderBottomWidth: 0 }]}
+          onPress={() => navigation.navigate('Collections')}
+        >
           <Text style={styles.actionIcon}>📊</Text>
           <View style={{ flex: 1 }}>
-            <Text style={styles.actionLabel}>My Collection Report</Text>
-            <Text style={styles.actionHint}>View your performance metrics</Text>
+            <Text style={styles.actionLabel}>Payment History</Text>
+            <Text style={styles.actionHint}>View all recorded payments &amp; sync status</Text>
           </View>
           <Text style={styles.actionChevron}>›</Text>
         </TouchableOpacity>

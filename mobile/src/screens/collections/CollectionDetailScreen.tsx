@@ -44,6 +44,7 @@ export default function CollectionDetailScreen({ navigation, route }: Props) {
   }
 
   function handleCall() {
+    if (!item) return;
     Linking.openURL(`tel:${item.customerPhone}`);
   }
 

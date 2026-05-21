@@ -1,17 +1,12 @@
-// Auth
-export interface AgentSession {
-  token: string;
-  user: AgentUser;
-  tenant: TenantInfo;
-}
+// ─── Auth ─────────────────────────────────────────────────────────────────────
 
 export interface AgentUser {
   id: string;
   email: string;
+  phone: string | null;
   firstName: string;
   lastName: string;
   role: string;
-  phone?: string;
 }
 
 export interface TenantInfo {
@@ -20,7 +15,47 @@ export interface TenantInfo {
   subdomain: string;
 }
 
-// Collections
+export interface AgentSession {
+  token: string;
+  expiresAt: number; // Unix ms
+  user: AgentUser;
+  tenant: TenantInfo;
+}
+
+export type LoginMethod = 'email' | 'phone';
+
+export interface StoredCredentials {
+  subdomain: string;
+  identifier: string;   // email or phone
+  loginMethod: LoginMethod;
+}
+
+export interface BiometricCapability {
+  hasHardware: boolean;
+  isEnrolled: boolean;
+  supportedTypes: number[];  // LocalAuthentication.AuthenticationType values
+  isPrimaryFace: boolean;
+  isPrimaryFingerprint: boolean;
+}
+
+export type BiometricAuthResult =
+  | { success: true }
+  | { success: false; error: 'cancelled' | 'lockout' | 'lockout_permanent' | 'not_enrolled' | 'unavailable' | 'unknown'; message: string };
+
+// ─── App state ────────────────────────────────────────────────────────────────
+
+export type AppInitState = 'initializing' | 'ready';
+
+// ─── Field validation ─────────────────────────────────────────────────────────
+
+export interface FieldErrors {
+  subdomain?: string;
+  identifier?: string;
+  password?: string;
+}
+
+// ─── Collections ─────────────────────────────────────────────────────────────
+
 export interface CollectionItem {
   id: string;
   loanId: string;
@@ -44,6 +79,7 @@ export interface PaymentRecord {
   id?: string;
   loanId: string;
   installmentId: string;
+  customerName?: string;
   amount: number;
   paymentMethod: 'CASH' | 'UPI' | 'BANK_TRANSFER' | 'CHEQUE' | 'NEFT' | 'RTGS';
   referenceNumber?: string;
@@ -53,7 +89,8 @@ export interface PaymentRecord {
   createdAt: string;
 }
 
-// Customers
+// ─── Customers ────────────────────────────────────────────────────────────────
+
 export interface Customer {
   id: string;
   customerCode: string;
@@ -65,12 +102,13 @@ export interface Customer {
   city?: string;
   state?: string;
   creditScore?: number;
+  panNumber?: string;
+  createdAt?: string;
   isActive: boolean;
   totalLoans?: number;
   activeLoans?: number;
 }
 
-// Loans
 export interface Loan {
   id: string;
   loanNumber: string;
@@ -96,25 +134,18 @@ export interface Installment {
   status: string;
 }
 
-// Dashboard
-export interface AgentStats {
-  todayTarget: number;
-  todayCollected: number;
-  pendingCount: number;
-  overdueCount: number;
-  collectedCount: number;
-  successRate: number;
-}
+// ─── Navigation ───────────────────────────────────────────────────────────────
 
-// Navigation
 export type RootStackParamList = {
+  Splash: undefined;
   Auth: undefined;
   Main: undefined;
 };
 
 export type AuthStackParamList = {
-  Login: undefined;
+  Login: { expiredSession?: boolean } | undefined;
   Biometric: undefined;
+  BiometricSetup: undefined;
 };
 
 export type MainTabParamList = {
@@ -129,6 +160,8 @@ export type CollectionsStackParamList = {
   CollectionDetail: { itemId: string };
   PaymentCapture: { item: CollectionItem };
   ReceiptCamera: { loanId: string; installmentId: string };
+  PaymentHistory: undefined;
+  RouteMap: undefined;
 };
 
 export type CustomersStackParamList = {

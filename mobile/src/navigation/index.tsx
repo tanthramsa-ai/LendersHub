@@ -2,13 +2,15 @@ import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { View, Text, TouchableOpacity } from 'react-native';
+import { View, Text } from 'react-native';
 import { useAuthStore } from '../store/authStore';
-import { BRAND, ACCENT, GRAY, GRAY_BORDER } from '../utils/constants';
+import { BRAND, GRAY, GRAY_BORDER } from '../utils/constants';
 
 // Auth screens
+import SplashScreen from '../screens/auth/SplashScreen';
 import LoginScreen from '../screens/auth/LoginScreen';
 import BiometricScreen from '../screens/auth/BiometricScreen';
+import BiometricSetupScreen from '../screens/auth/BiometricSetupScreen';
 
 // Main screens
 import HomeScreen from '../screens/home/HomeScreen';
@@ -75,17 +77,28 @@ function AuthNavigator() {
     <AuthStack.Navigator screenOptions={{ headerShown: false }}>
       <AuthStack.Screen name="Login" component={LoginScreen} />
       <AuthStack.Screen name="Biometric" component={BiometricScreen} />
+      <AuthStack.Screen name="BiometricSetup" component={BiometricSetupScreen} />
     </AuthStack.Navigator>
   );
 }
 
 export default function AppNavigator() {
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, isBiometricUnlocked, biometricEnabled, appInitState } =
+    useAuthStore();
+
+  // Determine which root screen to show
+  const showMain =
+    isAuthenticated &&
+    (!biometricEnabled || isBiometricUnlocked) &&
+    appInitState === 'ready';
 
   return (
     <NavigationContainer>
       <RootStack.Navigator screenOptions={{ headerShown: false }}>
-        {isAuthenticated ? (
+        {appInitState === 'initializing' ? (
+          // Always start at Splash; it handles all routing once bootstrap completes
+          <RootStack.Screen name="Splash" component={SplashScreen} />
+        ) : showMain ? (
           <RootStack.Screen name="Main" component={MainTabs} />
         ) : (
           <RootStack.Screen name="Auth" component={AuthNavigator} />

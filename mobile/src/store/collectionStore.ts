@@ -6,12 +6,14 @@ interface CollectionState {
   overdueItems: CollectionItem[];
   pendingPayments: PaymentRecord[];   // offline queue
   activeTab: 'today' | 'overdue' | 'completed';
+  pendingReceiptUri: string | null;   // photo captured in ReceiptCamera, consumed by PaymentCapture
   setTodayItems: (items: CollectionItem[]) => void;
   setOverdueItems: (items: CollectionItem[]) => void;
   setActiveTab: (tab: 'today' | 'overdue' | 'completed') => void;
   addPendingPayment: (payment: PaymentRecord) => void;
   removePendingPayment: (id: string) => void;
   markItemCollected: (itemId: string, amount: number) => void;
+  setPendingReceiptUri: (uri: string | null) => void;
 }
 
 export const useCollectionStore = create<CollectionState>((set) => ({
@@ -19,6 +21,7 @@ export const useCollectionStore = create<CollectionState>((set) => ({
   overdueItems: [],
   pendingPayments: [],
   activeTab: 'today',
+  pendingReceiptUri: null,
 
   setTodayItems: (items) => set({ todayItems: items }),
   setOverdueItems: (items) => set({ overdueItems: items }),
@@ -29,6 +32,8 @@ export const useCollectionStore = create<CollectionState>((set) => ({
 
   removePendingPayment: (id) =>
     set((s) => ({ pendingPayments: s.pendingPayments.filter((p) => p.id !== id) })),
+
+  setPendingReceiptUri: (uri) => set({ pendingReceiptUri: uri }),
 
   markItemCollected: (itemId, amount) =>
     set((s) => ({
