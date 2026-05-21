@@ -26,7 +26,6 @@
         "backgroundColor": "#0F4C81"
       },
       "package": "com.lendershub.agent",
-      "googleServicesFile": "./google-services.json",
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.ACCESS_FINE_LOCATION",
