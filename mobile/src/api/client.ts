@@ -1,8 +1,9 @@
 import * as SecureStore from 'expo-secure-store';
 import { AgentSession, StoredCredentials, LoginMethod } from '../types';
 
-// Android emulator → host machine; change to your LAN IP for real device
-export const API_URL = __DEV__ ? 'http://10.0.2.2:4001' : 'https://api.lendershub.com';
+export const API_URL =
+  process.env.EXPO_PUBLIC_API_URL ??
+  (__DEV__ ? 'http://10.0.2.2:4001' : 'https://api.lendershub.com');
 
 // ─── SecureStore keys ─────────────────────────────────────────────────────────
 
