@@ -13,7 +13,7 @@ RUN npx prisma generate
 COPY . .
 RUN npm run build
 # Compile seed script separately (it lives outside src/)
-RUN npx tsc --module commonjs --target ES2021 --esModuleInterop true \
+RUN npx tsc --ignoreConfig --module commonjs --target ES2021 --esModuleInterop true \
     --skipLibCheck true --resolveJsonModule true \
     prisma/seed.ts && mv prisma/seed.js dist/seed.js
 
