@@ -198,3 +198,79 @@ export function createLoan(dto: {
 }) {
   return tenantFetch('/api/v1/tenant/loans', { method: 'POST', body: JSON.stringify(dto) });
 }
+
+// ── Collections ──────────────────────────────────────────────────────────────
+
+export interface CollectionStats {
+  todayCount: number;
+  todayAmount: number;
+  overdueCount: number;
+  overdueAmount: number;
+  collectedToday: number;
+  totalPending: number;
+}
+
+export interface CollectionItem {
+  id: string;
+  installmentNumber: number;
+  dueDate: string;
+  totalAmount: number;
+  paidAmount: number;
+  balance: number;
+  status: string;
+  assignedTo: string | null;
+  agentName: string | null;
+  loanId: string;
+  loanNumber: string;
+  customerId: string;
+  customerName: string;
+  phone: string;
+  daysOverdue?: number;
+}
+
+export interface CollectionAgent {
+  id: string;
+  name: string;
+  role: string;
+}
+
+export function getCollectionStats() {
+  return tenantFetch<CollectionStats>('/api/v1/tenant/collections/stats');
+}
+
+export function getTodayCollections(page = 1, limit = 20, search?: string) {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+  if (search) params.set('search', search);
+  return tenantFetch<{ data: CollectionItem[]; total: number; page: number; limit: number }>(
+    `/api/v1/tenant/collections/today?${params}`,
+  );
+}
+
+export function getOverdueCollections(page = 1, limit = 20, search?: string) {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+  if (search) params.set('search', search);
+  return tenantFetch<{ data: CollectionItem[]; total: number; page: number; limit: number }>(
+    `/api/v1/tenant/collections/overdue?${params}`,
+  );
+}
+
+export function getCollectionAgents() {
+  return tenantFetch<CollectionAgent[]>('/api/v1/tenant/collections/agents');
+}
+
+export function recordCollectionPayment(
+  installmentId: string,
+  dto: { amount: number; paymentMethod: string; referenceNumber?: string; paymentDate?: string },
+) {
+  return tenantFetch(`/api/v1/tenant/collections/${installmentId}/payment`, {
+    method: 'POST',
+    body: JSON.stringify(dto),
+  });
+}
+
+export function assignCollectionAgent(installmentId: string, agentId: string | null) {
+  return tenantFetch(`/api/v1/tenant/collections/${installmentId}/assign`, {
+    method: 'PATCH',
+    body: JSON.stringify({ agentId }),
+  });
+}

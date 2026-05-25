@@ -108,6 +108,7 @@ export function tenantSchemaDDL(s: string): string[] {
        paid_amount         NUMERIC(14,2) NOT NULL DEFAULT 0,
        status              ${q}.installment_status NOT NULL DEFAULT 'PENDING',
        paid_at             TIMESTAMPTZ,
+       assigned_to         UUID          REFERENCES ${q}."users" (id) ON DELETE SET NULL,
        created_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
        CONSTRAINT uq_${s}_installments_seq UNIQUE (loan_id, installment_number)
      )`,

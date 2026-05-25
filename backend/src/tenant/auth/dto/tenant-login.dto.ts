@@ -1,8 +1,14 @@
-import { IsEmail, IsNotEmpty, IsString, Matches } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, Matches, ValidateIf } from 'class-validator';
 
 export class TenantLoginDto {
-  @IsEmail()
-  email: string;
+  @ValidateIf((o: TenantLoginDto) => !o.phone)
+  @IsString()
+  email?: string;
+
+  @ValidateIf((o: TenantLoginDto) => !o.email)
+  @IsOptional()
+  @IsString()
+  phone?: string;
 
   @IsNotEmpty()
   @IsString()
