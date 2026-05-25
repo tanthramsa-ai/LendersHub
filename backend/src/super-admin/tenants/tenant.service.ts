@@ -184,6 +184,170 @@ export class TenantService {
 
   // Acquires a dedicated pg connection, wraps the callback in BEGIN/set_config/COMMIT
   // so every query inside sees app.bypass_rls='true' on the same connection.
+  // ── Branch management ────────────────────────────────────────────────────────
+
+  private async withTenantSchema<T>(tenantId: string, fn: (client: import('pg').PoolClient, schemaName: string) => Promise<T>): Promise<T> {
+    const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { schemaName: true } });
+    if (!tenant?.schemaName) throw new NotFoundException('Tenant schema not found');
+    const schemaName = tenant.schemaName;
+    const client = await this.prisma.pool.connect();
+    try {
+      await client.query(`SET search_path = "${schemaName}", public`);
+      // Ensure branches/loan_types tables exist (idempotent for existing tenants)
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS "${schemaName}"."branches" (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          name TEXT NOT NULL, code TEXT NOT NULL,
+          address TEXT, city TEXT, state TEXT,
+          phone TEXT, email TEXT, manager_name TEXT,
+          is_active BOOLEAN NOT NULL DEFAULT TRUE,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          CONSTRAINT uq_${schemaName}_branches_code UNIQUE (code)
+        )
+      `);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS "${schemaName}"."loan_types" (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          name TEXT NOT NULL, description TEXT,
+          min_amount NUMERIC(14,2), max_amount NUMERIC(14,2),
+          min_interest_rate NUMERIC(6,4), max_interest_rate NUMERIC(6,4),
+          min_term_months SMALLINT, max_term_months SMALLINT,
+          is_active BOOLEAN NOT NULL DEFAULT TRUE,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          CONSTRAINT uq_${schemaName}_loan_types_name UNIQUE (name)
+        )
+      `);
+      return await fn(client, schemaName);
+    } finally {
+      client.release();
+    }
+  }
+
+  async listBranches(tenantId: string) {
+    return this.withTenantSchema(tenantId, async (client) => {
+      const [branchRes, userCount, customerCount, loanCount] = await Promise.all([
+        client.query(`SELECT * FROM branches ORDER BY created_at ASC`),
+        client.query<{ branch_id: string | null; n: string }>(`SELECT branch_id, COUNT(*) AS n FROM users GROUP BY branch_id`),
+        client.query<{ branch_id: string | null; n: string }>(`SELECT branch_id, COUNT(*) AS n FROM customers GROUP BY branch_id`),
+        client.query<{ branch_id: string | null; n: string }>(`SELECT branch_id, COUNT(*) AS n FROM loans GROUP BY branch_id`).catch(() => ({ rows: [] as { branch_id: string | null; n: string }[] })),
+      ]);
+      const uMap = Object.fromEntries(userCount.rows.map((r) => [r.branch_id ?? 'null', parseInt(r.n)]));
+      const cMap = Object.fromEntries(customerCount.rows.map((r) => [r.branch_id ?? 'null', parseInt(r.n)]));
+      const lMap = Object.fromEntries(loanCount.rows.map((r) => [r.branch_id ?? 'null', parseInt(r.n)]));
+      return branchRes.rows.map((b) => ({
+        id: b.id, name: b.name, code: b.code,
+        address: b.address, city: b.city, state: b.state,
+        phone: b.phone, email: b.email, managerName: b.manager_name,
+        isActive: b.is_active, createdAt: b.created_at,
+        userCount: uMap[b.id] ?? 0,
+        customerCount: cMap[b.id] ?? 0,
+        loanCount: lMap[b.id] ?? 0,
+      }));
+    });
+  }
+
+  async createBranch(tenantId: string, dto: {
+    name: string; code: string;
+    address?: string; city?: string; state?: string;
+    phone?: string; email?: string; managerName?: string;
+  }) {
+    return this.withTenantSchema(tenantId, async (client) => {
+      const res = await client.query(`
+        INSERT INTO branches (name, code, address, city, state, phone, email, manager_name)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING *
+      `, [dto.name, dto.code.toUpperCase(), dto.address ?? null, dto.city ?? null,
+          dto.state ?? null, dto.phone ?? null, dto.email ?? null, dto.managerName ?? null]);
+      const b = res.rows[0];
+      return {
+        id: b.id, name: b.name, code: b.code,
+        address: b.address, city: b.city, state: b.state,
+        phone: b.phone, email: b.email, managerName: b.manager_name,
+        isActive: b.is_active, createdAt: b.created_at,
+      };
+    });
+  }
+
+  async getBranch(tenantId: string, branchId: string) {
+    return this.withTenantSchema(tenantId, async (client) => {
+      const [branchRes, counts, loanTypes] = await Promise.all([
+        client.query(`SELECT * FROM branches WHERE id = $1`, [branchId]),
+        client.query<{ users: string; customers: string; loans: string }>(`
+          SELECT
+            (SELECT COUNT(*) FROM users     WHERE branch_id = $1) AS users,
+            (SELECT COUNT(*) FROM customers WHERE branch_id = $1) AS customers,
+            (SELECT COUNT(*) FROM loans     WHERE branch_id = $1) AS loans
+        `, [branchId]),
+        client.query(`SELECT id, name, description, min_amount, max_amount, min_interest_rate, max_interest_rate, min_term_months, max_term_months, is_active FROM loan_types ORDER BY name`).catch(() => ({ rows: [] })),
+      ]);
+      if (!branchRes.rows[0]) throw new NotFoundException('Branch not found');
+      const b = branchRes.rows[0];
+      const c = counts.rows[0];
+      return {
+        id: b.id, name: b.name, code: b.code,
+        address: b.address, city: b.city, state: b.state,
+        phone: b.phone, email: b.email, managerName: b.manager_name,
+        isActive: b.is_active, createdAt: b.created_at, updatedAt: b.updated_at,
+        stats: {
+          users: parseInt(c.users), customers: parseInt(c.customers), loans: parseInt(c.loans),
+        },
+        loanTypes: loanTypes.rows.map((lt) => ({
+          id: lt.id, name: lt.name, description: lt.description,
+          minAmount: lt.min_amount, maxAmount: lt.max_amount,
+          minInterestRate: lt.min_interest_rate, maxInterestRate: lt.max_interest_rate,
+          minTermMonths: lt.min_term_months, maxTermMonths: lt.max_term_months,
+          isActive: lt.is_active,
+        })),
+      };
+    });
+  }
+
+  async updateBranch(tenantId: string, branchId: string, dto: {
+    name?: string; address?: string; city?: string; state?: string;
+    phone?: string; email?: string; managerName?: string; isActive?: boolean;
+  }) {
+    return this.withTenantSchema(tenantId, async (client) => {
+      const res = await client.query(`
+        UPDATE branches SET
+          name         = COALESCE($1, name),
+          address      = COALESCE($2, address),
+          city         = COALESCE($3, city),
+          state        = COALESCE($4, state),
+          phone        = COALESCE($5, phone),
+          email        = COALESCE($6, email),
+          manager_name = COALESCE($7, manager_name),
+          is_active    = COALESCE($8, is_active),
+          updated_at   = NOW()
+        WHERE id = $9
+        RETURNING *
+      `, [dto.name ?? null, dto.address ?? null, dto.city ?? null, dto.state ?? null,
+          dto.phone ?? null, dto.email ?? null, dto.managerName ?? null, dto.isActive ?? null, branchId]);
+      if (!res.rows[0]) throw new NotFoundException('Branch not found');
+      const b = res.rows[0];
+      return { id: b.id, name: b.name, code: b.code, isActive: b.is_active };
+    });
+  }
+
+  async createLoanType(tenantId: string, dto: {
+    name: string; description?: string;
+    minAmount?: number; maxAmount?: number;
+    minInterestRate?: number; maxInterestRate?: number;
+    minTermMonths?: number; maxTermMonths?: number;
+  }) {
+    return this.withTenantSchema(tenantId, async (client) => {
+      const res = await client.query(`
+        INSERT INTO loan_types (name, description, min_amount, max_amount, min_interest_rate, max_interest_rate, min_term_months, max_term_months)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING *
+      `, [dto.name, dto.description ?? null, dto.minAmount ?? null, dto.maxAmount ?? null,
+          dto.minInterestRate ?? null, dto.maxInterestRate ?? null, dto.minTermMonths ?? null, dto.maxTermMonths ?? null]);
+      const lt = res.rows[0];
+      return { id: lt.id, name: lt.name, description: lt.description, isActive: lt.is_active };
+    });
+  }
+
   private async runWithBypass<T>(fn: (client: import('pg').PoolClient) => Promise<T>): Promise<T> {
     const client = await this.prisma.pool.connect();
     try {

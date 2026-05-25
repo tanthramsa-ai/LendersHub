@@ -19,6 +19,64 @@ async function authFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
+export interface Branch {
+  id: string;
+  name: string;
+  code: string;
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  phone: string | null;
+  email: string | null;
+  managerName: string | null;
+  isActive: boolean;
+  createdAt: string;
+  userCount: number;
+  customerCount: number;
+  loanCount: number;
+}
+
+export interface LoanType {
+  id: string;
+  name: string;
+  description: string | null;
+  minAmount: number | null;
+  maxAmount: number | null;
+  minInterestRate: number | null;
+  maxInterestRate: number | null;
+  minTermMonths: number | null;
+  maxTermMonths: number | null;
+  isActive: boolean;
+}
+
+export interface BranchDetail extends Branch {
+  updatedAt: string;
+  stats: { users: number; customers: number; loans: number };
+  loanTypes: LoanType[];
+}
+
+export interface CreateBranchPayload {
+  name: string;
+  code: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  phone?: string;
+  email?: string;
+  managerName?: string;
+}
+
+export interface CreateLoanTypePayload {
+  name: string;
+  description?: string;
+  minAmount?: number;
+  maxAmount?: number;
+  minInterestRate?: number;
+  maxInterestRate?: number;
+  minTermMonths?: number;
+  maxTermMonths?: number;
+}
+
 export interface SubdomainCheck {
   valid: boolean;
   available: boolean;
@@ -155,6 +213,31 @@ export const tenantsApi = {
   configureSubscription: (id: string, payload: ConfigureSubscriptionPayload) =>
     authFetch<SubscriptionResult>(`/api/v1/super-admin/tenants/${id}/subscription`, {
       method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+
+  // Branch API
+  listBranches: (id: string) =>
+    authFetch<Branch[]>(`/api/v1/super-admin/tenants/${id}/branches`),
+
+  createBranch: (id: string, payload: CreateBranchPayload) =>
+    authFetch<Branch>(`/api/v1/super-admin/tenants/${id}/branches`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  getBranch: (tenantId: string, branchId: string) =>
+    authFetch<BranchDetail>(`/api/v1/super-admin/tenants/${tenantId}/branches/${branchId}`),
+
+  updateBranch: (tenantId: string, branchId: string, payload: Partial<CreateBranchPayload> & { isActive?: boolean }) =>
+    authFetch<Branch>(`/api/v1/super-admin/tenants/${tenantId}/branches/${branchId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+
+  createLoanType: (tenantId: string, payload: CreateLoanTypePayload) =>
+    authFetch<LoanType>(`/api/v1/super-admin/tenants/${tenantId}/loan-types`, {
+      method: 'POST',
       body: JSON.stringify(payload),
     }),
 };

@@ -133,5 +133,46 @@ export function tenantSchemaDDL(s: string): string[] {
     `CREATE INDEX IF NOT EXISTS idx_${s}_payments_loan        ON ${q}."payments" (loan_id)`,
     `CREATE INDEX IF NOT EXISTS idx_${s}_payments_installment ON ${q}."payments" (installment_id)`,
     `CREATE INDEX IF NOT EXISTS idx_${s}_payments_date        ON ${q}."payments" (payment_date)`,
+
+    // ── branches ──────────────────────────────────────────────────────────────
+    `CREATE TABLE IF NOT EXISTS ${q}."branches" (
+       id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+       name        TEXT        NOT NULL,
+       code        TEXT        NOT NULL,
+       address     TEXT,
+       city        TEXT,
+       state       TEXT,
+       phone       TEXT,
+       email       TEXT,
+       manager_name TEXT,
+       is_active   BOOLEAN     NOT NULL DEFAULT TRUE,
+       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+       updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+       CONSTRAINT uq_${s}_branches_code UNIQUE (code)
+     )`,
+
+    `CREATE INDEX IF NOT EXISTS idx_${s}_branches_active ON ${q}."branches" (is_active)`,
+
+    // ── loan_types ────────────────────────────────────────────────────────────
+    `CREATE TABLE IF NOT EXISTS ${q}."loan_types" (
+       id                UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+       name              TEXT         NOT NULL,
+       description       TEXT,
+       min_amount        NUMERIC(14,2),
+       max_amount        NUMERIC(14,2),
+       min_interest_rate NUMERIC(6,4),
+       max_interest_rate NUMERIC(6,4),
+       min_term_months   SMALLINT,
+       max_term_months   SMALLINT,
+       is_active         BOOLEAN      NOT NULL DEFAULT TRUE,
+       created_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+       updated_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+       CONSTRAINT uq_${s}_loan_types_name UNIQUE (name)
+     )`,
+
+    // ── branch_id FK on existing tables (idempotent) ─────────────────────────
+    `ALTER TABLE ${q}."users"     ADD COLUMN IF NOT EXISTS branch_id UUID REFERENCES ${q}."branches" (id) ON DELETE SET NULL`,
+    `ALTER TABLE ${q}."customers" ADD COLUMN IF NOT EXISTS branch_id UUID REFERENCES ${q}."branches" (id) ON DELETE SET NULL`,
+    `ALTER TABLE ${q}."loans"     ADD COLUMN IF NOT EXISTS branch_id UUID REFERENCES ${q}."branches" (id) ON DELETE SET NULL`,
   ];
 }

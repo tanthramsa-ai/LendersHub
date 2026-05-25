@@ -12,6 +12,10 @@ RUN npx prisma generate
 
 COPY . .
 RUN npm run build
+# Compile seed script separately (it lives outside src/)
+RUN npx tsc --module commonjs --target ES2021 --esModuleInterop true \
+    --skipLibCheck true --resolveJsonModule true \
+    prisma/seed.ts && mv prisma/seed.js dist/seed.js
 
 # --- Production stage ---
 FROM node:22-alpine AS production
@@ -29,7 +33,7 @@ RUN npx prisma generate
 COPY --from=builder /app/node_modules/.bin/prisma ./node_modules/.bin/prisma
 COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
 
-# Copy compiled output
+# Copy compiled output (includes dist/seed.js)
 COPY --from=builder /app/dist ./dist
 
 EXPOSE 4001

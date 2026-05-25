@@ -22,6 +22,8 @@ async function tenantFetch<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export type UserRole = 'ADMIN' | 'LOAN_OFFICER' | 'COLLECTOR' | 'VIEWER';
+
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
 export interface TenantUser {
@@ -29,7 +31,7 @@ export interface TenantUser {
   email: string;
   firstName: string;
   lastName: string;
-  role: string;
+  role: UserRole;
 }
 
 export interface TenantInfo {
@@ -273,4 +275,49 @@ export function assignCollectionAgent(installmentId: string, agentId: string | n
     method: 'PATCH',
     body: JSON.stringify({ agentId }),
   });
+}
+
+// ── Tenant Users ──────────────────────────────────────────────────────────────
+
+export interface TenantUser {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  phone: string | null;
+  role: UserRole;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export function getTenantUsers(page = 1, limit = 20, search?: string) {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+  if (search) params.set('search', search);
+  return tenantFetch<{ data: TenantUser[]; total: number; page: number; limit: number }>(
+    `/api/v1/tenant/users?${params}`,
+  );
+}
+
+export function createTenantUser(dto: {
+  email: string; password: string;
+  firstName: string; lastName: string;
+  phone?: string; role: UserRole;
+}) {
+  return tenantFetch<TenantUser>('/api/v1/tenant/users', { method: 'POST', body: JSON.stringify(dto) });
+}
+
+export function updateTenantUser(id: string, dto: { firstName?: string; lastName?: string; phone?: string; role?: UserRole }) {
+  return tenantFetch<TenantUser>(`/api/v1/tenant/users/${id}`, { method: 'PATCH', body: JSON.stringify(dto) });
+}
+
+export function deactivateTenantUser(id: string) {
+  return tenantFetch(`/api/v1/tenant/users/${id}/deactivate`, { method: 'PATCH' });
+}
+
+export function activateTenantUser(id: string) {
+  return tenantFetch(`/api/v1/tenant/users/${id}/activate`, { method: 'PATCH' });
+}
+
+export function resetTenantUserPassword(id: string, password: string) {
+  return tenantFetch(`/api/v1/tenant/users/${id}/reset-password`, { method: 'PATCH', body: JSON.stringify({ password }) });
 }

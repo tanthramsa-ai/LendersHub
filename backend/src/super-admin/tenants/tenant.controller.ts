@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Put, Param, Body, Query,
+  Controller, Get, Post, Put, Patch, Param, Body, Query,
   UseGuards, HttpCode, HttpStatus, ParseIntPipe, DefaultValuePipe,
 } from '@nestjs/common';
 import { TenantService } from './tenant.service';
@@ -57,5 +57,47 @@ export class TenantController {
   @Put(':id/subscription')
   configureSubscription(@Param('id') id: string, @Body() dto: ConfigureSubscriptionDto) {
     return this.tenants.configureSubscription(id, dto);
+  }
+
+  // ── Branch endpoints ────────────────────────────────────────────────────────
+
+  @Get(':id/branches')
+  listBranches(@Param('id') id: string) {
+    return this.tenants.listBranches(id);
+  }
+
+  @Post(':id/branches')
+  @HttpCode(HttpStatus.CREATED)
+  createBranch(@Param('id') id: string, @Body() dto: {
+    name: string; code: string;
+    address?: string; city?: string; state?: string;
+    phone?: string; email?: string; managerName?: string;
+  }) {
+    return this.tenants.createBranch(id, dto);
+  }
+
+  @Get(':id/branches/:branchId')
+  getBranch(@Param('id') id: string, @Param('branchId') branchId: string) {
+    return this.tenants.getBranch(id, branchId);
+  }
+
+  @Patch(':id/branches/:branchId')
+  updateBranch(
+    @Param('id') id: string,
+    @Param('branchId') branchId: string,
+    @Body() dto: { name?: string; address?: string; city?: string; state?: string; phone?: string; email?: string; managerName?: string; isActive?: boolean },
+  ) {
+    return this.tenants.updateBranch(id, branchId, dto);
+  }
+
+  @Post(':id/loan-types')
+  @HttpCode(HttpStatus.CREATED)
+  createLoanType(@Param('id') id: string, @Body() dto: {
+    name: string; description?: string;
+    minAmount?: number; maxAmount?: number;
+    minInterestRate?: number; maxInterestRate?: number;
+    minTermMonths?: number; maxTermMonths?: number;
+  }) {
+    return this.tenants.createLoanType(id, dto);
   }
 }
