@@ -196,9 +196,46 @@ export function getLoan(id: string) {
 
 export function createLoan(dto: {
   customerId: string; principal: number; interestRate: number;
-  termMonths: number; purpose?: string; firstDueDate?: string;
+  termMonths: number; purpose?: string; firstDueDate?: string; branchId?: string;
 }) {
   return tenantFetch('/api/v1/tenant/loans', { method: 'POST', body: JSON.stringify(dto) });
+}
+
+// ── Branches (tenant-level) ───────────────────────────────────────────────────
+
+export interface TenantBranch {
+  id: string;
+  name: string;
+  code: string;
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  phone: string | null;
+  email: string | null;
+  managerName: string | null;
+  isActive: boolean;
+  createdAt: string;
+  userCount: number;
+  customerCount: number;
+  loanCount: number;
+}
+
+export function getBranches() {
+  return tenantFetch<TenantBranch[]>('/api/v1/tenant/branches');
+}
+
+export function createBranch(dto: {
+  name: string; code: string; address?: string; city?: string;
+  state?: string; phone?: string; email?: string; managerName?: string;
+}) {
+  return tenantFetch<TenantBranch>('/api/v1/tenant/branches', { method: 'POST', body: JSON.stringify(dto) });
+}
+
+export function updateBranch(id: string, dto: {
+  name?: string; address?: string; city?: string; state?: string;
+  phone?: string; email?: string; managerName?: string; isActive?: boolean;
+}) {
+  return tenantFetch<TenantBranch>(`/api/v1/tenant/branches/${id}`, { method: 'PATCH', body: JSON.stringify(dto) });
 }
 
 // ── Collections ──────────────────────────────────────────────────────────────

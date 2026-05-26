@@ -9,6 +9,7 @@ export interface CreateLoanDto {
   termMonths: number;
   purpose?: string;
   firstDueDate?: string;
+  branchId?: string;
 }
 
 export interface RecordPaymentDto {
@@ -161,10 +162,10 @@ export class TenantLoansService {
         : new Date(Date.now() + 30 * 86400000);
 
       const loanRes = await client.query(`
-        INSERT INTO loans (loan_number, customer_id, loan_officer_id, principal, interest_rate, term_months, status, purpose, first_due_date)
-        VALUES ($1,$2,$3,$4,$5,$6,'PENDING',$7,$8)
+        INSERT INTO loans (loan_number, customer_id, loan_officer_id, branch_id, principal, interest_rate, term_months, status, purpose, first_due_date)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,'PENDING',$8,$9)
         RETURNING *
-      `, [loanNumber, dto.customerId, user.sub, dto.principal, dto.interestRate, dto.termMonths, dto.purpose ?? null, firstDueDate.toISOString().slice(0, 10)]);
+      `, [loanNumber, dto.customerId, user.sub, dto.branchId ?? null, dto.principal, dto.interestRate, dto.termMonths, dto.purpose ?? null, firstDueDate.toISOString().slice(0, 10)]);
 
       const loan = loanRes.rows[0];
 

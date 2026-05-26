@@ -14,6 +14,8 @@ import { TenantCollectionsService } from './collections/tenant-collections.servi
 import { TenantCollectionsController } from './collections/tenant-collections.controller';
 import { TenantUsersService } from './users/tenant-users.service';
 import { TenantUsersController } from './users/tenant-users.controller';
+import { TenantBranchesService } from './branches/tenant-branches.service';
+import { TenantBranchesController } from './branches/tenant-branches.controller';
 
 @Module({
   imports: [
@@ -28,6 +30,7 @@ import { TenantUsersController } from './users/tenant-users.controller';
     TenantLoansService,
     TenantCollectionsService,
     TenantUsersService,
+    TenantBranchesService,
   ],
   controllers: [
     TenantAuthController,
@@ -36,6 +39,7 @@ import { TenantUsersController } from './users/tenant-users.controller';
     TenantLoansController,
     TenantCollectionsController,
     TenantUsersController,
+    TenantBranchesController,
   ],
 })
 export class TenantModule {}

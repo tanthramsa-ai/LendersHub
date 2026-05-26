@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
-import { createLoan, getCustomers, Customer } from '@/services/tenant-api';
+import { createLoan, getCustomers, getBranches, Customer, TenantBranch } from '@/services/tenant-api';
 
 function calcEmi(principal: number, annualRate: number, months: number): number {
   if (!principal || !months) return 0;
@@ -26,7 +26,8 @@ export default function NewLoanPage() {
   const [customerSearch, setCustomerSearch] = useState('');
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [showDropdown, setShowDropdown] = useState(false);
-  const [form, setForm] = useState({ principal: '', interestRate: '', termMonths: '', purpose: '', firstDueDate: '' });
+  const [branches, setBranches] = useState<TenantBranch[]>([]);
+  const [form, setForm] = useState({ principal: '', interestRate: '', termMonths: '', purpose: '', firstDueDate: '', branchId: '' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -43,6 +44,8 @@ export default function NewLoanPage() {
     else setShowDropdown(false);
   }, [customerSearch, searchCustomers]);
 
+  useEffect(() => { getBranches().then(setBranches).catch(() => {}); }, []);
+
   function set(field: keyof typeof form, value: string) { setForm((f) => ({ ...f, [field]: value })); }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -50,7 +53,7 @@ export default function NewLoanPage() {
     if (!selectedCustomer) { setError('Please select a customer'); return; }
     setError(''); setLoading(true);
     try {
-      const loan = await createLoan({ customerId: selectedCustomer.id, principal: Number(form.principal), interestRate: Number(form.interestRate), termMonths: Number(form.termMonths), purpose: form.purpose || undefined, firstDueDate: form.firstDueDate || undefined }) as { id: string };
+      const loan = await createLoan({ customerId: selectedCustomer.id, principal: Number(form.principal), interestRate: Number(form.interestRate), termMonths: Number(form.termMonths), purpose: form.purpose || undefined, firstDueDate: form.firstDueDate || undefined, branchId: form.branchId || undefined }) as { id: string };
       router.push(`/${subdomain}/loans/${loan.id}`);
     } catch (err) {
       setError((err as Error).message);
@@ -122,6 +125,15 @@ export default function NewLoanPage() {
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">First Due Date</label>
                   <input type="date" value={form.firstDueDate} onChange={(e) => set('firstDueDate', e.target.value)} className={inputCls} />
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Branch</label>
+                  <select value={form.branchId} onChange={(e) => set('branchId', e.target.value)} className={inputCls}>
+                    <option value="">— No branch —</option>
+                    {branches.filter((b) => b.isActive).map((b) => (
+                      <option key={b.id} value={b.id}>{b.name} ({b.code})</option>
+                    ))}
+                  </select>
                 </div>
                 <div className="col-span-2">
                   <label className="block text-xs font-medium text-gray-600 mb-1">Loan Purpose</label>
