@@ -13,20 +13,22 @@ class DebugAllExceptionsFilter extends BaseExceptionFilter {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<any>();
     const status = exception instanceof HttpException ? exception.getStatus() : 500;
-    const message =
-      exception instanceof HttpException
-        ? exception.message
-        : (exception as Error)?.message ?? 'Internal server error';
+    let message: unknown;
+    if (exception instanceof HttpException) {
+      const res = exception.getResponse();
+      message = typeof res === 'object' && res !== null ? (res as Record<string, unknown>).message ?? exception.message : res;
+    } else {
+      message = (exception as Error)?.message ?? 'Internal server error';
+    }
 
     this.logger.error(
-      `[${status}] ${message}`,
+      `[${status}] ${JSON.stringify(message)}`,
       (exception as Error)?.stack,
     );
 
     response.status(status).json({
       statusCode: status,
       message,
-      // Include stack in development so we can see it in the browser network tab
       ...(status >= 500 && { detail: (exception as Error)?.stack?.split('\n').slice(0, 6).join(' | ') }),
     });
   }

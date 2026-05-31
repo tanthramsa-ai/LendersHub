@@ -6,14 +6,15 @@ interface CollectionState {
   overdueItems: CollectionItem[];
   pendingPayments: PaymentRecord[];   // offline queue
   activeTab: 'today' | 'overdue' | 'completed';
-  pendingReceiptUri: string | null;   // photo captured in ReceiptCamera, consumed by PaymentCapture
+  // Scoped to a specific installment to prevent cross-customer receipt attachment
+  pendingReceiptUri: { loanId: string; installmentId: string; uri: string } | null;
   setTodayItems: (items: CollectionItem[]) => void;
   setOverdueItems: (items: CollectionItem[]) => void;
   setActiveTab: (tab: 'today' | 'overdue' | 'completed') => void;
   addPendingPayment: (payment: PaymentRecord) => void;
   removePendingPayment: (id: string) => void;
   markItemCollected: (itemId: string, amount: number) => void;
-  setPendingReceiptUri: (uri: string | null) => void;
+  setPendingReceiptUri: (payload: { loanId: string; installmentId: string; uri: string } | null) => void;
 }
 
 export const useCollectionStore = create<CollectionState>((set) => ({

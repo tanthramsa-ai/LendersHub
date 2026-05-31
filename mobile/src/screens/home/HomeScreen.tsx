@@ -35,14 +35,15 @@ export default function HomeScreen() {
 
   async function loadData() {
     try {
+      // Fetch both — if either fails throw and preserve existing store data
       const [today, overdue] = await Promise.all([
-        fetchTodayCollections().catch(() => [] as CollectionItem[]),
-        fetchOverdueCollections().catch(() => [] as CollectionItem[]),
+        fetchTodayCollections(),
+        fetchOverdueCollections(),
       ]);
       setTodayItems(today);
       setOverdueItems(overdue);
     } catch {
-      // offline — use cached store data
+      // Offline — keep whatever is already in the store (never wipe with empty arrays)
     }
   }
 

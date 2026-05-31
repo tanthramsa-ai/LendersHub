@@ -13,6 +13,11 @@ export class TenantBranchesController {
     return this.svc.list(req.user);
   }
 
+  @Get(':id/members')
+  getMembers(@Request() req: { user: TenantJwtPayload }, @Param('id') id: string) {
+    return this.svc.getMembers(req.user, id);
+  }
+
   @Post()
   create(@Request() req: { user: TenantJwtPayload }, @Body() dto: CreateBranchDto) {
     return this.svc.create(req.user, dto);

@@ -13,8 +13,9 @@ type Props = {
   route: RouteProp<CollectionsStackParamList, 'ReceiptCamera'>;
 };
 
-export default function ReceiptCameraScreen({ navigation }: Props) {
+export default function ReceiptCameraScreen({ navigation, route }: Props) {
   const { setPendingReceiptUri } = useCollectionStore();
+  const { loanId, installmentId } = route.params;
   const [permission, requestPermission] = useCameraPermissions();
   const [facing, setFacing] = useState<CameraType>('back');
   const [capturedUri, setCapturedUri] = useState<string | null>(null);
@@ -50,7 +51,7 @@ export default function ReceiptCameraScreen({ navigation }: Props) {
   }
 
   function handleConfirm() {
-    if (capturedUri) setPendingReceiptUri(capturedUri);
+    if (capturedUri) setPendingReceiptUri({ loanId, installmentId, uri: capturedUri });
     navigation.goBack();
   }
 

@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
+import { TenantNotificationsService } from '../notifications/tenant-notifications.service';
 
 export interface CreateLoanDto {
   customerId: string;
@@ -12,12 +13,311 @@ export interface CreateLoanDto {
   branchId?: string;
 }
 
+export interface CreateWeeklyLoanDto {
+  customerId: string;
+  principal: number;
+  interestRate: number;      // % per annum
+  termWeeks: number;         // number of weekly installments
+  firstDueDate: string;      // YYYY-MM-DD
+  calculationType: 'REDUCING' | 'FLAT';
+  emiRounding: 0 | 10 | 50 | 100;  // round EMI up to nearest X
+  purpose?: string;
+  branchId?: string;
+  loanTypeId?: string;
+  securityDocUrl?: string;
+  promissoryNoteUrl?: string;
+}
+
 export interface RecordPaymentDto {
   installmentId?: string;
   amount: number;
   paymentMethod: 'CASH' | 'UPI' | 'BANK_TRANSFER' | 'CHEQUE' | 'NEFT' | 'RTGS';
   referenceNumber?: string;
   paymentDate?: string;
+}
+
+export interface CreateDailyLoanDto {
+  customerId: string;
+  principal: number;
+  interestRate: number;      // % per annum
+  termDays: number;          // number of daily installments
+  firstDueDate: string;      // YYYY-MM-DD
+  cycleType: 'DAILY_NO_SUNDAY' | 'DAILY_WITH_SUNDAY';
+  calculationType: 'REDUCING' | 'FLAT';
+  emiRounding: 0 | 10 | 50 | 100;
+  purpose?: string;
+  branchId?: string;
+  loanTypeId?: string;
+  securityDocUrl?: string;
+  promissoryNoteUrl?: string;
+}
+
+export interface CreateMonthlyLoanDto {
+  customerId: string;
+  principal: number;
+  interestRate: number;      // % per annum
+  termMonths: number;        // number of monthly interest installments
+  firstDueDate: string;      // YYYY-MM-DD
+  purpose?: string;
+  branchId: string;          // mandatory
+  loanTypeId?: string;
+  securityDocUrl?: string;
+  promissoryNoteUrl?: string;
+}
+
+export interface CreateAgentRiskLoanDto {
+  customerId: string;
+  principal: number;
+  interestRate: number;
+  termMonths: number;
+  firstDueDate: string;
+  purpose?: string;
+  branchId: string;
+  loanTypeId?: string;
+  securityDocUrl?: string;
+  promissoryNoteUrl?: string;
+}
+
+export interface CreateTermLoanDto {
+  customerId: string;
+  principal: number;
+  interestRate: number;      // % per annum
+  termMonths: number;
+  firstDueDate: string;      // YYYY-MM-DD
+  calculationType: 'REDUCING' | 'FLAT';
+  emiRounding: 0 | 10 | 50 | 100;
+  purpose?: string;
+  branchId: string;          // mandatory
+  loanTypeId?: string;
+  securityDocUrl?: string;
+  promissoryNoteUrl?: string;
+}
+
+function roundUp(amount: number, nearest: number): number {
+  if (nearest === 0) return Math.round(amount * 100) / 100;
+  return Math.ceil(amount / nearest) * nearest;
+}
+
+export function computeDailySchedule(
+  principal: number,
+  annualRate: number,
+  termDays: number,
+  firstDueDateStr: string,
+  calculationType: 'REDUCING' | 'FLAT',
+  emiRounding: number,
+  cycleType: 'DAILY_NO_SUNDAY' | 'DAILY_WITH_SUNDAY',
+) {
+  const dailyRate = annualRate / 100 / 365;
+  const skipSundays = cycleType === 'DAILY_NO_SUNDAY';
+
+  let emi: number;
+  if (calculationType === 'FLAT' || dailyRate === 0) {
+    const totalInterest = principal * dailyRate * termDays;
+    emi = (principal + totalInterest) / termDays;
+  } else {
+    emi = dailyRate === 0
+      ? principal / termDays
+      : (principal * dailyRate * Math.pow(1 + dailyRate, termDays)) /
+        (Math.pow(1 + dailyRate, termDays) - 1);
+  }
+  if (emiRounding > 0) emi = Math.ceil(emi / emiRounding) * emiRounding;
+
+  const schedule: Array<{ number: number; dueDate: string; principalAmount: number; interestAmount: number; totalAmount: number }> = [];
+  let balance = principal;
+
+  // Parse first due date using UTC to avoid timezone shifts
+  const [yr, mo, dy] = firstDueDateStr.split('-').map(Number);
+  const currentDate = new Date(Date.UTC(yr, mo - 1, dy));
+
+  // Advance past Sunday if skipping
+  if (skipSundays) {
+    while (currentDate.getUTCDay() === 0) currentDate.setUTCDate(currentDate.getUTCDate() + 1);
+  }
+
+  for (let i = 0; i < termDays; i++) {
+    const dueDate = currentDate.toISOString().slice(0, 10);
+    let interestAmount: number;
+    let principalAmount: number;
+
+    if (calculationType === 'FLAT') {
+      interestAmount = principal * dailyRate;
+      principalAmount = i < termDays - 1 ? principal / termDays : balance;
+    } else {
+      interestAmount = balance * dailyRate;
+      principalAmount = i < termDays - 1 ? Math.max(0, emi - interestAmount) : balance;
+    }
+
+    principalAmount = Math.round(principalAmount * 100) / 100;
+    interestAmount = Math.round(interestAmount * 100) / 100;
+    balance = Math.max(0, Math.round((balance - principalAmount) * 100) / 100);
+
+    schedule.push({
+      number: i + 1,
+      dueDate,
+      principalAmount,
+      interestAmount,
+      totalAmount: Math.round((principalAmount + interestAmount) * 100) / 100,
+    });
+
+    // Advance to next collection day
+    currentDate.setUTCDate(currentDate.getUTCDate() + 1);
+    if (skipSundays) {
+      while (currentDate.getUTCDay() === 0) currentDate.setUTCDate(currentDate.getUTCDate() + 1);
+    }
+  }
+
+  return { schedule, emi, dailyRate };
+}
+
+export function computeWeeklySchedule(
+  principal: number,
+  annualRate: number,
+  termWeeks: number,
+  firstDueDateStr: string,
+  calculationType: 'REDUCING' | 'FLAT',
+  emiRounding: number,
+) {
+  const weeklyRate = annualRate / 100 / 52;
+  let emi: number;
+
+  if (calculationType === 'FLAT' || weeklyRate === 0) {
+    const totalInterest = principal * weeklyRate * termWeeks;
+    emi = (principal + totalInterest) / termWeeks;
+  } else {
+    emi = (principal * weeklyRate * Math.pow(1 + weeklyRate, termWeeks)) /
+          (Math.pow(1 + weeklyRate, termWeeks) - 1);
+  }
+
+  const roundedEmi = roundUp(emi, emiRounding);
+
+  let balance = principal;
+  const schedule: Array<{
+    number: number; dueDate: string;
+    principalAmount: number; interestAmount: number; totalAmount: number;
+  }> = [];
+
+  for (let i = 1; i <= termWeeks; i++) {
+    let interest: number;
+    let principalAmt: number;
+    let total: number;
+
+    if (i === termWeeks) {
+      // Last installment: clear remaining balance
+      if (calculationType === 'FLAT' || weeklyRate === 0) {
+        interest = Math.round(principal * weeklyRate * 100) / 100;
+        principalAmt = Math.round(balance * 100) / 100;
+      } else {
+        interest = Math.round(balance * weeklyRate * 100) / 100;
+        principalAmt = Math.round(balance * 100) / 100;
+      }
+      total = Math.round((principalAmt + interest) * 100) / 100;
+    } else {
+      if (calculationType === 'FLAT' || weeklyRate === 0) {
+        principalAmt = Math.round((principal / termWeeks) * 100) / 100;
+        interest = Math.round(principal * weeklyRate * 100) / 100;
+        total = roundedEmi;
+      } else {
+        interest = Math.round(balance * weeklyRate * 100) / 100;
+        principalAmt = Math.round((roundedEmi - interest) * 100) / 100;
+        total = roundedEmi;
+      }
+      balance = Math.round((balance - principalAmt) * 100) / 100;
+    }
+
+    const dueDate = new Date(firstDueDateStr);
+    dueDate.setDate(dueDate.getDate() + (i - 1) * 7);
+
+    schedule.push({
+      number: i,
+      dueDate: dueDate.toISOString().slice(0, 10),
+      principalAmount: principalAmt,
+      interestAmount: interest,
+      totalAmount: total,
+    });
+  }
+
+  return { schedule, emi: roundedEmi, weeklyRate };
+}
+
+function computeMonthlySchedule(
+  principal: number,
+  annualRate: number,
+  termMonths: number,
+  firstDueDateStr: string,
+): { schedule: Array<{ number: number; dueDate: string; principalAmount: number; interestAmount: number; totalAmount: number }>; monthlyInterest: number } {
+  const monthlyInterest = Math.round(principal * (annualRate / 100 / 12) * 100) / 100;
+  const [yr, mo, dy] = firstDueDateStr.split('-').map(Number);
+  const schedule: Array<{ number: number; dueDate: string; principalAmount: number; interestAmount: number; totalAmount: number }> = [];
+
+  for (let i = 0; i < termMonths; i++) {
+    const totalM0 = (mo - 1) + i;
+    const year = yr + Math.floor(totalM0 / 12);
+    const monthIdx = totalM0 % 12;
+    const lastDay = new Date(Date.UTC(year, monthIdx + 1, 0)).getUTCDate();
+    const day = Math.min(dy, lastDay);
+    const dueDate = `${year}-${String(monthIdx + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    schedule.push({ number: i + 1, dueDate, principalAmount: 0, interestAmount: monthlyInterest, totalAmount: monthlyInterest });
+  }
+
+  return { schedule, monthlyInterest };
+}
+
+export function computeTermLoanSchedule(
+  principal: number,
+  annualRate: number,
+  termMonths: number,
+  firstDueDateStr: string,
+  calculationType: 'REDUCING' | 'FLAT',
+  emiRounding: number,
+): { schedule: Array<{ number: number; dueDate: string; principalAmount: number; interestAmount: number; totalAmount: number }>; emi: number } {
+  const monthlyRate = annualRate / 100 / 12;
+
+  let emi: number;
+  if (calculationType === 'FLAT') {
+    const totalInterest = principal * monthlyRate * termMonths;
+    emi = (principal + totalInterest) / termMonths;
+  } else {
+    emi = monthlyRate === 0
+      ? principal / termMonths
+      : (principal * monthlyRate * Math.pow(1 + monthlyRate, termMonths)) /
+        (Math.pow(1 + monthlyRate, termMonths) - 1);
+  }
+  if (emiRounding > 0) emi = Math.ceil(emi / emiRounding) * emiRounding;
+
+  const [yr, mo, dy] = firstDueDateStr.split('-').map(Number);
+  let balance = principal;
+  const schedule: Array<{ number: number; dueDate: string; principalAmount: number; interestAmount: number; totalAmount: number }> = [];
+
+  for (let i = 0; i < termMonths; i++) {
+    const totalM0 = (mo - 1) + i;
+    const year = yr + Math.floor(totalM0 / 12);
+    const monthIdx = totalM0 % 12;
+    const lastDay = new Date(Date.UTC(year, monthIdx + 1, 0)).getUTCDate();
+    const day = Math.min(dy, lastDay);
+    const dueDate = `${year}-${String(monthIdx + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+
+    let interestAmount: number;
+    let principalAmount: number;
+
+    if (calculationType === 'FLAT') {
+      interestAmount = Math.round(principal * monthlyRate * 100) / 100;
+      principalAmount = i < termMonths - 1
+        ? Math.round((principal / termMonths) * 100) / 100
+        : Math.round(balance * 100) / 100;
+    } else {
+      interestAmount = Math.round(balance * monthlyRate * 100) / 100;
+      principalAmount = i < termMonths - 1
+        ? Math.round((emi - interestAmount) * 100) / 100
+        : Math.round(balance * 100) / 100;
+    }
+
+    const totalAmount = i < termMonths - 1 ? emi : Math.round((principalAmount + interestAmount) * 100) / 100;
+    balance = Math.round((balance - principalAmount) * 100) / 100;
+
+    schedule.push({ number: i + 1, dueDate, principalAmount, interestAmount, totalAmount });
+  }
+
+  return { schedule, emi };
 }
 
 function generateInstallments(principal: number, annualRate: number, termMonths: number, firstDueDate: Date) {
@@ -51,7 +351,10 @@ function generateInstallments(principal: number, annualRate: number, termMonths:
 
 @Injectable()
 export class TenantLoansService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private notifications: TenantNotificationsService,
+  ) {}
 
   private async withSchema<T>(schemaName: string, fn: (client: import('pg').PoolClient) => Promise<T>): Promise<T> {
     const client = await this.prisma.pool.connect();
@@ -63,13 +366,41 @@ export class TenantLoansService {
     }
   }
 
-  async list(user: TenantJwtPayload, page: number, limit: number, status?: string) {
+  async list(user: TenantJwtPayload, page: number, limit: number, opts: {
+    status?: string; search?: string; branchId?: string; loanTypeId?: string; officerId?: string;
+  } = {}) {
     return this.withSchema(user.schemaName, async (client) => {
       const offset = (page - 1) * limit;
-      const dataWhere = status ? `WHERE l.status = $3` : '';
-      const countWhere = status ? `WHERE l.status = $1` : '';
-      const dataParams = status ? [limit, offset, status] : [limit, offset];
-      const countParams = status ? [status] : [];
+
+      const conditions: string[] = ['l.deleted_at IS NULL'];
+      const filterParams: unknown[] = [];
+      let idx = 1;
+
+      // Role-based visibility: Agent (LOAN_OFFICER) sees only their own loans
+      if (user.role === 'LOAN_OFFICER') {
+        conditions.push(`l.loan_officer_id = $${idx++}`);
+        filterParams.push(user.sub);
+      }
+
+      if (opts.status) { conditions.push(`l.status = $${idx++}`); filterParams.push(opts.status); }
+      if (opts.branchId) { conditions.push(`l.branch_id = $${idx++}`); filterParams.push(opts.branchId); }
+      if (opts.loanTypeId) { conditions.push(`l.loan_type_id = $${idx++}`); filterParams.push(opts.loanTypeId); }
+      // Only OWNER/ADMIN/MANAGER can filter by officer; for LOAN_OFFICER it's always self
+      if (opts.officerId && user.role !== 'LOAN_OFFICER') {
+        conditions.push(`l.loan_officer_id = $${idx++}`);
+        filterParams.push(opts.officerId);
+      }
+      if (opts.search) {
+        conditions.push(`(c.first_name || ' ' || c.last_name ILIKE $${idx} OR l.loan_number ILIKE $${idx} OR c.phone ILIKE $${idx})`);
+        filterParams.push(`%${opts.search}%`);
+        idx++;
+      }
+
+      const whereClause = `WHERE ${conditions.join(' AND ')}`;
+      const dataParams = [...filterParams, limit, offset];
+      const countParams = [...filterParams];
+      const limitIdx = idx;
+      const offsetIdx = idx + 1;
 
       const [dataRes, countRes] = await Promise.all([
         client.query(`
@@ -80,12 +411,16 @@ export class TenantLoansService {
           FROM loans l
           JOIN customers c ON c.id = l.customer_id
           LEFT JOIN installments i ON i.loan_id = l.id
-          ${dataWhere}
+          ${whereClause}
           GROUP BY l.id, c.first_name, c.last_name, c.phone
-          ORDER BY l.created_at DESC
-          LIMIT $1 OFFSET $2
+          ORDER BY l.loan_number ASC
+          LIMIT $${limitIdx} OFFSET $${offsetIdx}
         `, dataParams),
-        client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM loans l ${countWhere}`, countParams),
+        client.query<{ total: string }>(`
+          SELECT COUNT(*) AS total FROM loans l
+          JOIN customers c ON c.id = l.customer_id
+          ${whereClause}
+        `, countParams),
       ]);
 
       return {
@@ -109,8 +444,12 @@ export class TenantLoansService {
       const [loanRes, installmentsRes, paymentsRes] = await Promise.all([
         client.query(`
           SELECT l.*, c.first_name || ' ' || c.last_name AS customer_name,
-                 c.phone AS customer_phone, c.id AS customer_id_ref
-          FROM loans l JOIN customers c ON c.id = l.customer_id WHERE l.id = $1
+                 c.phone AS customer_phone, c.id AS customer_id_ref,
+                 b.name AS branch_name
+          FROM loans l
+          JOIN customers c ON c.id = l.customer_id
+          LEFT JOIN branches b ON b.id = l.branch_id
+          WHERE l.id = $1
         `, [id]),
         client.query(`SELECT * FROM installments WHERE loan_id = $1 ORDER BY installment_number`, [id]),
         client.query(`SELECT * FROM payments WHERE loan_id = $1 ORDER BY created_at DESC`, [id]),
@@ -123,7 +462,16 @@ export class TenantLoansService {
         customerId: l.customer_id_ref, customerName: l.customer_name, customerPhone: l.customer_phone,
         principal: parseFloat(l.principal),
         interestRate: parseFloat(l.interest_rate),
-        termMonths: l.term_months, status: l.status, purpose: l.purpose,
+        termMonths: l.term_months, termWeeks: l.term_months,
+        status: l.status, purpose: l.purpose,
+        cycleType: l.cycle_type,
+        calculationType: l.calculation_type,
+        emiAmount: l.emi_amount ? parseFloat(l.emi_amount) : null,
+        securityDocUrl: l.security_doc_url ?? null,
+        promissoryNoteUrl: l.promissory_note_url ?? null,
+        branchId: l.branch_id ?? null,
+        branchName: l.branch_name ?? null,
+        loanTypeId: l.loan_type_id ?? null,
         disbursedAt: l.disbursed_at, firstDueDate: l.first_due_date,
         createdAt: l.created_at, updatedAt: l.updated_at,
         installments: installmentsRes.rows.map((i) => ({
@@ -142,6 +490,7 @@ export class TenantLoansService {
   }
 
   async create(user: TenantJwtPayload, dto: CreateLoanDto) {
+    if (user.role === 'VIEWER') throw new BadRequestException('You do not have permission to create loans');
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.interestRate < 0 || dto.interestRate > 100) throw new BadRequestException('Invalid interest rate');
     if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
@@ -178,7 +527,7 @@ export class TenantLoansService {
         `, [loan.id, inst.number, inst.dueDate, inst.principal, inst.interest, inst.total]);
       }
 
-      return {
+      const result = {
         id: loan.id, loanNumber: loan.loan_number,
         principal: parseFloat(loan.principal),
         interestRate: parseFloat(loan.interest_rate),
@@ -186,6 +535,862 @@ export class TenantLoansService {
         firstDueDate: loan.first_due_date,
         installmentCount: installments.length,
         monthlyEmi: installments[0]?.total,
+      };
+
+      // Notify managers about new loan
+      const mgrsRes = await client.query<{ id: string }>(
+        `SELECT id FROM users WHERE role IN ('OWNER','MANAGER','ADMIN') AND is_active = TRUE`,
+      );
+      for (const mgr of mgrsRes.rows) {
+        await TenantNotificationsService.insertNotification(client, {
+          userId: mgr.id,
+          title: `New loan created — ${loanNumber}`,
+          body: `${custRes.rows[0] ? '' : ''}Loan of ₹${dto.principal.toLocaleString('en-IN')} created for customer.`,
+          type: 'loan',
+          entityType: 'loan',
+          entityId: loan.id,
+          link: `/loans/${loan.id}`,
+        });
+      }
+
+      return result;
+    });
+  }
+
+  async closeLoan(user: TenantJwtPayload, loanId: string) {
+    if (!['OWNER', 'MANAGER', 'ADMIN'].includes(user.role)) {
+      throw new BadRequestException('Only Owner, Manager or Admin can close a loan');
+    }
+
+    return this.withSchema(user.schemaName, async (client) => {
+      const res = await client.query(
+        `SELECT id, status FROM loans WHERE id = $1 AND deleted_at IS NULL`,
+        [loanId],
+      );
+      if (!res.rows[0]) throw new NotFoundException('Loan not found');
+
+      const { status } = res.rows[0];
+      if (status === 'CLOSED') throw new BadRequestException('Loan is already closed');
+      if (!['APPROVED', 'DISBURSED', 'ACTIVE'].includes(status)) {
+        throw new BadRequestException(`Cannot close a loan in ${status} status`);
+      }
+
+      await client.query(
+        `UPDATE loans SET status = 'CLOSED', closed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+        [loanId],
+      );
+
+      // Mark remaining unpaid installments as WAIVED
+      await client.query(
+        `UPDATE installments SET status = 'WAIVED'
+         WHERE loan_id = $1 AND status IN ('PENDING','PARTIALLY_PAID','OVERDUE')`,
+        [loanId],
+      );
+
+      return { id: loanId, status: 'CLOSED', closedAt: new Date() };
+    });
+  }
+
+  previewWeeklySchedule(dto: Pick<CreateWeeklyLoanDto, 'principal' | 'interestRate' | 'termWeeks' | 'firstDueDate' | 'calculationType' | 'emiRounding'>) {
+    const { schedule, emi, weeklyRate } = computeWeeklySchedule(
+      dto.principal, dto.interestRate, dto.termWeeks,
+      dto.firstDueDate, dto.calculationType, dto.emiRounding,
+    );
+    const totalInterest = schedule.reduce((s, i) => s + i.interestAmount, 0);
+    const totalPayable = schedule.reduce((s, i) => s + i.totalAmount, 0);
+    return {
+      emi, weeklyRate,
+      totalInterest: Math.round(totalInterest * 100) / 100,
+      totalPayable: Math.round(totalPayable * 100) / 100,
+      schedule,
+    };
+  }
+
+  async listWeeklyLoans(user: TenantJwtPayload, page: number, limit: number, opts: {
+    search?: string; branchId?: string; status?: string;
+  } = {}) {
+    return this.withSchema(user.schemaName, async (client) => {
+      const offset = (page - 1) * limit;
+      const conditions: string[] = [`l.deleted_at IS NULL`, `l.cycle_type = 'WEEKLY'`];
+      const filterParams: unknown[] = [];
+      let idx = 1;
+
+      if (user.role === 'LOAN_OFFICER') {
+        conditions.push(`l.loan_officer_id = $${idx++}`);
+        filterParams.push(user.sub);
+      }
+      if (opts.status) { conditions.push(`l.status = $${idx++}`); filterParams.push(opts.status); }
+      if (opts.branchId) { conditions.push(`l.branch_id = $${idx++}`); filterParams.push(opts.branchId); }
+      if (opts.search) {
+        conditions.push(`(c.first_name||' '||c.last_name ILIKE $${idx} OR l.loan_number ILIKE $${idx} OR c.phone ILIKE $${idx})`);
+        filterParams.push(`%${opts.search}%`); idx++;
+      }
+
+      const whereClause = `WHERE ${conditions.join(' AND ')}`;
+      const dataParams = [...filterParams, limit, offset];
+      const limitIdx = idx; const offsetIdx = idx + 1;
+
+      const [dataRes, countRes] = await Promise.all([
+        client.query(`
+          SELECT l.id, l.loan_number, l.principal, l.interest_rate,
+                 l.term_months AS term_weeks, l.emi_amount, l.status,
+                 l.cycle_type, l.calculation_type,
+                 l.disbursed_at, l.first_due_date, l.created_at,
+                 l.branch_id, b.name AS branch_name,
+                 c.id AS customer_id, c.first_name||' '||c.last_name AS customer_name, c.phone,
+                 -- Financial breakdown
+                 COALESCE(SUM(CASE WHEN i.status='PAID' THEN i.principal_amount ELSE 0 END)
+                   + SUM(CASE WHEN i.status='PARTIALLY_PAID' THEN GREATEST(0,i.paid_amount-i.interest_amount) ELSE 0 END), 0) AS principal_received,
+                 COALESCE(SUM(CASE WHEN i.status='PAID' THEN i.interest_amount ELSE 0 END)
+                   + SUM(CASE WHEN i.status='PARTIALLY_PAID' THEN LEAST(i.paid_amount,i.interest_amount) ELSE 0 END), 0) AS interest_received,
+                 COALESCE(SUM(CASE WHEN i.status IN('PENDING','OVERDUE') THEN i.principal_amount
+                   WHEN i.status='PARTIALLY_PAID' THEN i.principal_amount-GREATEST(0,i.paid_amount-i.interest_amount)
+                   ELSE 0 END), 0) AS principal_outstanding,
+                 COALESCE(SUM(CASE WHEN i.status IN('PENDING','OVERDUE') THEN i.interest_amount
+                   WHEN i.status='PARTIALLY_PAID' THEN i.interest_amount-LEAST(i.paid_amount,i.interest_amount)
+                   ELSE 0 END), 0) AS interest_outstanding,
+                 COUNT(i.id) AS total_installments,
+                 COUNT(i.id) FILTER (WHERE i.status='PAID') AS paid_installments,
+                 COUNT(i.id) FILTER (WHERE i.status='OVERDUE') AS overdue_count
+          FROM loans l
+          JOIN customers c ON c.id = l.customer_id
+          LEFT JOIN branches b ON b.id = l.branch_id
+          LEFT JOIN installments i ON i.loan_id = l.id
+          ${whereClause}
+          GROUP BY l.id, c.id, c.first_name, c.last_name, c.phone, b.name
+          ORDER BY l.loan_number ASC
+          LIMIT $${limitIdx} OFFSET $${offsetIdx}
+        `, dataParams),
+        client.query<{ total: string }>(
+          `SELECT COUNT(*) AS total FROM loans l JOIN customers c ON c.id = l.customer_id ${whereClause}`,
+          filterParams,
+        ),
+      ]);
+
+      return {
+        data: dataRes.rows.map((r) => ({
+          id: r.id, loanNumber: r.loan_number,
+          customerId: r.customer_id, customerName: r.customer_name, phone: r.phone,
+          principal: parseFloat(r.principal),
+          interestRate: parseFloat(r.interest_rate),
+          termWeeks: r.term_weeks, emiAmount: r.emi_amount ? parseFloat(r.emi_amount) : null,
+          status: r.status, cycleType: r.cycle_type, calculationType: r.calculation_type,
+          branchId: r.branch_id, branchName: r.branch_name,
+          disbursedAt: r.disbursed_at, firstDueDate: r.first_due_date, createdAt: r.created_at,
+          principalReceived: parseFloat(r.principal_received),
+          interestReceived: parseFloat(r.interest_received),
+          principalOutstanding: parseFloat(r.principal_outstanding),
+          interestOutstanding: parseFloat(r.interest_outstanding),
+          totalInstallments: parseInt(r.total_installments),
+          paidInstallments: parseInt(r.paid_installments),
+          overdueCount: parseInt(r.overdue_count),
+          isNpa: r.status === 'DEFAULTED' || parseInt(r.overdue_count) > 2,
+        })),
+        total: parseInt(countRes.rows[0].total),
+        page, limit,
+      };
+    });
+  }
+
+  async createWeeklyLoan(user: TenantJwtPayload, dto: CreateWeeklyLoanDto) {
+    if (user.role === 'VIEWER') throw new BadRequestException('You do not have permission to create loans');
+    if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
+    if (dto.interestRate < 0 || dto.interestRate > 200) throw new BadRequestException('Invalid interest rate');
+    if (dto.termWeeks < 1 || dto.termWeeks > 520) throw new BadRequestException('Term must be 1–520 weeks');
+
+    return this.withSchema(user.schemaName, async (client) => {
+      const custRes = await client.query(`SELECT id, first_name, last_name FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
+      if (!custRes.rows[0]) throw new NotFoundException('Customer not found');
+
+      const countRes = await client.query<{ n: string }>(`SELECT COUNT(*) AS n FROM loans`);
+      const seq = parseInt(countRes.rows[0].n) + 1;
+      const loanNumber = `WL${new Date().getFullYear()}${String(seq).padStart(6, '0')}`;
+
+      const { schedule, emi } = computeWeeklySchedule(
+        dto.principal, dto.interestRate, dto.termWeeks,
+        dto.firstDueDate, dto.calculationType, dto.emiRounding,
+      );
+
+      const loanRes = await client.query(`
+        INSERT INTO loans (
+          loan_number, customer_id, loan_officer_id, branch_id, loan_type_id,
+          principal, interest_rate, term_months, status, purpose,
+          first_due_date, cycle_type, calculation_type, emi_amount,
+          security_doc_url, promissory_note_url
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'DISBURSED',$9,$10,'WEEKLY',$11,$12,$13,$14)
+        RETURNING *
+      `, [
+        loanNumber, dto.customerId, user.sub, dto.branchId ?? null, dto.loanTypeId ?? null,
+        dto.principal, dto.interestRate, dto.termWeeks, dto.purpose ?? null,
+        dto.firstDueDate, dto.calculationType, emi,
+        dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null,
+      ]);
+
+      const loan = loanRes.rows[0];
+
+      for (const inst of schedule) {
+        await client.query(`
+          INSERT INTO installments (loan_id, installment_number, due_date, principal_amount, interest_amount, total_amount)
+          VALUES ($1,$2,$3,$4,$5,$6)
+        `, [loan.id, inst.number, inst.dueDate, inst.principalAmount, inst.interestAmount, inst.totalAmount]);
+      }
+
+      // Notify managers
+      const mgrsRes = await client.query<{ id: string }>(
+        `SELECT id FROM users WHERE role IN ('OWNER','MANAGER','ADMIN') AND is_active = TRUE`,
+      );
+      const custName = `${custRes.rows[0].first_name} ${custRes.rows[0].last_name}`;
+      for (const mgr of mgrsRes.rows) {
+        await TenantNotificationsService.insertNotification(client, {
+          userId: mgr.id,
+          title: `New weekly loan — ${loanNumber}`,
+          body: `₹${dto.principal.toLocaleString('en-IN')} weekly loan created for ${custName}.`,
+          type: 'loan', entityType: 'loan', entityId: loan.id,
+          link: `/weekly-loans/${loan.id}`,
+        });
+      }
+
+      return {
+        id: loan.id, loanNumber, principal: dto.principal,
+        emi, termWeeks: dto.termWeeks, installmentCount: schedule.length,
+        firstDueDate: dto.firstDueDate, status: 'DISBURSED',
+      };
+    });
+  }
+
+  // ── DAILY LOANS ──────────────────────────────────────────────────────────────
+
+  previewDailySchedule(dto: Pick<CreateDailyLoanDto, 'principal' | 'interestRate' | 'termDays' | 'firstDueDate' | 'calculationType' | 'emiRounding' | 'cycleType'>) {
+    const { schedule, emi, dailyRate } = computeDailySchedule(
+      dto.principal, dto.interestRate, dto.termDays,
+      dto.firstDueDate, dto.calculationType, dto.emiRounding, dto.cycleType,
+    );
+    const totalInterest = schedule.reduce((s, i) => s + i.interestAmount, 0);
+    const totalPayable = schedule.reduce((s, i) => s + i.totalAmount, 0);
+    return {
+      emi, dailyRate,
+      totalInterest: Math.round(totalInterest * 100) / 100,
+      totalPayable: Math.round(totalPayable * 100) / 100,
+      schedule,
+    };
+  }
+
+  async listDailyLoans(user: TenantJwtPayload, page: number, limit: number, opts: {
+    search?: string; branchId?: string; status?: string; cycleType?: string;
+  } = {}) {
+    return this.withSchema(user.schemaName, async (client) => {
+      const offset = (page - 1) * limit;
+      const conditions: string[] = [
+        `l.deleted_at IS NULL`,
+        `l.cycle_type IN ('DAILY_NO_SUNDAY','DAILY_WITH_SUNDAY')`,
+      ];
+      const filterParams: unknown[] = [];
+      let idx = 1;
+
+      if (user.role === 'LOAN_OFFICER') { conditions.push(`l.loan_officer_id = $${idx++}`); filterParams.push(user.sub); }
+      if (opts.status)    { conditions.push(`l.status = $${idx++}`);    filterParams.push(opts.status); }
+      if (opts.branchId)  { conditions.push(`l.branch_id = $${idx++}`); filterParams.push(opts.branchId); }
+      if (opts.cycleType) { conditions.push(`l.cycle_type = $${idx++}`); filterParams.push(opts.cycleType); }
+      if (opts.search) {
+        conditions.push(`(c.first_name||' '||c.last_name ILIKE $${idx} OR l.loan_number ILIKE $${idx} OR c.phone ILIKE $${idx})`);
+        filterParams.push(`%${opts.search}%`); idx++;
+      }
+
+      const whereClause = `WHERE ${conditions.join(' AND ')}`;
+      const dataParams = [...filterParams, limit, offset];
+      const limitIdx = idx; const offsetIdx = idx + 1;
+
+      const [dataRes, countRes] = await Promise.all([
+        client.query(`
+          SELECT l.id, l.loan_number, l.principal, l.interest_rate,
+                 l.term_months AS term_days, l.emi_amount, l.status,
+                 l.cycle_type, l.calculation_type,
+                 l.disbursed_at, l.first_due_date, l.created_at,
+                 l.branch_id, b.name AS branch_name,
+                 c.id AS customer_id, c.first_name||' '||c.last_name AS customer_name, c.phone,
+                 COALESCE(SUM(CASE WHEN i.status='PAID' THEN i.principal_amount ELSE 0 END)
+                   + SUM(CASE WHEN i.status='PARTIALLY_PAID' THEN GREATEST(0,i.paid_amount-i.interest_amount) ELSE 0 END), 0) AS principal_received,
+                 COALESCE(SUM(CASE WHEN i.status='PAID' THEN i.interest_amount ELSE 0 END)
+                   + SUM(CASE WHEN i.status='PARTIALLY_PAID' THEN LEAST(i.paid_amount,i.interest_amount) ELSE 0 END), 0) AS interest_received,
+                 COALESCE(SUM(CASE WHEN i.status IN('PENDING','OVERDUE') THEN i.principal_amount
+                   WHEN i.status='PARTIALLY_PAID' THEN i.principal_amount-GREATEST(0,i.paid_amount-i.interest_amount)
+                   ELSE 0 END), 0) AS principal_outstanding,
+                 COALESCE(SUM(CASE WHEN i.status IN('PENDING','OVERDUE') THEN i.interest_amount
+                   WHEN i.status='PARTIALLY_PAID' THEN i.interest_amount-LEAST(i.paid_amount,i.interest_amount)
+                   ELSE 0 END), 0) AS interest_outstanding,
+                 COUNT(i.id) AS total_installments,
+                 COUNT(i.id) FILTER (WHERE i.status='PAID') AS paid_installments,
+                 COUNT(i.id) FILTER (WHERE i.status='OVERDUE') AS overdue_count
+          FROM loans l
+          JOIN customers c ON c.id = l.customer_id
+          LEFT JOIN branches b ON b.id = l.branch_id
+          LEFT JOIN installments i ON i.loan_id = l.id
+          ${whereClause}
+          GROUP BY l.id, c.id, c.first_name, c.last_name, c.phone, b.name
+          ORDER BY l.loan_number ASC
+          LIMIT $${limitIdx} OFFSET $${offsetIdx}
+        `, dataParams),
+        client.query<{ total: string }>(
+          `SELECT COUNT(*) AS total FROM loans l JOIN customers c ON c.id = l.customer_id ${whereClause}`,
+          filterParams,
+        ),
+      ]);
+
+      return {
+        data: dataRes.rows.map((r) => ({
+          id: r.id, loanNumber: r.loan_number,
+          customerId: r.customer_id, customerName: r.customer_name, phone: r.phone,
+          principal: parseFloat(r.principal),
+          interestRate: parseFloat(r.interest_rate),
+          termDays: r.term_days, emiAmount: r.emi_amount ? parseFloat(r.emi_amount) : null,
+          status: r.status, cycleType: r.cycle_type, calculationType: r.calculation_type,
+          branchId: r.branch_id, branchName: r.branch_name,
+          disbursedAt: r.disbursed_at, firstDueDate: r.first_due_date, createdAt: r.created_at,
+          principalReceived: parseFloat(r.principal_received),
+          interestReceived: parseFloat(r.interest_received),
+          principalOutstanding: parseFloat(r.principal_outstanding),
+          interestOutstanding: parseFloat(r.interest_outstanding),
+          totalInstallments: parseInt(r.total_installments),
+          paidInstallments: parseInt(r.paid_installments),
+          overdueCount: parseInt(r.overdue_count),
+          isNpa: r.status === 'DEFAULTED' || parseInt(r.overdue_count) > 2,
+        })),
+        total: parseInt(countRes.rows[0].total),
+        page, limit,
+      };
+    });
+  }
+
+  async createDailyLoan(user: TenantJwtPayload, dto: CreateDailyLoanDto) {
+    if (user.role === 'VIEWER') throw new BadRequestException('You do not have permission to create loans');
+    if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
+    if (dto.interestRate < 0 || dto.interestRate > 200) throw new BadRequestException('Invalid interest rate');
+    if (dto.termDays < 1 || dto.termDays > 3650) throw new BadRequestException('Term must be 1–3650 days');
+
+    return this.withSchema(user.schemaName, async (client) => {
+      const custRes = await client.query(`SELECT id, first_name, last_name FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
+      if (!custRes.rows[0]) throw new NotFoundException('Customer not found');
+
+      const countRes = await client.query<{ n: string }>(`SELECT COUNT(*) AS n FROM loans`);
+      const seq = parseInt(countRes.rows[0].n) + 1;
+      const loanNumber = `DL${new Date().getFullYear()}${String(seq).padStart(6, '0')}`;
+
+      const { schedule, emi } = computeDailySchedule(
+        dto.principal, dto.interestRate, dto.termDays,
+        dto.firstDueDate, dto.calculationType, dto.emiRounding, dto.cycleType,
+      );
+
+      const loanRes = await client.query(`
+        INSERT INTO loans (
+          loan_number, customer_id, loan_officer_id, branch_id, loan_type_id,
+          principal, interest_rate, term_months, status, purpose,
+          first_due_date, cycle_type, calculation_type, emi_amount,
+          security_doc_url, promissory_note_url
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'DISBURSED',$9,$10,$11,$12,$13,$14,$15)
+        RETURNING *
+      `, [
+        loanNumber, dto.customerId, user.sub, dto.branchId ?? null, dto.loanTypeId ?? null,
+        dto.principal, dto.interestRate, dto.termDays, dto.purpose ?? null,
+        dto.firstDueDate, dto.cycleType, dto.calculationType, emi,
+        dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null,
+      ]);
+
+      const loan = loanRes.rows[0];
+      for (const inst of schedule) {
+        await client.query(`
+          INSERT INTO installments (loan_id, installment_number, due_date, principal_amount, interest_amount, total_amount)
+          VALUES ($1,$2,$3,$4,$5,$6)
+        `, [loan.id, inst.number, inst.dueDate, inst.principalAmount, inst.interestAmount, inst.totalAmount]);
+      }
+
+      const mgrsRes = await client.query<{ id: string }>(
+        `SELECT id FROM users WHERE role IN ('OWNER','MANAGER','ADMIN') AND is_active = TRUE`,
+      );
+      const custName = `${custRes.rows[0].first_name} ${custRes.rows[0].last_name}`;
+      const cycleLabel = dto.cycleType === 'DAILY_NO_SUNDAY' ? 'daily (no sun)' : 'daily';
+      for (const mgr of mgrsRes.rows) {
+        await TenantNotificationsService.insertNotification(client, {
+          userId: mgr.id,
+          title: `New ${cycleLabel} loan — ${loanNumber}`,
+          body: `₹${dto.principal.toLocaleString('en-IN')} ${cycleLabel} loan created for ${custName}.`,
+          type: 'loan', entityType: 'loan', entityId: loan.id,
+          link: `/daily-loans/${loan.id}`,
+        });
+      }
+
+      return {
+        id: loan.id, loanNumber, principal: dto.principal,
+        emi, termDays: dto.termDays, installmentCount: schedule.length,
+        firstDueDate: dto.firstDueDate, status: 'DISBURSED',
+      };
+    });
+  }
+
+  // ── MONTHLY LOANS ─────────────────────────────────────────────────────────────
+
+  previewMonthlySchedule(dto: Pick<CreateMonthlyLoanDto, 'principal' | 'interestRate' | 'termMonths' | 'firstDueDate'>) {
+    const { schedule, monthlyInterest } = computeMonthlySchedule(
+      dto.principal, dto.interestRate, dto.termMonths, dto.firstDueDate,
+    );
+    return {
+      monthlyInterest,
+      totalInterest: Math.round(monthlyInterest * dto.termMonths * 100) / 100,
+      schedule,
+    };
+  }
+
+  async listMonthlyLoans(user: TenantJwtPayload, page: number, limit: number, opts: {
+    search?: string; branchId?: string; status?: string;
+  } = {}) {
+    return this.withSchema(user.schemaName, async (client) => {
+      const offset = (page - 1) * limit;
+      const conditions: string[] = [
+        `l.deleted_at IS NULL`,
+        `l.cycle_type = 'MONTHLY'`,
+      ];
+      const filterParams: unknown[] = [];
+      let idx = 1;
+
+      if (user.role === 'LOAN_OFFICER') { conditions.push(`l.loan_officer_id = $${idx++}`); filterParams.push(user.sub); }
+      if (opts.status)   { conditions.push(`l.status = $${idx++}`);    filterParams.push(opts.status); }
+      if (opts.branchId) { conditions.push(`l.branch_id = $${idx++}`); filterParams.push(opts.branchId); }
+      if (opts.search) {
+        conditions.push(`(c.first_name||' '||c.last_name ILIKE $${idx} OR l.loan_number ILIKE $${idx} OR c.phone ILIKE $${idx})`);
+        filterParams.push(`%${opts.search}%`); idx++;
+      }
+
+      const whereClause = `WHERE ${conditions.join(' AND ')}`;
+      const dataParams = [...filterParams, limit, offset];
+      const limitIdx = idx; const offsetIdx = idx + 1;
+
+      const [dataRes, countRes] = await Promise.all([
+        client.query(`
+          SELECT l.id, l.loan_number, l.principal, l.interest_rate,
+                 l.term_months, l.emi_amount, l.status,
+                 l.disbursed_at, l.first_due_date, l.created_at,
+                 l.branch_id, b.name AS branch_name,
+                 c.id AS customer_id, c.first_name||' '||c.last_name AS customer_name, c.phone,
+                 COALESCE(SUM(CASE WHEN i.status='PAID' THEN i.interest_amount ELSE 0 END)
+                   + SUM(CASE WHEN i.status='PARTIALLY_PAID' THEN LEAST(i.paid_amount,i.interest_amount) ELSE 0 END), 0) AS interest_received,
+                 COALESCE(SUM(CASE WHEN i.status IN('PENDING','OVERDUE') THEN i.interest_amount
+                   WHEN i.status='PARTIALLY_PAID' THEN i.interest_amount-LEAST(i.paid_amount,i.interest_amount)
+                   ELSE 0 END), 0) AS interest_outstanding,
+                 COUNT(i.id) AS total_installments,
+                 COUNT(i.id) FILTER (WHERE i.status='PAID') AS paid_installments,
+                 COUNT(i.id) FILTER (WHERE i.status='OVERDUE') AS overdue_count
+          FROM loans l
+          JOIN customers c ON c.id = l.customer_id
+          LEFT JOIN branches b ON b.id = l.branch_id
+          LEFT JOIN installments i ON i.loan_id = l.id
+          ${whereClause}
+          GROUP BY l.id, c.id, c.first_name, c.last_name, c.phone, b.name
+          ORDER BY l.loan_number ASC
+          LIMIT $${limitIdx} OFFSET $${offsetIdx}
+        `, dataParams),
+        client.query<{ total: string }>(
+          `SELECT COUNT(*) AS total FROM loans l JOIN customers c ON c.id = l.customer_id ${whereClause}`,
+          filterParams,
+        ),
+      ]);
+
+      return {
+        data: dataRes.rows.map((r) => ({
+          id: r.id, loanNumber: r.loan_number,
+          customerId: r.customer_id, customerName: r.customer_name, phone: r.phone,
+          principal: parseFloat(r.principal),
+          interestRate: parseFloat(r.interest_rate),
+          termMonths: r.term_months,
+          monthlyInterest: r.emi_amount ? parseFloat(r.emi_amount) : null,
+          status: r.status,
+          branchId: r.branch_id, branchName: r.branch_name,
+          disbursedAt: r.disbursed_at, firstDueDate: r.first_due_date, createdAt: r.created_at,
+          principalOutstanding: parseFloat(r.principal),
+          interestReceived: parseFloat(r.interest_received),
+          interestOutstanding: parseFloat(r.interest_outstanding),
+          totalInstallments: parseInt(r.total_installments),
+          paidInstallments: parseInt(r.paid_installments),
+          overdueCount: parseInt(r.overdue_count),
+          isNpa: r.status === 'DEFAULTED' || parseInt(r.overdue_count) > 2,
+        })),
+        total: parseInt(countRes.rows[0].total),
+        page, limit,
+      };
+    });
+  }
+
+  async createMonthlyLoan(user: TenantJwtPayload, dto: CreateMonthlyLoanDto) {
+    if (user.role === 'VIEWER') throw new BadRequestException('You do not have permission to create loans');
+    if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
+    if (dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
+    if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
+    if (!dto.branchId) throw new BadRequestException('Branch is required for monthly loans');
+
+    return this.withSchema(user.schemaName, async (client) => {
+      const custRes = await client.query(`SELECT id FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
+      if (!custRes.rows[0]) throw new NotFoundException('Customer not found');
+
+      const countRes = await client.query<{ n: string }>(`SELECT COUNT(*) AS n FROM loans WHERE cycle_type = 'MONTHLY'`);
+      const seq = parseInt(countRes.rows[0].n) + 1;
+      const loanNumber = `ML${new Date().getFullYear()}${String(seq).padStart(6, '0')}`;
+
+      const { schedule, monthlyInterest } = computeMonthlySchedule(
+        dto.principal, dto.interestRate, dto.termMonths, dto.firstDueDate,
+      );
+
+      const loanRes = await client.query(`
+        INSERT INTO loans (
+          loan_number, customer_id, loan_officer_id, branch_id, loan_type_id,
+          principal, interest_rate, term_months, emi_amount,
+          cycle_type, status, purpose, first_due_date,
+          security_doc_url, promissory_note_url, disbursed_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'MONTHLY','DISBURSED',$10,$11,$12,$13,NOW())
+        RETURNING *
+      `, [
+        loanNumber, dto.customerId, user.sub, dto.branchId, dto.loanTypeId ?? null,
+        dto.principal, dto.interestRate, dto.termMonths, monthlyInterest,
+        dto.purpose ?? null, dto.firstDueDate,
+        dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null,
+      ]);
+
+      const loan = loanRes.rows[0];
+
+      for (const inst of schedule) {
+        await client.query(`
+          INSERT INTO installments (loan_id, installment_number, due_date, principal_amount, interest_amount, total_amount)
+          VALUES ($1,$2,$3,$4,$5,$6)
+        `, [loan.id, inst.number, inst.dueDate, inst.principalAmount, inst.interestAmount, inst.totalAmount]);
+      }
+
+      const custNameRes = await client.query<{ name: string }>(
+        `SELECT first_name || ' ' || last_name AS name FROM customers WHERE id = $1`, [dto.customerId],
+      );
+      const custName = custNameRes.rows[0]?.name ?? 'Customer';
+      const mgrsRes = await client.query<{ id: string }>(
+        `SELECT id FROM users WHERE role IN ('OWNER','MANAGER','ADMIN') AND is_active = TRUE`,
+      );
+      for (const mgr of mgrsRes.rows) {
+        await TenantNotificationsService.insertNotification(client, {
+          userId: mgr.id,
+          title: `New Monthly loan — ${loanNumber}`,
+          body: `₹${dto.principal.toLocaleString('en-IN')} monthly loan created for ${custName}.`,
+          type: 'loan', entityType: 'loan', entityId: loan.id,
+          link: `/monthly-loans/${loan.id}`,
+        });
+      }
+
+      return {
+        id: loan.id, loanNumber, principal: dto.principal,
+        monthlyInterest, termMonths: dto.termMonths,
+        installmentCount: schedule.length,
+        firstDueDate: dto.firstDueDate, status: 'DISBURSED',
+      };
+    });
+  }
+
+  // ── AGENT RISK LOANS ──────────────────────────────────────────────────────────
+
+  previewAgentRiskSchedule(dto: Pick<CreateAgentRiskLoanDto, 'principal' | 'interestRate' | 'termMonths' | 'firstDueDate'>) {
+    const { schedule, monthlyInterest } = computeMonthlySchedule(
+      dto.principal, dto.interestRate, dto.termMonths, dto.firstDueDate,
+    );
+    return {
+      monthlyInterest,
+      totalInterest: Math.round(monthlyInterest * dto.termMonths * 100) / 100,
+      schedule,
+    };
+  }
+
+  async listAgentRiskLoans(user: TenantJwtPayload, page: number, limit: number, opts: {
+    search?: string; branchId?: string; status?: string;
+  } = {}) {
+    return this.withSchema(user.schemaName, async (client) => {
+      const offset = (page - 1) * limit;
+      const conditions: string[] = [`l.deleted_at IS NULL`, `l.cycle_type = 'AGENT_RISK'`];
+      const filterParams: unknown[] = [];
+      let idx = 1;
+
+      if (user.role === 'LOAN_OFFICER') { conditions.push(`l.loan_officer_id = $${idx++}`); filterParams.push(user.sub); }
+      if (opts.status)   { conditions.push(`l.status = $${idx++}`);    filterParams.push(opts.status); }
+      if (opts.branchId) { conditions.push(`l.branch_id = $${idx++}`); filterParams.push(opts.branchId); }
+      if (opts.search) {
+        conditions.push(`(c.first_name||' '||c.last_name ILIKE $${idx} OR l.loan_number ILIKE $${idx} OR c.phone ILIKE $${idx})`);
+        filterParams.push(`%${opts.search}%`); idx++;
+      }
+
+      const whereClause = `WHERE ${conditions.join(' AND ')}`;
+      const dataParams = [...filterParams, limit, offset];
+      const limitIdx = idx; const offsetIdx = idx + 1;
+
+      const [dataRes, countRes] = await Promise.all([
+        client.query(`
+          SELECT l.id, l.loan_number, l.principal, l.interest_rate,
+                 l.term_months, l.emi_amount, l.status,
+                 l.disbursed_at, l.first_due_date, l.created_at,
+                 l.branch_id, b.name AS branch_name,
+                 c.id AS customer_id, c.first_name||' '||c.last_name AS customer_name, c.phone,
+                 COALESCE(SUM(CASE WHEN i.status='PAID' THEN i.interest_amount ELSE 0 END)
+                   + SUM(CASE WHEN i.status='PARTIALLY_PAID' THEN LEAST(i.paid_amount,i.interest_amount) ELSE 0 END), 0) AS interest_received,
+                 COALESCE(SUM(CASE WHEN i.status IN('PENDING','OVERDUE') THEN i.interest_amount
+                   WHEN i.status='PARTIALLY_PAID' THEN i.interest_amount-LEAST(i.paid_amount,i.interest_amount)
+                   ELSE 0 END), 0) AS interest_outstanding,
+                 COUNT(i.id) AS total_installments,
+                 COUNT(i.id) FILTER (WHERE i.status='PAID') AS paid_installments,
+                 COUNT(i.id) FILTER (WHERE i.status='OVERDUE') AS overdue_count
+          FROM loans l
+          JOIN customers c ON c.id = l.customer_id
+          LEFT JOIN branches b ON b.id = l.branch_id
+          LEFT JOIN installments i ON i.loan_id = l.id
+          ${whereClause}
+          GROUP BY l.id, c.id, c.first_name, c.last_name, c.phone, b.name
+          ORDER BY l.loan_number ASC
+          LIMIT $${limitIdx} OFFSET $${offsetIdx}
+        `, dataParams),
+        client.query<{ total: string }>(
+          `SELECT COUNT(*) AS total FROM loans l JOIN customers c ON c.id = l.customer_id ${whereClause}`,
+          filterParams,
+        ),
+      ]);
+
+      return {
+        data: dataRes.rows.map((r) => ({
+          id: r.id, loanNumber: r.loan_number,
+          customerId: r.customer_id, customerName: r.customer_name, phone: r.phone,
+          principal: parseFloat(r.principal),
+          interestRate: parseFloat(r.interest_rate),
+          termMonths: r.term_months,
+          monthlyInterest: r.emi_amount ? parseFloat(r.emi_amount) : null,
+          status: r.status,
+          branchId: r.branch_id, branchName: r.branch_name,
+          disbursedAt: r.disbursed_at, firstDueDate: r.first_due_date, createdAt: r.created_at,
+          principalOutstanding: parseFloat(r.principal),
+          interestReceived: parseFloat(r.interest_received),
+          interestOutstanding: parseFloat(r.interest_outstanding),
+          totalInstallments: parseInt(r.total_installments),
+          paidInstallments: parseInt(r.paid_installments),
+          overdueCount: parseInt(r.overdue_count),
+          isNpa: r.status === 'DEFAULTED' || parseInt(r.overdue_count) > 2,
+        })),
+        total: parseInt(countRes.rows[0].total),
+        page, limit,
+      };
+    });
+  }
+
+  async createAgentRiskLoan(user: TenantJwtPayload, dto: CreateAgentRiskLoanDto) {
+    if (user.role === 'VIEWER') throw new BadRequestException('You do not have permission to create loans');
+    if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
+    if (dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
+    if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
+    if (!dto.branchId) throw new BadRequestException('Branch is required for agent risk loans');
+
+    return this.withSchema(user.schemaName, async (client) => {
+      const custRes = await client.query(`SELECT id FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
+      if (!custRes.rows[0]) throw new NotFoundException('Customer not found');
+
+      const countRes = await client.query<{ n: string }>(`SELECT COUNT(*) AS n FROM loans WHERE cycle_type = 'AGENT_RISK'`);
+      const seq = parseInt(countRes.rows[0].n) + 1;
+      const loanNumber = `AR${new Date().getFullYear()}${String(seq).padStart(6, '0')}`;
+
+      const { schedule, monthlyInterest } = computeMonthlySchedule(
+        dto.principal, dto.interestRate, dto.termMonths, dto.firstDueDate,
+      );
+
+      const loanRes = await client.query(`
+        INSERT INTO loans (
+          loan_number, customer_id, loan_officer_id, branch_id, loan_type_id,
+          principal, interest_rate, term_months, emi_amount,
+          cycle_type, status, purpose, first_due_date,
+          security_doc_url, promissory_note_url, disbursed_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'AGENT_RISK','DISBURSED',$10,$11,$12,$13,NOW())
+        RETURNING *
+      `, [
+        loanNumber, dto.customerId, user.sub, dto.branchId, dto.loanTypeId ?? null,
+        dto.principal, dto.interestRate, dto.termMonths, monthlyInterest,
+        dto.purpose ?? null, dto.firstDueDate,
+        dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null,
+      ]);
+
+      const loan = loanRes.rows[0];
+
+      for (const inst of schedule) {
+        await client.query(`
+          INSERT INTO installments (loan_id, installment_number, due_date, principal_amount, interest_amount, total_amount)
+          VALUES ($1,$2,$3,$4,$5,$6)
+        `, [loan.id, inst.number, inst.dueDate, inst.principalAmount, inst.interestAmount, inst.totalAmount]);
+      }
+
+      const custNameRes = await client.query<{ name: string }>(
+        `SELECT first_name || ' ' || last_name AS name FROM customers WHERE id = $1`, [dto.customerId],
+      );
+      const custName = custNameRes.rows[0]?.name ?? 'Customer';
+      const mgrsRes = await client.query<{ id: string }>(
+        `SELECT id FROM users WHERE role IN ('OWNER','MANAGER','ADMIN') AND is_active = TRUE`,
+      );
+      for (const mgr of mgrsRes.rows) {
+        await TenantNotificationsService.insertNotification(client, {
+          userId: mgr.id,
+          title: `New Agent Risk loan — ${loanNumber}`,
+          body: `₹${dto.principal.toLocaleString('en-IN')} agent risk loan created for ${custName}.`,
+          type: 'loan', entityType: 'loan', entityId: loan.id,
+          link: `/agent-risk-loans/${loan.id}`,
+        });
+      }
+
+      return {
+        id: loan.id, loanNumber, principal: dto.principal,
+        monthlyInterest, termMonths: dto.termMonths,
+        installmentCount: schedule.length,
+        firstDueDate: dto.firstDueDate, status: 'DISBURSED',
+      };
+    });
+  }
+
+  previewTermLoanSchedule(dto: Pick<CreateTermLoanDto, 'principal' | 'interestRate' | 'termMonths' | 'firstDueDate' | 'calculationType' | 'emiRounding'>) {
+    const { schedule, emi } = computeTermLoanSchedule(
+      dto.principal, dto.interestRate, dto.termMonths, dto.firstDueDate, dto.calculationType, dto.emiRounding,
+    );
+    return {
+      emi,
+      totalInterest: Math.round(schedule.reduce((s, i) => s + i.interestAmount, 0) * 100) / 100,
+      totalAmount: Math.round(schedule.reduce((s, i) => s + i.totalAmount, 0) * 100) / 100,
+      schedule,
+    };
+  }
+
+  async listTermLoans(user: TenantJwtPayload, page: number, limit: number, opts: {
+    search?: string; branchId?: string; status?: string;
+  } = {}) {
+    return this.withSchema(user.schemaName, async (client) => {
+      const offset = (page - 1) * limit;
+      const conditions = [`l.deleted_at IS NULL`, `l.cycle_type = 'TERM_LOAN'`];
+      const filterParams: unknown[] = [];
+      let idx = 1;
+
+      if (user.role === 'LOAN_OFFICER') { conditions.push(`l.loan_officer_id = $${idx++}`); filterParams.push(user.sub); }
+      if (opts.status) { conditions.push(`l.status = $${idx++}`); filterParams.push(opts.status); }
+      if (opts.branchId) { conditions.push(`l.branch_id = $${idx++}`); filterParams.push(opts.branchId); }
+      if (opts.search) {
+        conditions.push(`(c.first_name || ' ' || c.last_name ILIKE $${idx} OR l.loan_number ILIKE $${idx} OR c.phone ILIKE $${idx})`);
+        filterParams.push(`%${opts.search}%`); idx++;
+      }
+
+      const where = `WHERE ${conditions.join(' AND ')}`;
+      const [dataRes, countRes] = await Promise.all([
+        client.query(`
+          SELECT l.id, l.loan_number, l.customer_id, l.principal, l.interest_rate,
+                 l.term_months, l.emi_amount, l.status, l.disbursed_at, l.first_due_date,
+                 l.calculation_type, l.branch_id, l.created_at,
+                 c.first_name || ' ' || c.last_name AS customer_name, c.phone,
+                 b.name AS branch_name,
+                 COALESCE(SUM(CASE WHEN i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE') THEN i.total_amount - i.paid_amount ELSE 0 END), 0) AS outstanding,
+                 COUNT(CASE WHEN i.status IN ('PAID','PARTIALLY_PAID') AND i.paid_amount >= i.total_amount THEN 1 END) AS paid_count,
+                 COUNT(i.id) AS total_count,
+                 COUNT(CASE WHEN i.status = 'OVERDUE' THEN 1 END) AS overdue_count
+          FROM loans l
+          JOIN customers c ON c.id = l.customer_id
+          LEFT JOIN branches b ON b.id = l.branch_id
+          LEFT JOIN installments i ON i.loan_id = l.id
+          ${where}
+          GROUP BY l.id, c.first_name, c.last_name, c.phone, b.name
+          ORDER BY l.loan_number ASC
+          LIMIT $${idx} OFFSET $${idx + 1}
+        `, [...filterParams, limit, offset]),
+        client.query<{ total: string }>(`
+          SELECT COUNT(*) AS total FROM loans l
+          JOIN customers c ON c.id = l.customer_id
+          ${where}
+        `, filterParams),
+      ]);
+
+      return {
+        data: dataRes.rows.map((r) => ({
+          id: r.id, loanNumber: r.loan_number, customerId: r.customer_id,
+          customerName: r.customer_name, phone: r.phone,
+          principal: parseFloat(r.principal), interestRate: parseFloat(r.interest_rate),
+          termMonths: r.term_months, emi: r.emi_amount ? parseFloat(r.emi_amount) : null,
+          status: r.status, branchId: r.branch_id, branchName: r.branch_name,
+          calculationType: r.calculation_type,
+          outstanding: parseFloat(r.outstanding),
+          paidInstallments: parseInt(r.paid_count), totalInstallments: parseInt(r.total_count),
+          overdueCount: parseInt(r.overdue_count),
+          isNpa: r.status === 'DEFAULTED' || parseInt(r.overdue_count) > 2,
+          disbursedAt: r.disbursed_at, firstDueDate: r.first_due_date, createdAt: r.created_at,
+        })),
+        total: parseInt(countRes.rows[0].total),
+        page, limit,
+      };
+    });
+  }
+
+  async createTermLoan(user: TenantJwtPayload, dto: CreateTermLoanDto) {
+    if (user.role === 'VIEWER') throw new BadRequestException('You do not have permission to create loans');
+    if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
+    if (dto.interestRate < 0 || dto.interestRate > 100) throw new BadRequestException('Invalid interest rate');
+    if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
+    if (!dto.branchId) throw new BadRequestException('Branch is required');
+
+    return this.withSchema(user.schemaName, async (client) => {
+      const custRes = await client.query(`SELECT id FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
+      if (!custRes.rows[0]) throw new NotFoundException('Customer not found');
+      if (dto.branchId) {
+        const brRes = await client.query(`SELECT id FROM branches WHERE id = $1 AND is_active = TRUE`, [dto.branchId]);
+        if (!brRes.rows[0]) throw new NotFoundException('Branch not found');
+      }
+
+      const countRes = await client.query<{ n: string }>(`SELECT COUNT(*) AS n FROM loans WHERE cycle_type = 'TERM_LOAN'`);
+      const seq = parseInt(countRes.rows[0].n) + 1;
+      const year = new Date().getFullYear();
+      const loanNumber = `TL${year}${String(seq).padStart(6, '0')}`;
+
+      const { schedule, emi } = computeTermLoanSchedule(
+        dto.principal, dto.interestRate, dto.termMonths, dto.firstDueDate, dto.calculationType, dto.emiRounding,
+      );
+
+      const loanRes = await client.query(`
+        INSERT INTO loans (
+          loan_number, customer_id, loan_officer_id, branch_id, loan_type_id,
+          principal, interest_rate, term_months, emi_amount, status,
+          purpose, first_due_date, disbursed_at, cycle_type, calculation_type,
+          security_doc_url, promissory_note_url
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'DISBURSED',$10,$11,NOW(),'TERM_LOAN',$12,$13,$14)
+        RETURNING id, loan_number
+      `, [
+        loanNumber, dto.customerId, user.sub, dto.branchId, dto.loanTypeId ?? null,
+        dto.principal, dto.interestRate, dto.termMonths, emi,
+        dto.purpose ?? null, dto.firstDueDate, dto.calculationType,
+        dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null,
+      ]);
+
+      const loan = loanRes.rows[0];
+
+      for (const inst of schedule) {
+        await client.query(`
+          INSERT INTO installments (loan_id, installment_number, due_date, principal_amount, interest_amount, total_amount)
+          VALUES ($1,$2,$3,$4,$5,$6)
+        `, [loan.id, inst.number, inst.dueDate, inst.principalAmount, inst.interestAmount, inst.totalAmount]);
+      }
+
+      const custNameRes = await client.query<{ name: string }>(
+        `SELECT first_name || ' ' || last_name AS name FROM customers WHERE id = $1`, [dto.customerId],
+      );
+      const custName = custNameRes.rows[0]?.name ?? 'Customer';
+      const mgrsRes = await client.query<{ id: string }>(
+        `SELECT id FROM users WHERE role IN ('OWNER','MANAGER','ADMIN') AND is_active = TRUE`,
+      );
+      for (const mgr of mgrsRes.rows) {
+        await TenantNotificationsService.insertNotification(client, {
+          userId: mgr.id,
+          title: `New term loan — ${loanNumber}`,
+          body: `₹${dto.principal.toLocaleString('en-IN')} term loan (${dto.termMonths} months) created for ${custName}.`,
+          type: 'loan', entityType: 'loan', entityId: loan.id,
+          link: `/loans/${loan.id}`,
+        });
+      }
+
+      return {
+        id: loan.id, loanNumber, principal: dto.principal, emi,
+        termMonths: dto.termMonths, installmentCount: schedule.length,
+        firstDueDate: dto.firstDueDate, status: 'DISBURSED',
       };
     });
   }
@@ -232,6 +1437,30 @@ export class TenantLoansService {
                 paid_at = CASE WHEN paid_amount + $1 >= total_amount THEN NOW() ELSE paid_at END
             WHERE id = $2
           `, [dto.amount, dto.installmentId]);
+        });
+      }
+
+      // Notify loan officer + managers about payment
+      const loanDetailRes = await client.query<{ loan_officer_id: string | null; loan_number: string }>(
+        `SELECT loan_officer_id, loan_number FROM loans WHERE id = $1`, [loanId],
+      );
+      const loanDetail = loanDetailRes.rows[0];
+      const notifyIds = new Set<string>();
+      if (loanDetail?.loan_officer_id) notifyIds.add(loanDetail.loan_officer_id);
+      const mgrsRes2 = await client.query<{ id: string }>(
+        `SELECT id FROM users WHERE role IN ('OWNER','MANAGER','ADMIN') AND is_active = TRUE`,
+      );
+      for (const m of mgrsRes2.rows) notifyIds.add(m.id);
+
+      for (const uid of notifyIds) {
+        await TenantNotificationsService.insertNotification(client, {
+          userId: uid,
+          title: `Payment received — ${loanDetail?.loan_number ?? loanId}`,
+          body: `₹${dto.amount.toLocaleString('en-IN')} collected via ${dto.paymentMethod.replace('_', ' ')}.`,
+          type: 'payment',
+          entityType: 'loan',
+          entityId: loanId,
+          link: `/loans/${loanId}`,
         });
       }
 

@@ -28,10 +28,14 @@ export default function PaymentCaptureScreen({ navigation, route }: Props) {
   const [receiptUri, setReceiptUri] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Consume receipt photo set by ReceiptCameraScreen
+  // Consume receipt photo only if it belongs to this specific installment
   useEffect(() => {
-    if (pendingReceiptUri) {
-      setReceiptUri(pendingReceiptUri);
+    if (
+      pendingReceiptUri &&
+      pendingReceiptUri.loanId === item.loanId &&
+      pendingReceiptUri.installmentId === item.installmentId
+    ) {
+      setReceiptUri(pendingReceiptUri.uri);
       setPendingReceiptUri(null);
     }
   }, [pendingReceiptUri]);

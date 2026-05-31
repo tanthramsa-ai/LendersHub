@@ -82,6 +82,20 @@ export class TenantBranchesService {
     });
   }
 
+  async getMembers(user: TenantJwtPayload, branchId: string) {
+    return this.withSchema(user.schemaName, async (client) => {
+      const res = await client.query(`
+        SELECT id, first_name, last_name, email, phone, role, is_active
+        FROM users WHERE branch_id = $1
+        ORDER BY first_name, last_name
+      `, [branchId]);
+      return res.rows.map((u) => ({
+        id: u.id, firstName: u.first_name, lastName: u.last_name,
+        email: u.email, phone: u.phone, role: u.role, isActive: u.is_active,
+      }));
+    });
+  }
+
   async update(user: TenantJwtPayload, id: string, dto: UpdateBranchDto) {
     if (user.role !== 'ADMIN') throw new ForbiddenException('Only admins can manage branches');
 

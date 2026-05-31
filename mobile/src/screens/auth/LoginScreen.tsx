@@ -8,6 +8,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import { login, saveCredentials, loadCredentials, clearCredentials } from '../../api/auth';
+import { getBiometricEnabled } from '../../api/client';
 import { useAuthStore } from '../../store/authStore';
 import { AuthStackParamList, FieldErrors, LoginMethod } from '../../types';
 import { BRAND, ACCENT, GRAY, GRAY_BORDER, DANGER, SUCCESS, GRAY_LIGHT } from '../../utils/constants';
@@ -113,7 +114,13 @@ export default function LoginScreen({ navigation, route }: Props) {
       }
 
       setSession(session);
-      navigation.replace('BiometricSetup');
+      // Only show biometric setup for new devices — skip if already configured
+      const alreadyEnabled = await getBiometricEnabled();
+      if (alreadyEnabled) {
+        navigation.getParent()?.reset({ index: 0, routes: [{ name: 'Main' }] });
+      } else {
+        navigation.replace('BiometricSetup');
+      }
     } catch (err) {
       const msg = (err as Error & { statusCode?: number }).message;
       setServerError(msg ?? 'Login failed. Please try again.');

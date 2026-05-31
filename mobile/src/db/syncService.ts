@@ -1,7 +1,16 @@
 import { getPendingPayments, markPaymentSynced, markPaymentFailed, resetFailedPayments } from './database';
 import { recordPaymentOnline } from '../api/collections';
 
-export async function syncPendingPayments(): Promise<{ synced: number; failed: number }> {
+// Concurrency lock — prevents simultaneous calls from submitting the same payments twice
+let _syncInProgress: Promise<{ synced: number; failed: number }> | null = null;
+
+export function syncPendingPayments(): Promise<{ synced: number; failed: number }> {
+  if (_syncInProgress) return _syncInProgress;
+  _syncInProgress = _doSync().finally(() => { _syncInProgress = null; });
+  return _syncInProgress;
+}
+
+async function _doSync(): Promise<{ synced: number; failed: number }> {
   const pending = await getPendingPayments();
   let synced = 0;
   let failed = 0;

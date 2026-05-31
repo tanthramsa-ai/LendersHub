@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   View, Text, FlatList, TextInput, TouchableOpacity,
   StyleSheet, ActivityIndicator,
@@ -17,6 +17,7 @@ type Props = {
 export default function CustomersListScreen({ navigation }: Props) {
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['customers', debouncedSearch],
@@ -26,8 +27,9 @@ export default function CustomersListScreen({ navigation }: Props) {
 
   const handleSearchChange = useCallback((text: string) => {
     setSearch(text);
-    const timeout = setTimeout(() => setDebouncedSearch(text), 400);
-    return () => clearTimeout(timeout);
+    // Cancel the previous pending debounce before scheduling a new one
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => setDebouncedSearch(text), 400);
   }, []);
 
   const customers = data?.data ?? [];

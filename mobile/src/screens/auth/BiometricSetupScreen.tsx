@@ -44,18 +44,21 @@ export default function BiometricSetupScreen({ navigation }: Props) {
     navigation.getParent()?.reset({ index: 0, routes: [{ name: 'Main' }] });
   }
 
-  if (checking) {
+  // Move the "no biometric hardware" navigation into a useEffect to avoid
+  // calling navigation during the render phase (React rule violation)
+  useEffect(() => {
+    if (!checking && (!capability?.hasHardware || !capability?.isEnrolled)) {
+      goToMain();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checking, capability]);
+
+  if (checking || !capability?.hasHardware || !capability?.isEnrolled) {
     return (
       <View style={styles.loadingRoot}>
         <ActivityIndicator color={BRAND} />
       </View>
     );
-  }
-
-  // Device doesn't support biometrics or none enrolled — skip this screen silently
-  if (!capability?.hasHardware || !capability?.isEnrolled) {
-    goToMain();
-    return null;
   }
 
   const isFace = capability.isPrimaryFace && !capability.isPrimaryFingerprint;

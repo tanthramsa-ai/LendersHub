@@ -22,9 +22,25 @@ export class TenantUsersController {
     return this.svc.list(req.user, page, Math.min(limit, 100), search);
   }
 
+  @Get('officers')
+  listOfficers(@Request() req: { user: TenantJwtPayload }) {
+    return this.svc.listOfficers(req.user);
+  }
+
   @Get(':id')
   findOne(@Request() req: { user: TenantJwtPayload }, @Param('id') id: string) {
     return this.svc.findOne(req.user, id);
+  }
+
+  @Get(':id/loans')
+  getUserLoans(
+    @Request() req: { user: TenantJwtPayload },
+    @Param('id') id: string,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('status') status?: string,
+  ) {
+    return this.svc.getUserLoans(req.user, id, page, Math.min(limit, 50), status);
   }
 
   @Post()

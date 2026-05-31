@@ -1,4 +1,4 @@
-import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 
@@ -9,12 +9,44 @@ export interface CreateCustomerDto {
   email?: string;
   panNumber?: string;
   aadhaarLast4?: string;
+  aadhaarDocUrl?: string;
   dateOfBirth?: string;
-  address?: string;
+  address: string;
+  locality: string;
   city?: string;
   state?: string;
   pincode?: string;
+  occupation?: string;
+  loanPurpose?: string;
+  altContact: string;
+  altContactName?: string;
+  altContactRelation?: string;
   creditScore?: number;
+  branchId?: string;
+}
+
+export interface UpdateCustomerDto {
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  email?: string;
+  panNumber?: string;
+  aadhaarLast4?: string;
+  aadhaarDocUrl?: string;
+  dateOfBirth?: string;
+  address?: string;
+  locality?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+  occupation?: string;
+  loanPurpose?: string;
+  altContact?: string;
+  altContactName?: string;
+  altContactRelation?: string;
+  creditScore?: number;
+  branchId?: string | null;
+  isActive?: boolean;
 }
 
 @Injectable()
@@ -31,32 +63,46 @@ export class TenantCustomersService {
     }
   }
 
-  async list(user: TenantJwtPayload, page: number, limit: number, search?: string) {
+  async list(user: TenantJwtPayload, page: number, limit: number, search?: string, branchId?: string) {
     return this.withSchema(user.schemaName, async (client) => {
       const offset = (page - 1) * limit;
-      const searchParam = search ? `%${search}%` : null;
+      const conditions: string[] = [];
+      const filterParams: unknown[] = [];
+      let idx = 1;
 
-      // Data query: $1=limit, $2=offset, $3=search (when present)
-      // Count query: $1=search (when present) — separate clause with $1
-      const dataWhere = searchParam
-        ? `WHERE (first_name ILIKE $3 OR last_name ILIKE $3 OR phone ILIKE $3 OR customer_code ILIKE $3)`
-        : '';
-      const countWhere = searchParam
-        ? `WHERE (first_name ILIKE $1 OR last_name ILIKE $1 OR phone ILIKE $1 OR customer_code ILIKE $1)`
-        : '';
-      const dataParams = searchParam ? [limit, offset, searchParam] : [limit, offset];
-      const countParams = searchParam ? [searchParam] : [];
+      if (user.role === 'LOAN_OFFICER') {
+        conditions.push(`c.id IN (SELECT DISTINCT customer_id FROM loans WHERE loan_officer_id = $${idx++})`);
+        filterParams.push(user.sub);
+      }
+      if (branchId) {
+        conditions.push(`c.branch_id = $${idx++}`);
+        filterParams.push(branchId);
+      }
+      if (search) {
+        conditions.push(`(c.first_name ILIKE $${idx} OR c.last_name ILIKE $${idx} OR c.phone ILIKE $${idx} OR c.customer_code ILIKE $${idx})`);
+        filterParams.push(`%${search}%`);
+        idx++;
+      }
+
+      const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+      const countWhere = whereClause;
+      const countParams = filterParams;
+      const dataParams = [...filterParams, limit, offset];
+      const limitIdx = idx; const offsetIdx = idx + 1;
 
       const [dataRes, countRes] = await Promise.all([
         client.query(`
-          SELECT id, customer_code, first_name, last_name, email, phone,
-                 pan_number, credit_score, city, state, is_active, created_at
-          FROM customers
-          ${dataWhere}
-          ORDER BY created_at DESC
-          LIMIT $1 OFFSET $2
+          SELECT c.id, c.customer_code, c.first_name, c.last_name, c.email, c.phone,
+                 c.pan_number, c.credit_score, c.city, c.state, c.locality, c.branch_id,
+                 c.is_active, c.created_at,
+                 b.name AS branch_name
+          FROM customers c
+          LEFT JOIN branches b ON b.id = c.branch_id
+          ${whereClause}
+          ORDER BY c.customer_code ASC
+          LIMIT $${limitIdx} OFFSET $${offsetIdx}
         `, dataParams),
-        client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM customers ${countWhere}`, countParams),
+        client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM customers c ${countWhere}`, countParams),
       ]);
 
       return {
@@ -71,6 +117,9 @@ export class TenantCustomersService {
           creditScore: r.credit_score,
           city: r.city,
           state: r.state,
+          locality: r.locality,
+          branchId: r.branch_id,
+          branchName: r.branch_name,
           isActive: r.is_active,
           createdAt: r.created_at,
         })),
@@ -85,10 +134,13 @@ export class TenantCustomersService {
     return this.withSchema(user.schemaName, async (client) => {
       const res = await client.query(`
         SELECT c.*,
+          b.name AS branch_name, b.code AS branch_code,
           (SELECT COUNT(*) FROM loans WHERE customer_id = c.id) AS total_loans,
           (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND status = 'DISBURSED') AS active_loans,
           (SELECT COALESCE(SUM(amount), 0) FROM payments p JOIN loans l ON l.id = p.loan_id WHERE l.customer_id = c.id) AS total_paid
-        FROM customers c WHERE c.id = $1
+        FROM customers c
+        LEFT JOIN branches b ON b.id = c.branch_id
+        WHERE c.id = $1
       `, [id]);
 
       if (!res.rows[0]) throw new NotFoundException('Customer not found');
@@ -97,9 +149,15 @@ export class TenantCustomersService {
         id: r.id, customerCode: r.customer_code,
         firstName: r.first_name, lastName: r.last_name,
         email: r.email, phone: r.phone, panNumber: r.pan_number,
-        aadhaarLast4: r.aadhaar_last4, dateOfBirth: r.date_of_birth,
-        address: r.address, city: r.city, state: r.state, pincode: r.pincode,
+        aadhaarLast4: r.aadhaar_last4, aadhaarDocUrl: r.aadhaar_doc_url,
+        dateOfBirth: r.date_of_birth,
+        address: r.address, locality: r.locality,
+        city: r.city, state: r.state, pincode: r.pincode,
+        occupation: r.occupation, loanPurpose: r.loan_purpose,
+        altContact: r.alt_contact, altContactName: r.alt_contact_name,
+        altContactRelation: r.alt_contact_relation,
         creditScore: r.credit_score, isActive: r.is_active,
+        branchId: r.branch_id, branchName: r.branch_name, branchCode: r.branch_code,
         createdAt: r.created_at, updatedAt: r.updated_at,
         totalLoans: parseInt(r.total_loans),
         activeLoans: parseInt(r.active_loans),
@@ -109,28 +167,40 @@ export class TenantCustomersService {
   }
 
   async create(user: TenantJwtPayload, dto: CreateCustomerDto) {
+    if (user.role === 'VIEWER') throw new ForbiddenException('Customers cannot add customers');
+    if (!dto.address?.trim()) throw new BadRequestException('Address is required');
+    if (!dto.locality?.trim()) throw new BadRequestException('Locality is required');
+    if (!dto.altContact?.trim()) throw new BadRequestException('Alternate contact number is required');
+    if (!dto.panNumber?.trim() && !dto.aadhaarLast4?.trim()) {
+      throw new BadRequestException('At least one of PAN number or Aadhaar number is required');
+    }
+
     return this.withSchema(user.schemaName, async (client) => {
-      // Generate customer code
       const countRes = await client.query<{ n: string }>(`SELECT COUNT(*) AS n FROM customers`);
       const seq = parseInt(countRes.rows[0].n) + 1;
       const customerCode = `CUST${String(seq).padStart(5, '0')}`;
 
-      // Check phone uniqueness
       const existing = await client.query(`SELECT id FROM customers WHERE phone = $1`, [dto.phone]);
       if (existing.rows.length > 0) throw new ConflictException('Phone number already registered');
 
       const res = await client.query(`
         INSERT INTO customers (
           customer_code, first_name, last_name, email, phone, pan_number,
-          aadhaar_last4, date_of_birth, address, city, state, pincode,
-          credit_score, created_by
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+          aadhaar_last4, aadhaar_doc_url, date_of_birth,
+          address, locality, city, state, pincode,
+          occupation, loan_purpose,
+          alt_contact, alt_contact_name, alt_contact_relation,
+          credit_score, branch_id, created_by
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
         RETURNING *
       `, [
         customerCode, dto.firstName, dto.lastName, dto.email ?? null, dto.phone,
-        dto.panNumber ?? null, dto.aadhaarLast4 ?? null, dto.dateOfBirth ?? null,
-        dto.address ?? null, dto.city ?? null, dto.state ?? null, dto.pincode ?? null,
-        dto.creditScore ?? null, user.sub,
+        dto.panNumber ?? null, dto.aadhaarLast4 ?? null, dto.aadhaarDocUrl ?? null,
+        dto.dateOfBirth ?? null,
+        dto.address, dto.locality, dto.city ?? null, dto.state ?? null, dto.pincode ?? null,
+        dto.occupation ?? null, dto.loanPurpose ?? null,
+        dto.altContact, dto.altContactName ?? null, dto.altContactRelation ?? null,
+        dto.creditScore ?? null, dto.branchId ?? null, user.sub,
       ]);
 
       const r = res.rows[0];
@@ -139,6 +209,61 @@ export class TenantCustomersService {
         firstName: r.first_name, lastName: r.last_name,
         email: r.email, phone: r.phone,
       };
+    });
+  }
+
+  async update(user: TenantJwtPayload, id: string, dto: UpdateCustomerDto) {
+    if (user.role === 'VIEWER') throw new ForbiddenException('You do not have permission to update customers');
+    return this.withSchema(user.schemaName, async (client) => {
+      const existing = await client.query(`SELECT id, phone FROM customers WHERE id = $1`, [id]);
+      if (!existing.rows[0]) throw new NotFoundException('Customer not found');
+
+      if (dto.phone && dto.phone !== existing.rows[0].phone) {
+        const dup = await client.query(`SELECT id FROM customers WHERE phone = $1 AND id != $2`, [dto.phone, id]);
+        if (dup.rows.length > 0) throw new ConflictException('Phone number already registered to another customer');
+      }
+
+      const sets: string[] = [];
+      const params: unknown[] = [];
+
+      function addSet(col: string, val: unknown) {
+        params.push(val);
+        sets.push(`${col} = $${params.length}`);
+      }
+
+      if (dto.firstName !== undefined) addSet('first_name', dto.firstName);
+      if (dto.lastName !== undefined) addSet('last_name', dto.lastName);
+      if (dto.phone !== undefined) addSet('phone', dto.phone);
+      if (dto.email !== undefined) addSet('email', dto.email || null);
+      if (dto.panNumber !== undefined) addSet('pan_number', dto.panNumber || null);
+      if (dto.aadhaarLast4 !== undefined) addSet('aadhaar_last4', dto.aadhaarLast4 || null);
+      if (dto.aadhaarDocUrl !== undefined) addSet('aadhaar_doc_url', dto.aadhaarDocUrl || null);
+      if (dto.dateOfBirth !== undefined) addSet('date_of_birth', dto.dateOfBirth || null);
+      if (dto.address !== undefined) addSet('address', dto.address);
+      if (dto.locality !== undefined) addSet('locality', dto.locality);
+      if (dto.city !== undefined) addSet('city', dto.city || null);
+      if (dto.state !== undefined) addSet('state', dto.state || null);
+      if (dto.pincode !== undefined) addSet('pincode', dto.pincode || null);
+      if (dto.occupation !== undefined) addSet('occupation', dto.occupation || null);
+      if (dto.loanPurpose !== undefined) addSet('loan_purpose', dto.loanPurpose || null);
+      if (dto.altContact !== undefined) addSet('alt_contact', dto.altContact);
+      if (dto.altContactName !== undefined) addSet('alt_contact_name', dto.altContactName || null);
+      if (dto.altContactRelation !== undefined) addSet('alt_contact_relation', dto.altContactRelation || null);
+      if (dto.creditScore !== undefined) addSet('credit_score', dto.creditScore);
+      if ('branchId' in dto) addSet('branch_id', dto.branchId ?? null);
+      if (dto.isActive !== undefined) addSet('is_active', dto.isActive);
+
+      if (sets.length === 0) throw new BadRequestException('No fields to update');
+      addSet('updated_at', new Date().toISOString());
+      addSet('updated_by', user.sub);
+
+      params.push(id);
+      const res = await client.query(
+        `UPDATE customers SET ${sets.join(', ')} WHERE id = $${params.length} RETURNING id`,
+        params,
+      );
+      if (!res.rows[0]) throw new NotFoundException('Customer not found');
+      return { id: res.rows[0].id };
     });
   }
 }

@@ -6,7 +6,18 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:report": "playwright show-report",
+    "test:e2e:auth": "playwright test auth.spec.ts",
+    "test:e2e:dashboard": "playwright test dashboard.spec.ts",
+    "test:e2e:customers": "playwright test customers.spec.ts",
+    "test:e2e:loans": "playwright test loans.spec.ts",
+    "test:e2e:collections": "playwright test collections.spec.ts",
+    "test:e2e:settings": "playwright test settings.spec.ts",
+    "test:e2e:ci": "playwright test --reporter=list"
   },
   "overrides": {
     "postcss": ">=8.5.10"
@@ -19,6 +30,7 @@
     "react-dom": "19.2.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

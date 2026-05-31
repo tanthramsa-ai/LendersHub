@@ -1,9 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter, usePathname, useParams } from 'next/navigation';
 import Link from 'next/link';
-import { getTenantSession, clearTenantSession, TenantUser, TenantInfo } from '@/services/tenant-api';
+import {
+  getTenantSession, clearTenantSession, TenantUser, TenantInfo,
+  getUnreadCount, getNotifications, markNotificationRead, markAllNotificationsRead,
+  TenantNotification,
+} from '@/services/tenant-api';
 
 const BRAND = '#0F4C81';
 const BRAND_DARK = '#0a3660';
@@ -34,10 +38,58 @@ const NAV = [
     ),
   },
   {
-    href: 'payments', label: 'Payments',
+    href: 'weekly-loans', label: 'Weekly Loans',
     icon: (
       <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 14l6-6m-5.5.5h.01m4.99 5h.01M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16l3.5-2 3.5 2 3.5-2 3.5 2z" />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+      </svg>
+    ),
+  },
+  {
+    href: 'daily-loans', label: 'Daily Loans',
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+    ),
+  },
+  {
+    href: 'monthly-loans', label: 'Monthly Loans',
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+      </svg>
+    ),
+  },
+  {
+    href: 'agent-risk-loans', label: 'Agent Risk Loans',
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+      </svg>
+    ),
+  },
+  {
+    href: 'ledger', label: 'Ledger',
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 11h.01M12 11h.01M15 11h.01M12 7h.01M15 7h.01M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+      </svg>
+    ),
+  },
+  {
+    href: 'loan-types', label: 'Loan Types',
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+      </svg>
+    ),
+  },
+  {
+    href: 'accounts', label: 'Accounts',
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
       </svg>
     ),
   },
@@ -46,6 +98,14 @@ const NAV = [
     icon: (
       <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+      </svg>
+    ),
+  },
+  {
+    href: 'users', label: 'Team',
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
       </svg>
     ),
   },
@@ -69,9 +129,20 @@ export default function TenantLayout({ children }: { children: React.ReactNode }
   const [user, setUser] = useState<TenantUser | null>(null);
   const [tenant, setTenant] = useState<TenantInfo | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [notifications] = useState(3);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [showNotifDropdown, setShowNotifDropdown] = useState(false);
+  const [notifList, setNotifList] = useState<TenantNotification[]>([]);
+  const [notifLoading, setNotifLoading] = useState(false);
+  const notifRef = useRef<HTMLDivElement>(null);
 
   const isLoginPage = pathname.endsWith('/login');
+
+  const fetchUnreadCount = useCallback(async () => {
+    try {
+      const { count } = await getUnreadCount();
+      setUnreadCount(count);
+    } catch {}
+  }, []);
 
   useEffect(() => {
     if (isLoginPage) return;
@@ -86,7 +157,51 @@ export default function TenantLayout({ children }: { children: React.ReactNode }
     }
     setUser(session.user);
     setTenant(session.tenant);
-  }, [subdomain, router, isLoginPage]);
+    fetchUnreadCount();
+    const interval = setInterval(fetchUnreadCount, 60000);
+    return () => clearInterval(interval);
+  }, [subdomain, router, isLoginPage, fetchUnreadCount]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
+        setShowNotifDropdown(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  async function openNotifDropdown() {
+    if (showNotifDropdown) { setShowNotifDropdown(false); return; }
+    setShowNotifDropdown(true);
+    setNotifLoading(true);
+    try {
+      const res = await getNotifications(1, 10);
+      setNotifList(res.data);
+    } catch {} finally {
+      setNotifLoading(false);
+    }
+  }
+
+  async function handleMarkRead(notif: TenantNotification) {
+    if (!notif.isRead) {
+      try { await markNotificationRead(notif.id); } catch {}
+      setNotifList((prev) => prev.map((n) => n.id === notif.id ? { ...n, isRead: true } : n));
+      setUnreadCount((c) => Math.max(0, c - 1));
+    }
+    if (notif.link) {
+      setShowNotifDropdown(false);
+      router.push(`/${subdomain}${notif.link}`);
+    }
+  }
+
+  async function handleMarkAllRead() {
+    try { await markAllNotificationsRead(); } catch {}
+    setNotifList((prev) => prev.map((n) => ({ ...n, isRead: true })));
+    setUnreadCount(0);
+  }
 
   function handleLogout() {
     clearTenantSession();
@@ -216,17 +331,75 @@ export default function TenantLayout({ children }: { children: React.ReactNode }
 
           {/* Right: notifications + new loan */}
           <div className="flex items-center gap-3">
-            <button className="relative p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-              </svg>
-              {notifications > 0 && (
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full" style={{ backgroundColor: '#FF6B35' }} />
+            {/* Bell with dropdown */}
+            <div className="relative" ref={notifRef}>
+              <button
+                onClick={openNotifDropdown}
+                className="relative p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                </svg>
+                {unreadCount > 0 && (
+                  <span className="absolute top-1 right-1 min-w-[16px] h-4 px-0.5 rounded-full text-white text-[10px] font-bold flex items-center justify-center" style={{ backgroundColor: '#FF6B35' }}>
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </span>
+                )}
+              </button>
+
+              {showNotifDropdown && (
+                <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-xl shadow-xl border border-gray-100 z-50 overflow-hidden">
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+                    <p className="font-semibold text-sm text-gray-900">Notifications</p>
+                    {unreadCount > 0 && (
+                      <button onClick={handleMarkAllRead} className="text-xs text-blue-600 hover:underline font-medium">
+                        Mark all read
+                      </button>
+                    )}
+                  </div>
+                  <div className="max-h-80 overflow-y-auto divide-y divide-gray-50">
+                    {notifLoading ? (
+                      <div className="flex justify-center py-8">
+                        <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                      </div>
+                    ) : notifList.length === 0 ? (
+                      <p className="text-sm text-gray-400 text-center py-8">No notifications yet</p>
+                    ) : (
+                      notifList.map((n) => (
+                        <button
+                          key={n.id}
+                          onClick={() => handleMarkRead(n)}
+                          className={`w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors ${!n.isRead ? 'bg-blue-50/60' : ''}`}
+                        >
+                          <div className="flex items-start gap-2">
+                            <span className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${!n.isRead ? 'bg-blue-500' : 'bg-transparent'}`} />
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold text-gray-900 leading-snug">{n.title}</p>
+                              <p className="text-xs text-gray-500 mt-0.5 leading-snug line-clamp-2">{n.body}</p>
+                              <p className="text-[10px] text-gray-400 mt-1">
+                                {new Date(n.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                              </p>
+                            </div>
+                          </div>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                  <div className="px-4 py-2.5 border-t border-gray-100 text-center">
+                    <Link
+                      href={`/${subdomain}/notifications`}
+                      onClick={() => setShowNotifDropdown(false)}
+                      className="text-xs text-blue-600 hover:underline font-medium"
+                    >
+                      View all notifications
+                    </Link>
+                  </div>
+                </div>
               )}
-            </button>
+            </div>
 
             <Link
-              href={`/tenant/${subdomain}/loans/new`}
+              href={`/${subdomain}/loans/new`}
               className="hidden sm:flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-lg transition-colors"
               style={{ backgroundColor: BRAND }}
             >

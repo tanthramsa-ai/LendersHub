@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 
@@ -75,6 +75,10 @@ export class TenantCollectionsService {
     return this.withSchema(user.schemaName, async (client) => {
       const today = new Date().toISOString().slice(0, 10);
       const offset = (page - 1) * limit;
+      // Agent (LOAN_OFFICER) sees only installments assigned to them or in their loans
+      const selfFilter = user.role === 'LOAN_OFFICER'
+        ? `AND (i.assigned_to = '${user.sub}' OR l.loan_officer_id = '${user.sub}')`
+        : '';
       const searchFilter = search
         ? `AND (c.first_name || ' ' || c.last_name ILIKE $4 OR l.loan_number ILIKE $4 OR c.phone ILIKE $4)`
         : '';
@@ -96,7 +100,7 @@ export class TenantCollectionsService {
            JOIN customers c ON c.id = l.customer_id
            LEFT JOIN users u ON u.id = i.assigned_to
            WHERE i.due_date = $1 AND i.status IN ('PENDING','PARTIALLY_PAID')
-           ${searchFilter}
+           ${selfFilter} ${searchFilter}
            ORDER BY c.first_name, l.loan_number
            LIMIT $2 OFFSET $3`,
           dataParams,
@@ -106,7 +110,7 @@ export class TenantCollectionsService {
            JOIN loans l ON l.id = i.loan_id
            JOIN customers c ON c.id = l.customer_id
            WHERE i.due_date = $1 AND i.status IN ('PENDING','PARTIALLY_PAID')
-           ${countFilter}`,
+           ${selfFilter} ${countFilter}`,
           countParams,
         ),
       ]);
@@ -119,6 +123,9 @@ export class TenantCollectionsService {
     await this.ensureAssignedTo(user.schemaName);
     return this.withSchema(user.schemaName, async (client) => {
       const offset = (page - 1) * limit;
+      const selfFilter = user.role === 'LOAN_OFFICER'
+        ? `AND (i.assigned_to = '${user.sub}' OR l.loan_officer_id = '${user.sub}')`
+        : '';
       const searchFilter = search
         ? `AND (c.first_name || ' ' || c.last_name ILIKE $3 OR l.loan_number ILIKE $3 OR c.phone ILIKE $3)`
         : '';
@@ -141,7 +148,7 @@ export class TenantCollectionsService {
            JOIN customers c ON c.id = l.customer_id
            LEFT JOIN users u ON u.id = i.assigned_to
            WHERE i.status = 'OVERDUE'
-           ${searchFilter}
+           ${selfFilter} ${searchFilter}
            ORDER BY i.due_date ASC
            LIMIT $1 OFFSET $2`,
           dataParams,
@@ -151,7 +158,7 @@ export class TenantCollectionsService {
            JOIN loans l ON l.id = i.loan_id
            JOIN customers c ON c.id = l.customer_id
            WHERE i.status = 'OVERDUE'
-           ${countFilter}`,
+           ${selfFilter} ${countFilter}`,
           countParams,
         ),
       ]);
@@ -190,6 +197,7 @@ export class TenantCollectionsService {
   }
 
   async recordPayment(user: TenantJwtPayload, installmentId: string, dto: RecordCollectionPaymentDto) {
+    if (user.role === 'VIEWER') throw new ForbiddenException('You do not have permission to record payments');
     if (!dto.amount || dto.amount <= 0) throw new BadRequestException('Amount must be positive');
     return this.withSchema(user.schemaName, async (client) => {
       const instRes = await client.query(
@@ -203,7 +211,7 @@ export class TenantCollectionsService {
         throw new BadRequestException('Payment can only be recorded on active loans');
       }
 
-      const balance = parseFloat(inst.total_amount) - parseFloat(inst.paid_amount);
+      const balance = Math.round((parseFloat(inst.total_amount) - parseFloat(inst.paid_amount)) * 100) / 100;
       if (dto.amount > balance) throw new BadRequestException(`Amount exceeds balance due of ₹${balance}`);
 
       const paymentDate = dto.paymentDate ?? new Date().toISOString().slice(0, 10);

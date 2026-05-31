@@ -56,3 +56,17 @@ next-env.d.ts
 
 # Claude Code AI assistant memory / session files
 .claude/
+
+# Playwright E2E — tests, config, and artifacts
+frontend/e2e/
+frontend/playwright.config.ts
+frontend/playwright.config.*.ts
+frontend/tsconfig.e2e.json
+frontend/.env.test
+frontend/e2e/.auth/
+frontend/playwright-report/
+frontend/test-results/
+frontend/.gitignore-playwright
+
+# IDE
+mobile/.idea/

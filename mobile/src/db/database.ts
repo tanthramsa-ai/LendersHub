@@ -1,14 +1,17 @@
 import * as SQLite from 'expo-sqlite';
 import { PaymentRecord, CollectionItem } from '../types';
 
-let db: SQLite.SQLiteDatabase | null = null;
+// Store the promise itself so concurrent callers share one in-flight open
+let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
-export async function getDb(): Promise<SQLite.SQLiteDatabase> {
-  if (!db) {
-    db = await SQLite.openDatabaseAsync('lendershub_agent.db');
-    await initSchema(db);
+export function getDb(): Promise<SQLite.SQLiteDatabase> {
+  if (!dbPromise) {
+    dbPromise = SQLite.openDatabaseAsync('lendershub_agent.db').then(async (database) => {
+      await initSchema(database);
+      return database;
+    });
   }
-  return db;
+  return dbPromise;
 }
 
 async function initSchema(database: SQLite.SQLiteDatabase) {
@@ -145,21 +148,25 @@ export async function resetFailedPayments(): Promise<void> {
 export async function cacheCollections(items: CollectionItem[]): Promise<void> {
   const db = await getDb();
   const now = new Date().toISOString();
-  await db.runAsync('DELETE FROM cached_collections');
-  for (const item of items) {
-    await db.runAsync(
-      `INSERT OR REPLACE INTO cached_collections
-       (id, loan_id, loan_number, customer_id, customer_name, customer_phone, customer_address,
-        installment_id, installment_number, amount_due, paid_amount, due_date, status, days_overdue, cached_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        item.id, item.loanId, item.loanNumber, item.customerId, item.customerName,
-        item.customerPhone, item.customerAddress ?? null, item.installmentId,
-        item.installmentNumber, item.amountDue, item.paidAmount, item.dueDate,
-        item.status, item.daysOverdue ?? 0, now,
-      ],
-    );
-  }
+  // Wrap DELETE + INSERT in a transaction — a crash between them would otherwise
+  // leave the cache empty or partial, giving agents a missing collection list offline
+  await db.withTransactionAsync(async () => {
+    await db.runAsync('DELETE FROM cached_collections');
+    for (const item of items) {
+      await db.runAsync(
+        `INSERT OR REPLACE INTO cached_collections
+         (id, loan_id, loan_number, customer_id, customer_name, customer_phone, customer_address,
+          installment_id, installment_number, amount_due, paid_amount, due_date, status, days_overdue, cached_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          item.id, item.loanId, item.loanNumber, item.customerId, item.customerName,
+          item.customerPhone, item.customerAddress ?? null, item.installmentId,
+          item.installmentNumber, item.amountDue, item.paidAmount, item.dueDate,
+          item.status, item.daysOverdue ?? 0, now,
+        ],
+      );
+    }
+  });
 }
 
 export async function getCollectionCache(): Promise<CollectionItem[]> {

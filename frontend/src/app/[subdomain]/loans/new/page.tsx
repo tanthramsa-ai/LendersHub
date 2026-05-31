@@ -3,192 +3,400 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
-import { createLoan, getCustomers, getBranches, Customer, TenantBranch } from '@/services/tenant-api';
+import {
+  createTermLoan, previewTermLoanSchedule, getCustomers, getBranches, getLoanTypes,
+  Customer, TenantBranch, LoanType, TermSchedulePreview,
+} from '@/services/tenant-api';
 
-function calcEmi(principal: number, annualRate: number, months: number): number {
-  if (!principal || !months) return 0;
-  if (annualRate === 0) return principal / months;
-  const r = annualRate / 100 / 12;
-  return (principal * r * Math.pow(1 + r, months)) / (Math.pow(1 + r, months) - 1);
-}
+const BRAND = '#0F4C81';
 
-function fmtCurrency(n: number) {
+function fmt(n: number) {
   return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
 }
 
-const inputCls = 'w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-gray-900';
+const ROUNDING_OPTIONS = [
+  { value: 0,   label: 'No rounding (exact)' },
+  { value: 10,  label: 'Round up to ₹10' },
+  { value: 50,  label: 'Round up to ₹50' },
+  { value: 100, label: 'Round up to ₹100' },
+];
 
-export default function NewLoanPage() {
+export default function NewTermLoanPage() {
   const router = useRouter();
-  const { subdomain } = useParams<{ subdomain: string }>();
+  const params = useParams<{ subdomain: string }>();
+  const subdomain = params.subdomain;
 
-  const [customers, setCustomers] = useState<Customer[]>([]);
+  // Step 1: Customer
+  const [step, setStep] = useState(1);
   const [customerSearch, setCustomerSearch] = useState('');
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
-  const [showDropdown, setShowDropdown] = useState(false);
-  const [branches, setBranches] = useState<TenantBranch[]>([]);
-  const [form, setForm] = useState({ principal: '', interestRate: '', termMonths: '', purpose: '', firstDueDate: '', branchId: '' });
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [custLoading, setCustLoading] = useState(false);
 
-  const emi = calcEmi(Number(form.principal), Number(form.interestRate), Number(form.termMonths));
-  const totalRepayment = emi * Number(form.termMonths);
-  const totalInterest = totalRepayment - Number(form.principal);
+  // Step 2: Loan details
+  const [branchId, setBranchId] = useState('');
+  const [loanTypeId, setLoanTypeId] = useState('');
+  const [principal, setPrincipal] = useState('');
+  const [interestRate, setInterestRate] = useState('');
+  const [termMonths, setTermMonths] = useState('');
+  const [firstDueDate, setFirstDueDate] = useState('');
+  const [calculationType, setCalculationType] = useState<'REDUCING' | 'FLAT'>('REDUCING');
+  const [emiRounding, setEmiRounding] = useState<0 | 10 | 50 | 100>(0);
+  const [purpose, setPurpose] = useState('');
+  const [securityDocUrl, setSecurityDocUrl] = useState('');
+  const [promissoryNoteUrl, setPromissoryNoteUrl] = useState('');
+
+  // Step 3: Preview
+  const [preview, setPreview] = useState<TermSchedulePreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
+  const [branches, setBranches] = useState<TenantBranch[]>([]);
+  const [loanTypes, setLoanTypes] = useState<LoanType[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    getBranches().then((b) => setBranches(b.filter((x) => x.isActive)));
+    getLoanTypes().then((t) => setLoanTypes(t.filter((x) => x.isActive)));
+    // default first due date = 1 month from today
+    const d = new Date(); d.setMonth(d.getMonth() + 1);
+    setFirstDueDate(d.toISOString().slice(0, 10));
+  }, []);
 
   const searchCustomers = useCallback(async (q: string) => {
-    try { const res = await getCustomers(1, 10, q); setCustomers(res.data); } catch { /**/ }
+    if (q.length < 2) { setCustomers([]); return; }
+    setCustLoading(true);
+    try {
+      const res = await getCustomers(1, 10, q);
+      setCustomers(res.data);
+    } finally { setCustLoading(false); }
   }, []);
 
   useEffect(() => {
-    if (customerSearch.length >= 2) { searchCustomers(customerSearch); setShowDropdown(true); }
-    else setShowDropdown(false);
+    const t = setTimeout(() => searchCustomers(customerSearch), 300);
+    return () => clearTimeout(t);
   }, [customerSearch, searchCustomers]);
 
-  useEffect(() => { getBranches().then(setBranches).catch(() => {}); }, []);
+  const canPreview = !!(principal && interestRate && termMonths && firstDueDate && branchId);
 
-  function set(field: keyof typeof form, value: string) { setForm((f) => ({ ...f, [field]: value })); }
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!selectedCustomer) { setError('Please select a customer'); return; }
-    setError(''); setLoading(true);
+  async function loadPreview() {
+    if (!canPreview) return;
+    setPreviewLoading(true);
+    setError('');
     try {
-      const loan = await createLoan({ customerId: selectedCustomer.id, principal: Number(form.principal), interestRate: Number(form.interestRate), termMonths: Number(form.termMonths), purpose: form.purpose || undefined, firstDueDate: form.firstDueDate || undefined, branchId: form.branchId || undefined }) as { id: string };
-      router.push(`/${subdomain}/loans/${loan.id}`);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
+      const p = await previewTermLoanSchedule({
+        principal: parseFloat(principal), interestRate: parseFloat(interestRate),
+        termMonths: parseInt(termMonths), firstDueDate,
+        calculationType, emiRounding,
+      });
+      setPreview(p);
+      setStep(3);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Preview failed');
+    } finally { setPreviewLoading(false); }
+  }
+
+  async function handleSubmit() {
+    if (!selectedCustomer || !preview) return;
+    setSubmitting(true); setError('');
+    try {
+      const res = await createTermLoan({
+        customerId: selectedCustomer.id, branchId, loanTypeId: loanTypeId || undefined,
+        principal: parseFloat(principal), interestRate: parseFloat(interestRate),
+        termMonths: parseInt(termMonths), firstDueDate,
+        calculationType, emiRounding,
+        purpose: purpose || undefined,
+        securityDocUrl: securityDocUrl || undefined,
+        promissoryNoteUrl: promissoryNoteUrl || undefined,
+      });
+      router.push(`/${subdomain}/loans/${res.id}`);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to create loan');
+      setSubmitting(false);
     }
   }
 
+  function handleFileUpload(setter: (v: string) => void) {
+    return (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      if (file.size > 10 * 1024 * 1024) { setError('File must be under 10 MB'); return; }
+      const reader = new FileReader();
+      reader.onload = () => setter(reader.result as string);
+      reader.readAsDataURL(file);
+    };
+  }
+
   return (
-    <div className="p-6 max-w-4xl mx-auto">
-      <div className="mb-6">
-        <Link href={`/${subdomain}/loans`} className="text-sm text-blue-600 hover:underline">← Back to Loans</Link>
-        <h1 className="text-xl font-bold text-gray-900 mt-2">New Loan Application</h1>
+    <div className="p-6 max-w-3xl mx-auto space-y-6">
+      <div className="flex items-center gap-3">
+        <Link href={`/${subdomain}/loans`} className="text-gray-400 hover:text-gray-600">
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+          </svg>
+        </Link>
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">New Loan</h1>
+          <p className="text-sm text-gray-500">EMI-based term loan · Principal + Interest</p>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-5">
-          <form onSubmit={handleSubmit} className="space-y-5">
-            {/* Customer */}
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
-              <h2 className="text-sm font-semibold text-gray-700 mb-4">Customer</h2>
-              <div className="relative">
-                <label className="block text-xs font-medium text-gray-600 mb-1">Search Customer *</label>
-                <input type="text" value={customerSearch} onChange={(e) => { setCustomerSearch(e.target.value); if (selectedCustomer) setSelectedCustomer(null); }} placeholder="Type name or phone…" className={inputCls} />
-                {showDropdown && customers.length > 0 && (
-                  <div className="absolute z-10 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                    {customers.map((c) => (
-                      <button key={c.id} type="button" onClick={() => { setSelectedCustomer(c); setCustomerSearch(`${c.firstName} ${c.lastName} — ${c.phone}`); setShowDropdown(false); }} className="w-full text-left px-4 py-2.5 hover:bg-blue-50 transition-colors">
-                        <p className="text-sm font-medium text-gray-900">{c.firstName} {c.lastName}</p>
-                        <p className="text-xs text-gray-500">{c.customerCode} · {c.phone}</p>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-              {selectedCustomer && (
-                <div className="mt-3 p-3 bg-blue-50 rounded-lg flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-semibold text-blue-900">{selectedCustomer.firstName} {selectedCustomer.lastName}</p>
-                    <p className="text-xs text-blue-600">{selectedCustomer.customerCode} · {selectedCustomer.phone}</p>
-                  </div>
-                  {selectedCustomer.creditScore && (
-                    <div className="text-right">
-                      <p className="text-xs text-blue-500">Credit Score</p>
-                      <p className="text-lg font-bold text-blue-800">{selectedCustomer.creditScore}</p>
-                    </div>
-                  )}
-                </div>
-              )}
-              <div className="mt-3"><Link href={`/${subdomain}/customers/new`} className="text-xs text-blue-600 hover:underline">+ Add new customer</Link></div>
+      {/* Step indicator */}
+      <div className="flex items-center gap-2">
+        {['Customer', 'Loan Details', 'Preview & Confirm'].map((label, i) => (
+          <div key={label} className="flex items-center gap-2">
+            <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${
+              step > i + 1 ? 'bg-green-500 text-white' : step === i + 1 ? 'text-white' : 'bg-gray-100 text-gray-400'
+            }`} style={step === i + 1 ? { backgroundColor: BRAND } : {}}>
+              {step > i + 1 ? '✓' : i + 1}
             </div>
+            <span className={`text-xs font-medium hidden sm:block ${step === i + 1 ? 'text-gray-900' : 'text-gray-400'}`}>{label}</span>
+            {i < 2 && <div className="w-8 h-px bg-gray-200 mx-1" />}
+          </div>
+        ))}
+      </div>
 
-            {/* Loan Details */}
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
-              <h2 className="text-sm font-semibold text-gray-700 mb-4">Loan Details</h2>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Principal Amount (₹) *</label>
-                  <input type="number" value={form.principal} onChange={(e) => set('principal', e.target.value)} required min={1} placeholder="50000" className={inputCls} />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Annual Interest Rate (%) *</label>
-                  <input type="number" value={form.interestRate} onChange={(e) => set('interestRate', e.target.value)} required min={0} max={100} step={0.01} placeholder="18" className={inputCls} />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Term (months) *</label>
-                  <input type="number" value={form.termMonths} onChange={(e) => set('termMonths', e.target.value)} required min={1} max={360} placeholder="12" className={inputCls} />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">First Due Date</label>
-                  <input type="date" value={form.firstDueDate} onChange={(e) => set('firstDueDate', e.target.value)} className={inputCls} />
-                </div>
-                <div className="col-span-2">
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Branch</label>
-                  <select value={form.branchId} onChange={(e) => set('branchId', e.target.value)} className={inputCls}>
-                    <option value="">— No branch —</option>
-                    {branches.filter((b) => b.isActive).map((b) => (
-                      <option key={b.id} value={b.id}>{b.name} ({b.code})</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="col-span-2">
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Loan Purpose</label>
-                  <select value={form.purpose} onChange={(e) => set('purpose', e.target.value)} className={inputCls}>
-                    <option value="">Select purpose</option>
-                    {['Personal','Business','Agriculture','Education','Medical','Home Improvement','Vehicle','Wedding','Other'].map((p) => <option key={p} value={p}>{p}</option>)}
-                  </select>
-                </div>
-              </div>
+      {error && <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg">{error}</div>}
+
+      {/* Step 1: Customer */}
+      {step === 1 && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 space-y-4">
+          <h2 className="font-semibold text-gray-900">Select Customer</h2>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Search by name or phone</label>
+            <input value={customerSearch} onChange={(e) => setCustomerSearch(e.target.value)}
+              placeholder="Type customer name or phone number…"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+          {custLoading && <p className="text-sm text-gray-400">Searching…</p>}
+          {customers.length > 0 && (
+            <div className="divide-y divide-gray-100 border border-gray-200 rounded-lg overflow-hidden">
+              {customers.map((c) => (
+                <button key={c.id} onClick={() => { setSelectedCustomer(c); setCustomerSearch(c.firstName + ' ' + c.lastName); setCustomers([]); }}
+                  className="w-full text-left px-4 py-3 hover:bg-blue-50 transition-colors">
+                  <p className="font-medium text-gray-900 text-sm">{c.firstName} {c.lastName}</p>
+                  <p className="text-xs text-gray-400">{c.phone}</p>
+                </button>
+              ))}
             </div>
-
-            {error && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>}
-
-            <div className="flex justify-end gap-3">
-              <Link href={`/${subdomain}/loans`} className="px-5 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">Cancel</Link>
-              <button type="submit" disabled={loading || !selectedCustomer} className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-medium rounded-lg transition-colors">
-                {loading ? 'Creating…' : 'Create Loan Application'}
-              </button>
-            </div>
-          </form>
-        </div>
-
-        {/* EMI Calculator */}
-        <div>
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 sticky top-6">
-            <h2 className="text-sm font-semibold text-gray-700 mb-4">EMI Calculator</h2>
-            {emi > 0 ? (
-              <div className="space-y-4">
-                <div className="text-center py-4 bg-blue-50 rounded-xl">
-                  <p className="text-xs text-blue-500 mb-1">Monthly EMI</p>
-                  <p className="text-3xl font-bold text-blue-700">{fmtCurrency(emi)}</p>
-                </div>
-                <div className="space-y-2.5 text-sm">
-                  <div className="flex justify-between"><span className="text-gray-500">Principal</span><span className="font-medium">{fmtCurrency(Number(form.principal))}</span></div>
-                  <div className="flex justify-between"><span className="text-gray-500">Total Interest</span><span className="font-medium text-orange-600">{fmtCurrency(totalInterest)}</span></div>
-                  <div className="flex justify-between border-t pt-2"><span className="font-medium text-gray-700">Total Repayment</span><span className="font-bold">{fmtCurrency(totalRepayment)}</span></div>
-                  <div className="flex justify-between"><span className="text-gray-500">No. of EMIs</span><span className="font-medium">{form.termMonths}</span></div>
-                </div>
-                <div>
-                  <div className="h-3 rounded-full overflow-hidden flex">
-                    <div className="bg-blue-500 h-full" style={{ width: `${(Number(form.principal) / totalRepayment) * 100}%` }} />
-                    <div className="bg-orange-400 h-full flex-1" />
-                  </div>
-                  <div className="flex text-xs mt-1 gap-4">
-                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500 inline-block" />Principal {Math.round((Number(form.principal) / totalRepayment) * 100)}%</span>
-                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-400 inline-block" />Interest {Math.round((totalInterest / totalRepayment) * 100)}%</span>
-                  </div>
-                </div>
+          )}
+          {selectedCustomer && (
+            <div className="flex items-center gap-3 p-3 bg-green-50 border border-green-200 rounded-lg">
+              <div className="w-9 h-9 rounded-full bg-green-600 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
+                {selectedCustomer.firstName[0]}
               </div>
-            ) : (
-              <div className="text-center py-8 text-gray-400 text-sm">Enter loan details to see EMI calculation</div>
-            )}
+              <div>
+                <p className="font-semibold text-gray-900 text-sm">{selectedCustomer.firstName} {selectedCustomer.lastName}</p>
+                <p className="text-xs text-gray-500">{selectedCustomer.phone}</p>
+              </div>
+              <button onClick={() => { setSelectedCustomer(null); setCustomerSearch(''); }}
+                className="ml-auto text-gray-400 hover:text-red-500 text-xs">Change</button>
+            </div>
+          )}
+          <div className="flex justify-end">
+            <button disabled={!selectedCustomer} onClick={() => setStep(2)}
+              className="px-5 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-40 transition-colors hover:opacity-90"
+              style={{ backgroundColor: BRAND }}>
+              Continue →
+            </button>
           </div>
         </div>
-      </div>
+      )}
+
+      {/* Step 2: Loan details */}
+      {step === 2 && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 space-y-5">
+          <h2 className="font-semibold text-gray-900">Loan Details</h2>
+
+          {/* Branch (mandatory) */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Branch <span className="text-red-500">*</span></label>
+            <select value={branchId} onChange={(e) => setBranchId(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="">Select branch…</option>
+              {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Principal Amount (₹) <span className="text-red-500">*</span></label>
+              <input type="number" value={principal} onChange={(e) => setPrincipal(e.target.value)}
+                placeholder="e.g. 100000" min="1"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Interest Rate (% p.a.) <span className="text-red-500">*</span></label>
+              <input type="number" value={interestRate} onChange={(e) => setInterestRate(e.target.value)}
+                placeholder="e.g. 18" step="0.1" min="0" max="100"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Tenure (months) <span className="text-red-500">*</span></label>
+              <input type="number" value={termMonths} onChange={(e) => setTermMonths(e.target.value)}
+                placeholder="e.g. 12" min="1" max="360"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">First Due Date <span className="text-red-500">*</span></label>
+              <input type="date" value={firstDueDate} onChange={(e) => setFirstDueDate(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Interest Calculation</label>
+              <select value={calculationType} onChange={(e) => setCalculationType(e.target.value as 'REDUCING' | 'FLAT')}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="REDUCING">Reducing Balance</option>
+                <option value="FLAT">Flat Rate</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">EMI Rounding</label>
+              <select value={emiRounding} onChange={(e) => setEmiRounding(Number(e.target.value) as 0 | 10 | 50 | 100)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                {ROUNDING_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+            {loanTypes.length > 0 && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Loan Type</label>
+                <select value={loanTypeId} onChange={(e) => setLoanTypeId(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="">Select (optional)</option>
+                  {loanTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </div>
+            )}
+            <div className="sm:col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Purpose</label>
+              <input value={purpose} onChange={(e) => setPurpose(e.target.value)}
+                placeholder="e.g. Business expansion, Home renovation…"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+          </div>
+
+          {/* Document uploads */}
+          <div className="border-t border-gray-100 pt-4 space-y-3">
+            <p className="text-sm font-medium text-gray-700">Documents</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">Security Document</label>
+                <input type="file" accept="image/*,application/pdf" onChange={handleFileUpload(setSecurityDocUrl)}
+                  className="block w-full text-xs text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
+                {securityDocUrl && <p className="text-xs text-green-600 mt-1">✓ Uploaded</p>}
+              </div>
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">Promissory Note</label>
+                <input type="file" accept="image/*,application/pdf" onChange={handleFileUpload(setPromissoryNoteUrl)}
+                  className="block w-full text-xs text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
+                {promissoryNoteUrl && <p className="text-xs text-green-600 mt-1">✓ Uploaded</p>}
+              </div>
+            </div>
+          </div>
+
+          {/* EMI preview inline */}
+          {principal && interestRate && termMonths && (
+            <div className="p-3 bg-blue-50 rounded-lg text-sm">
+              {(() => {
+                const p = parseFloat(principal), r = parseFloat(interestRate), t = parseInt(termMonths);
+                if (!p || !r || !t) return null;
+                const mr = r / 100 / 12;
+                let emi = calculationType === 'FLAT'
+                  ? (p + p * mr * t) / t
+                  : mr === 0 ? p / t : (p * mr * Math.pow(1+mr, t)) / (Math.pow(1+mr, t) - 1);
+                if (emiRounding > 0) emi = Math.ceil(emi / emiRounding) * emiRounding;
+                return <span className="text-blue-800 font-medium">Estimated EMI: <strong>{fmt(emi)}</strong> / month</span>;
+              })()}
+            </div>
+          )}
+
+          <div className="flex justify-between pt-2">
+            <button onClick={() => setStep(1)} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">← Back</button>
+            <button disabled={!canPreview || previewLoading} onClick={loadPreview}
+              className="px-5 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-40 hover:opacity-90 transition-colors"
+              style={{ backgroundColor: BRAND }}>
+              {previewLoading ? 'Generating…' : 'Preview Schedule →'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Step 3: Preview */}
+      {step === 3 && preview && (
+        <div className="space-y-5">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 space-y-4">
+            <h2 className="font-semibold text-gray-900">Schedule Preview</h2>
+
+            {/* Summary cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {[
+                { label: 'Monthly EMI', value: fmt(preview.emi), color: 'text-blue-700' },
+                { label: 'Total Interest', value: fmt(preview.totalInterest), color: 'text-orange-600' },
+                { label: 'Total Repayment', value: fmt(preview.totalAmount), color: 'text-gray-900' },
+                { label: 'Installments', value: `${preview.schedule.length} months`, color: 'text-gray-700' },
+              ].map((c) => (
+                <div key={c.label} className="p-3 bg-gray-50 rounded-lg">
+                  <p className="text-xs text-gray-500">{c.label}</p>
+                  <p className={`text-base font-bold mt-0.5 ${c.color}`}>{c.value}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Schedule table */}
+            <div className="overflow-auto max-h-80 border border-gray-100 rounded-lg">
+              <table className="w-full text-xs">
+                <thead className="bg-gray-50 sticky top-0">
+                  <tr>
+                    {['#', 'Due Date', 'Principal', 'Interest', 'EMI', 'Balance'].map((h) => (
+                      <th key={h} className="px-3 py-2 text-left font-semibold text-gray-500 uppercase tracking-wider">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {(() => {
+                    let balance = parseFloat(principal);
+                    return preview.schedule.map((inst) => {
+                      balance = Math.round((balance - inst.principalAmount) * 100) / 100;
+                      return (
+                        <tr key={inst.number} className="hover:bg-gray-50">
+                          <td className="px-3 py-2 text-gray-400">{inst.number}</td>
+                          <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{inst.dueDate}</td>
+                          <td className="px-3 py-2 font-medium text-gray-900">{fmt(inst.principalAmount)}</td>
+                          <td className="px-3 py-2 text-orange-600">{fmt(inst.interestAmount)}</td>
+                          <td className="px-3 py-2 font-bold text-blue-700">{fmt(inst.totalAmount)}</td>
+                          <td className="px-3 py-2 text-gray-500">{fmt(Math.max(0, balance))}</td>
+                        </tr>
+                      );
+                    });
+                  })()}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Customer + loan summary */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+            <p className="text-sm font-semibold text-gray-900 mb-3">Loan Summary</p>
+            <dl className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2 text-sm">
+              <div><dt className="text-gray-500 text-xs">Customer</dt><dd className="font-medium">{selectedCustomer?.firstName} {selectedCustomer?.lastName}</dd></div>
+              <div><dt className="text-gray-500 text-xs">Principal</dt><dd className="font-medium">{fmt(parseFloat(principal))}</dd></div>
+              <div><dt className="text-gray-500 text-xs">EMI</dt><dd className="font-medium text-blue-700">{fmt(preview.emi)}</dd></div>
+              <div><dt className="text-gray-500 text-xs">Rate</dt><dd className="font-medium">{interestRate}% p.a. {calculationType}</dd></div>
+              <div><dt className="text-gray-500 text-xs">Term</dt><dd className="font-medium">{termMonths} months</dd></div>
+              <div><dt className="text-gray-500 text-xs">First Due</dt><dd className="font-medium">{firstDueDate}</dd></div>
+            </dl>
+          </div>
+
+          <div className="flex justify-between">
+            <button onClick={() => setStep(2)} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">← Edit Details</button>
+            <button disabled={submitting} onClick={handleSubmit}
+              className="px-6 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-40 hover:opacity-90 transition-colors"
+              style={{ backgroundColor: BRAND }}>
+              {submitting ? 'Creating Loan…' : 'Confirm & Disburse'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

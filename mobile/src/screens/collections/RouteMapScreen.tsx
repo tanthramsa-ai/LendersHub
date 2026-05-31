@@ -36,23 +36,25 @@ export default function RouteMapScreen() {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') {
-          buildStops(null);
+          buildStops(null, allPending);
           return;
         }
         const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
         const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
         setLocation(loc);
-        buildStops(loc);
+        buildStops(loc, allPending);
       } catch {
-        buildStops(null);
+        buildStops(null, allPending);
       } finally {
         setGpsLoading(false);
       }
     })();
-  }, []);
+  // allPending as dep so route rebuilds when store updates after screen mounts
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [todayItems, overdueItems]);
 
-  function buildStops(loc: { lat: number; lng: number } | null) {
-    const withDistance: StopItem[] = allPending.map((item) => ({
+  function buildStops(loc: { lat: number; lng: number } | null, pending: typeof allPending) {
+    const withDistance: StopItem[] = pending.map((item) => ({
       ...item,
       distanceKm:
         loc && item.lat != null && item.lng != null
