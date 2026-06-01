@@ -25,11 +25,19 @@ export async function recordPaymentOnline(payment: Omit<PaymentRecord, 'id' | 's
 }
 
 export async function fetchAgentStats() {
-  return apiRequest<{
-    todayTarget: number;
-    todayCollected: number;
-    pendingCount: number;
+  const res = await apiRequest<{
+    todayCount: number;
+    todayAmount: number;
     overdueCount: number;
-    collectedCount: number;
-  }>('/api/v1/tenant/collections/agent-stats');
+    overdueAmount: number;
+    collectedToday: number;
+    totalPending: number;
+  }>('/api/v1/tenant/collections/stats');
+  return {
+    todayTarget:    res.todayAmount,
+    todayCollected: res.collectedToday,
+    pendingCount:   res.todayCount,
+    overdueCount:   res.overdueCount,
+    collectedCount: 0,
+  };
 }

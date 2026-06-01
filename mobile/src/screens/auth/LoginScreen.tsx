@@ -7,8 +7,9 @@ import {
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
-import { login, saveCredentials, loadCredentials, clearCredentials } from '../../api/auth';
+import { login, verifyLoginOtp, saveCredentials, loadCredentials, clearCredentials } from '../../api/auth';
 import { getBiometricEnabled } from '../../api/client';
+import { AgentSession } from '../../types';
 import { useAuthStore } from '../../store/authStore';
 import { AuthStackParamList, FieldErrors, LoginMethod } from '../../types';
 import { BRAND, ACCENT, GRAY, GRAY_BORDER, DANGER, SUCCESS, GRAY_LIGHT } from '../../utils/constants';
@@ -36,6 +37,12 @@ export default function LoginScreen({ navigation, route }: Props) {
   const [rememberMe, setRememberMe] = useState(false);
   const [loading, setLoading] = useState(false);
   const [serverError, setServerError] = useState('');
+
+  // OTP step state
+  const [otpPending, setOtpPending] = useState<{
+    tempToken: string; maskedPhone: string;
+  } | null>(null);
+  const [otp, setOtp] = useState('');
 
   // Shake animation for error feedback
   const shakeAnim = useRef(new Animated.Value(0)).current;
@@ -98,35 +105,56 @@ export default function LoginScreen({ navigation, route }: Props) {
 
   async function handleLogin() {
     setServerError('');
-    if (!validate()) {
-      shake();
-      return;
-    }
-
+    if (!validate()) { shake(); return; }
     setLoading(true);
     try {
-      const session = await login(identifier.trim(), password, subdomain.trim(), loginMethod);
+      const result = await login(identifier.trim(), password, subdomain.trim(), loginMethod);
 
-      if (rememberMe) {
-        await saveCredentials({ subdomain: subdomain.trim().toLowerCase(), identifier: identifier.trim(), loginMethod });
-      } else {
-        await clearCredentials();
+      if (result.type === 'otp') {
+        setOtpPending({ tempToken: result.tempToken, maskedPhone: result.maskedPhone });
+        setOtp('');
+        return;
       }
 
-      setSession(session);
-      // Only show biometric setup for new devices — skip if already configured
-      const alreadyEnabled = await getBiometricEnabled();
-      if (alreadyEnabled) {
-        navigation.getParent()?.reset({ index: 0, routes: [{ name: 'Main' }] });
-      } else {
-        navigation.replace('BiometricSetup');
-      }
+      await finishLogin(result.session);
     } catch (err) {
       const msg = (err as Error & { statusCode?: number }).message;
       setServerError(msg ?? 'Login failed. Please try again.');
       shake();
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleVerifyOtp() {
+    if (!otpPending) return;
+    if (otp.length !== 6) { setServerError('Enter the 6-digit OTP'); shake(); return; }
+    setServerError('');
+    setLoading(true);
+    try {
+      const session = await verifyLoginOtp(otpPending.tempToken, otp);
+      await finishLogin(session);
+    } catch (err) {
+      const msg = (err as Error & { statusCode?: number }).message;
+      setServerError(msg ?? 'Invalid or expired OTP. Try again.');
+      shake();
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function finishLogin(session: AgentSession) {
+    if (rememberMe) {
+      await saveCredentials({ subdomain: subdomain.trim().toLowerCase(), identifier: identifier.trim(), loginMethod });
+    } else {
+      await clearCredentials();
+    }
+    setSession(session);
+    const alreadyEnabled = await getBiometricEnabled();
+    if (alreadyEnabled) {
+      navigation.getParent()?.reset({ index: 0, routes: [{ name: 'Main' }] });
+    } else {
+      navigation.replace('BiometricSetup');
     }
   }
 
@@ -264,19 +292,52 @@ export default function LoginScreen({ navigation, route }: Props) {
           <Text style={styles.rememberLabel}>Remember my details</Text>
         </View>
 
-        {/* Sign in button */}
-        <TouchableOpacity
-          style={[styles.loginBtn, loading && styles.loginBtnDisabled]}
-          onPress={handleLogin}
-          disabled={loading}
-          activeOpacity={0.85}
-        >
-          {loading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.loginBtnText}>Sign In</Text>
-          )}
-        </TouchableOpacity>
+        {/* ── OTP step (shown after credentials verified) ── */}
+        {otpPending && (
+          <View style={styles.otpCard}>
+            <Text style={styles.otpTitle}>Enter OTP</Text>
+            <Text style={styles.otpSub}>
+              A 6-digit code was sent to {otpPending.maskedPhone}
+            </Text>
+            <TextInput
+              style={styles.otpInput}
+              value={otp}
+              onChangeText={(v) => { setOtp(v.replace(/\D/g, '').slice(0, 6)); setServerError(''); }}
+              keyboardType="number-pad"
+              maxLength={6}
+              placeholder="000000"
+              placeholderTextColor={GRAY}
+              autoFocus
+            />
+            <TouchableOpacity
+              style={[styles.loginBtn, loading && styles.loginBtnDisabled]}
+              onPress={handleVerifyOtp}
+              disabled={loading}
+              activeOpacity={0.85}
+            >
+              {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.loginBtnText}>Verify OTP</Text>}
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => { setOtpPending(null); setOtp(''); setServerError(''); }} style={{ marginTop: 12, alignItems: 'center' }}>
+              <Text style={{ color: BRAND, fontSize: 13, fontWeight: '600' }}>← Back to login</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Sign in button — hidden during OTP step */}
+        {!otpPending && (
+          <TouchableOpacity
+            style={[styles.loginBtn, loading && styles.loginBtnDisabled]}
+            onPress={handleLogin}
+            disabled={loading}
+            activeOpacity={0.85}
+          >
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.loginBtnText}>Sign In</Text>
+            )}
+          </TouchableOpacity>
+        )}
 
         <Text style={styles.hint}>
           Contact your manager if you don't have login credentials.
@@ -404,4 +465,28 @@ const styles = StyleSheet.create({
   loginBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
 
   hint: { textAlign: 'center', color: GRAY, fontSize: 12, marginTop: 20, lineHeight: 18 },
+
+  otpCard: {
+    backgroundColor: '#F0F7FF',
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: BRAND + '40',
+    padding: 20,
+    marginBottom: 16,
+  },
+  otpTitle: { fontSize: 17, fontWeight: '800', color: '#111827', marginBottom: 6 },
+  otpSub: { fontSize: 13, color: GRAY, marginBottom: 16, lineHeight: 18 },
+  otpInput: {
+    fontSize: 32,
+    fontWeight: '900',
+    letterSpacing: 12,
+    textAlign: 'center',
+    borderWidth: 2,
+    borderColor: BRAND,
+    borderRadius: 14,
+    paddingVertical: 14,
+    color: '#111827',
+    backgroundColor: '#fff',
+    marginBottom: 16,
+  },
 });
