@@ -43,6 +43,8 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
+      "expo-sqlite",
+      "expo-status-bar",
       "expo-secure-store",
       [
         "expo-camera",
