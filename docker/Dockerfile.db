@@ -1,0 +1,12 @@
+# LendersHub PostgreSQL image (separate, independently buildable).
+# Based on the official image; configuration is supplied at runtime via .env
+# (POSTGRES_DB / POSTGRES_USER / POSTGRES_PASSWORD).
+#
+# To bake in custom initialization SQL, drop *.sql / *.sh files here and
+# COPY them into /docker-entrypoint-initdb.d/ (runs only on first init).
+FROM postgres:15-alpine
+
+# Example (uncomment to use):
+# COPY init/ /docker-entrypoint-initdb.d/
+
+EXPOSE 5432

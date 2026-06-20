@@ -1,0 +1,25 @@
+# LendersHub - Frontend / Next.js (standalone)
+# Run:   docker compose -f docker-compose.frontend.yml up -d --build
+# NEXT_PUBLIC_API_URL is baked in at build time (browser -> backend on :4001),
+# so rebuild this image if you change it.
+name: lendershub-frontend
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../docker/Dockerfile.frontend
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4001}
+    image: lendershub-frontend:latest
+    container_name: lendershub-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    networks:
+      lendershub-net:
+        aliases: [frontend]
+
+networks:
+  lendershub-net:
+    external: true

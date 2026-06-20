@@ -1,0 +1,8 @@
+# LendersHub Redis image (separate, independently buildable).
+# Based on the official image with AOF persistence enabled by default.
+FROM redis:7-alpine
+
+EXPOSE 6379
+
+# AOF persistence (matches the previous inline compose command)
+CMD ["redis-server", "--appendonly", "yes"]

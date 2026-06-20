@@ -1,0 +1,32 @@
+# LendersHub - Backend / NestJS API (standalone)
+# Run:   docker compose -f docker-compose.backend.yml up -d --build
+# Start db + redis first; the backend applies Prisma migrations on boot and
+# (with restart: unless-stopped) retries until Postgres is reachable.
+name: lendershub-backend
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: ../docker/Dockerfile.backend
+    image: lendershub-backend:latest
+    container_name: lendershub-backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      JWT_SECRET: ${JWT_SECRET}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      PORT: 4001
+      APP_URL: ${APP_URL:-http://localhost:3000}
+    ports:
+      - "4001:4001"
+    networks:
+      lendershub-net:
+        aliases: [backend]
+
+networks:
+  lendershub-net:
+    external: true

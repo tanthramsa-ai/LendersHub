@@ -1,0 +1,38 @@
+# LendersHub - PostgreSQL (standalone)
+# Run:   docker compose -f docker-compose.db.yml up -d --build
+# Needs: the shared external network (svc.cmd creates it, or:
+#        docker network create lendershub-net)
+name: lendershub-db
+
+services:
+  db:
+    build:
+      context: ./docker
+      dockerfile: Dockerfile.db
+    image: lendershub-db:latest
+    container_name: lendershub-postgres
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    networks:
+      lendershub-net:
+        aliases: [db]          # backend reaches Postgres at host "db"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  lendershub-net:
+    external: true
+
+volumes:
+  postgres_data:
