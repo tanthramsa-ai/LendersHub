@@ -56,6 +56,9 @@ next-env.d.ts
 
 # Claude Code AI assistant memory / session files
 .claude/
+docs/session-prompts-*.md
+docs/session-transcript-*.md
+docs/build-prompts-*.md
 
 # Playwright E2E — tests, config, and artifacts
 frontend/e2e/
