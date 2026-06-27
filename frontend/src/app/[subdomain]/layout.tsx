@@ -137,6 +137,12 @@ export default function TenantLayout({ children }: { children: React.ReactNode }
 
   const isLoginPage = pathname.endsWith('/login');
 
+  useEffect(() => {
+    document.title = tenant?.companyName
+      ? `${tenant.companyName} · Lenders Portal`
+      : 'Lenders Portal · LendersHub';
+  }, [tenant]);
+
   const fetchUnreadCount = useCallback(async () => {
     try {
       const { count } = await getUnreadCount();

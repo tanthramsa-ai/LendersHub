@@ -19,6 +19,10 @@ export default function SuperAdminLayout({ children }: { children: React.ReactNo
   const isPublic = PUBLIC_PATHS.includes(pathname);
 
   useEffect(() => {
+    document.title = 'Super Admin · LendersHub';
+  }, []);
+
+  useEffect(() => {
     if (!isPublic && !sessionStore.getToken()) {
       router.replace('/super-admin/login');
     }
