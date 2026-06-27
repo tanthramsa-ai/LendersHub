@@ -77,20 +77,33 @@ cd LendersHub
 
 ### 2. Configure `.env`
 
-The root `.env` is committed with safe development defaults. For production, change at minimum:
+> ⚠️ The root `.env` is **git-ignored — it is NOT in the repo.** On a fresh clone you must create it yourself, or the stack will not start.
+
+Copy the template and fill it in:
+
+```bash
+cp docker/.env.example .env
+```
+
+The committed defaults in `docker/.env.example` work as-is for local development. For production, change at minimum:
 
 ```env
 POSTGRES_PASSWORD=<strong-password>
 JWT_SECRET=<64-char-random-string>
 ```
 
-Current defaults (local dev only):
+Working defaults for local dev (already in the example file):
 
 ```env
 POSTGRES_DB=lendershub
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=devpass
+# In Docker the backend reaches Postgres via the service name "db" on port 5432
+DATABASE_URL=postgresql://postgres:devpass@db:5432/lendershub
 JWT_SECRET=lendershub-super-secret-jwt-key-change-in-production-32chars
+APP_URL=http://localhost:3000
+REDIS_HOST=redis
+REDIS_PORT=6379
 NEXT_PUBLIC_API_URL=http://localhost:4001
 ```
 
@@ -102,6 +115,8 @@ docker compose up --build
 
 First build takes ~5 minutes (Next.js compile is the longest step).
 
+> The backend container **applies all pending Prisma migrations automatically on every boot** (`npx prisma migrate deploy` runs before the server starts — see `docker/Dockerfile.backend`). You do not run migrations manually in the Docker path. See [Database Migrations](#database-migrations) for details.
+
 | Service | Host port | URL |
 |---|---|---|
 | Frontend (Next.js) | 3000 | http://localhost:3000 |
@@ -112,8 +127,10 @@ First build takes ~5 minutes (Next.js compile is the longest step).
 ### 4. Seed the super-admin (first run only)
 
 ```bash
-docker compose exec backend sh -c "node -e \"require('./dist/prisma/seed');\""
+docker compose exec -T backend node dist/seed.js
 ```
+
+> The seed script is compiled to `dist/seed.js` in the image. The command is idempotent — safe to re-run.
 
 Default credentials:
 - Email: `admin@lendershub.com`
@@ -135,6 +152,19 @@ docker compose up --build backend      # rebuild backend only
 docker compose up --build frontend     # rebuild frontend only
 ```
 
+### Helper scripts (Windows)
+
+Convenience wrappers in the repo root — run from a terminal in the project folder:
+
+| Script | What it does |
+|---|---|
+| `deploy.cmd` | `git pull` → validate compose files → build → start each service in order (db → redis → backend → frontend) → seed → health-check. The one-command bring-up. |
+| `fresh-setup.cmd` | ⚠️ **Wipes all data** (Postgres + Redis volumes), rebuilds every image with `--no-cache`, starts the stack, and seeds. Use for a clean slate. |
+| `svc.cmd <service> [action]` | Control one service at a time. e.g. `svc backend logs`, `svc frontend restart`, `svc db up`. Services: `db` `redis` `backend` `frontend`; actions: `up` `down` `build` `restart` `logs` `ps`. |
+| `update-code.cmd` | Rebuild images with your current code and restart, **preserving** all data. Pending migrations auto-apply on backend boot. |
+
+> These still require the root `.env` to exist first (see step 2).
+
 ---
 
 ## Option B — Local Development (hot-reload)
@@ -145,20 +175,29 @@ docker compose up --build frontend     # rebuild frontend only
 docker compose up db redis -d
 ```
 
+When running the backend outside Docker, `DATABASE_URL` must point at the **forwarded host port** `localhost:5433` (not `db:5432`), because Postgres runs in a container but the backend runs on your host.
+
 ### 2. Backend
 
 ```bash
 cd backend
+cp ../docker/.env.example .env
+# Edit backend/.env: set DATABASE_URL to the host-port form
+#   DATABASE_URL=postgresql://postgres:devpass@localhost:5433/lendershub
+# and REDIS_HOST=localhost / REDIS_PORT=6380
+
 npm install
-npx prisma migrate deploy
-npm run seed
-npm run start:dev          # http://localhost:4001
+npx prisma generate          # generate the Prisma client
+npx prisma migrate deploy    # apply all pending migrations (public schema)
+npm run seed                 # create the super-admin user
+npm run start:dev            # http://localhost:4001
 ```
 
 ### 3. Frontend
 
 ```bash
 cd frontend
+echo "NEXT_PUBLIC_API_URL=http://localhost:4001" > .env.local
 npm install
 npm run dev                # http://localhost:3000
 ```
@@ -171,11 +210,13 @@ npm install
 npx expo start             # scan QR with Expo Go, or press a/i for emulator
 ```
 
-Set `EXPO_PUBLIC_API_URL` in `mobile/.env` to your local network IP:
+Create `mobile/.env` (git-ignored) and set `EXPO_PUBLIC_API_URL` to your local network IP — **not** `localhost`, since the phone/emulator must reach your machine:
 
 ```env
 EXPO_PUBLIC_API_URL=http://192.168.x.x:4001
 ```
+
+> Android emulator: use `http://10.0.2.2:4001` to reach the host machine.
 
 ---
 
@@ -294,11 +335,68 @@ npx expo build              # EAS build (requires eas-cli)
 
 ---
 
+## Database Migrations
+
+LendersHub has **two distinct migration layers** because of its multi-tenant design.
+
+### 1. Public schema (Prisma-managed)
+
+The `public` schema holds platform-level tables (`Tenant`, super-admin `User`, `LoginAuditLog`, subscriptions, branding). It is managed by **Prisma Migrate** — migration history lives in `backend/prisma/migrations/`.
+
+| Context | How migrations are applied |
+|---|---|
+| **Docker** (Option A) | **Automatic.** The backend container runs `npx prisma migrate deploy` on every boot before starting the server (`docker/Dockerfile.backend`). Nothing to do manually. |
+| **Local dev** (Option B) | **Manual.** Run `npx prisma migrate deploy` from `backend/` after `npm install`. |
+
+#### Apply pending migrations (existing database)
+
+```bash
+cd backend
+npx prisma migrate deploy      # applies any migrations not yet in the DB
+```
+
+#### Create a new migration (after editing `prisma/schema.prisma`)
+
+```bash
+cd backend
+npx prisma migrate dev --name <descriptive_name>   # creates SQL + applies it (dev DB)
+npx prisma generate                                # regenerate the typed client
+```
+
+Commit the generated folder under `backend/prisma/migrations/` so other machines pick it up. In Docker it is then applied automatically on the next deploy; in local dev run `migrate deploy`.
+
+#### Inspect / reset
+
+```bash
+npx prisma studio              # GUI database browser
+npx prisma migrate status      # show applied vs. pending migrations
+npx prisma migrate reset       # ⚠️ DROPS the DB, re-applies all migrations, re-seeds
+```
+
+### 2. Per-tenant schemas (DDL-provisioned)
+
+Each tenant gets its own PostgreSQL schema (`tenant_<slug>`) containing that tenant's `users`, `customers`, `loans`, `installments`, `otp_tokens`, etc. These are **not** Prisma-managed. The DDL lives in `backend/src/super-admin/tenants/tenant-schema.ts` (`tenantSchemaDDL()`), and is executed automatically:
+
+- **On tenant creation** — when you create a tenant via **Super-admin → Tenants → New Tenant**, the backend runs the DDL to provision that tenant's schema (`tenant.service.ts → provisionSchema()`).
+
+> Adding a column to a tenant table means editing `tenantSchemaDDL()` **and** applying the change to already-existing tenant schemas (new tenants get it automatically; existing ones do not). There is no auto-migration for live tenant schemas — plan such changes deliberately.
+
+### Migration troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| Backend crash-loops with `P1001`/`can't reach database` | Postgres not ready. `docker compose up db -d`, then check `docker compose ps`. |
+| `migrate deploy` says *no pending migrations* but a table is missing | You're pointed at the wrong DB — verify `DATABASE_URL` (host port `5433` for local dev, `db:5432` inside Docker). |
+| Seed fails right after clone | Migrations must run **before** seeding. Run `npx prisma migrate deploy` then `npm run seed`. |
+| Need a clean slate | `docker compose down -v` (wipes volumes) then `docker compose up --build`, or run `fresh-setup.cmd`. |
+
+---
+
 ## Project Structure
 
 ```
 LendersHub/
-├── .env                            # Root env — Docker Compose reads this
+├── .env                            # Root env (git-ignored) — create from docker/.env.example
 ├── docker-compose.yml              # 4 services: db, redis, backend, frontend
 ├── docker/
 │   ├── Dockerfile.backend          # Multi-stage: build (tsc) + production
