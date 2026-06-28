@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Param, Body, Query, UseGuards, Request, ParseIntPipe, DefaultValuePipe } from '@nestjs/common';
+import { Controller, Get, Post, Put, Patch, Delete, Param, Body, Query, UseGuards, Request, ParseIntPipe, DefaultValuePipe } from '@nestjs/common';
 import { TenantCustomersService, CreateCustomerDto, UpdateCustomerDto } from './tenant-customers.service';
 import { TenantJwtGuard } from '../auth/guards/tenant-jwt.guard';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
@@ -36,5 +36,20 @@ export class TenantCustomersController {
     @Body() dto: UpdateCustomerDto,
   ) {
     return this.svc.update(req.user, id, dto);
+  }
+
+  @Patch(':id/activate')
+  activate(@Request() req: { user: TenantJwtPayload }, @Param('id') id: string) {
+    return this.svc.setActive(req.user, id, true);
+  }
+
+  @Patch(':id/deactivate')
+  deactivate(@Request() req: { user: TenantJwtPayload }, @Param('id') id: string) {
+    return this.svc.setActive(req.user, id, false);
+  }
+
+  @Delete(':id')
+  delete(@Request() req: { user: TenantJwtPayload }, @Param('id') id: string) {
+    return this.svc.softDelete(req.user, id);
   }
 }

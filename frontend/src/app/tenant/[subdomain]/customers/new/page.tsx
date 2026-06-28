@@ -112,13 +112,8 @@ export default function NewCustomerPage() {
   }
 
   if (!canAdd) {
-    return (
-      <div className="p-6">
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
-          You do not have permission to add customers.
-        </div>
-      </div>
-    );
+    router.replace(`/${subdomain}/customers`);
+    return null;
   }
 
   return (

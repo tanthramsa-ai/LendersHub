@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import type { PoolClient } from 'pg';
@@ -89,12 +89,13 @@ export class TenantNotificationsService {
 
   async markRead(user: TenantJwtPayload, notificationId: string): Promise<{ id: string }> {
     return this.withSchema(user.schemaName, async (client) => {
-      await client.query(
+      const res = await client.query(
         `UPDATE notifications SET is_read = TRUE, read_at = NOW()
-         WHERE id = $1 AND user_id = $2`,
+         WHERE id = $1 AND user_id = $2 RETURNING id`,
         [notificationId, user.sub],
       );
-      return { id: notificationId };
+      if (!res.rows[0]) throw new NotFoundException('Notification not found');
+      return { id: res.rows[0].id };
     });
   }
 

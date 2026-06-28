@@ -1,6 +1,7 @@
 import { Injectable, ConflictException, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
+import { sanitizeStrings } from '../../common/utils/sanitize';
 
 export interface CreateCustomerDto {
   firstName: string;
@@ -64,6 +65,9 @@ export class TenantCustomersService {
   }
 
   async list(user: TenantJwtPayload, page: number, limit: number, search?: string, branchId?: string) {
+    const safePage = Math.max(1, Math.floor(Number(page) || 1));
+    const safeLimit = Math.min(Math.max(1, Math.floor(Number(limit) || 20)), 200);
+    page = safePage; limit = safeLimit;
     return this.withSchema(user.schemaName, async (client) => {
       const offset = (page - 1) * limit;
       const conditions: string[] = [];
@@ -168,6 +172,9 @@ export class TenantCustomersService {
 
   async create(user: TenantJwtPayload, dto: CreateCustomerDto) {
     if (user.role === 'VIEWER') throw new ForbiddenException('Customers cannot add customers');
+    dto = sanitizeStrings(dto);
+    if (!dto.firstName?.trim()) throw new BadRequestException('First name is required');
+    if (!dto.phone?.trim()) throw new BadRequestException('Phone number is required');
     if (!dto.address?.trim()) throw new BadRequestException('Address is required');
     if (!dto.locality?.trim()) throw new BadRequestException('Locality is required');
     if (!dto.altContact?.trim()) throw new BadRequestException('Alternate contact number is required');
@@ -209,6 +216,39 @@ export class TenantCustomersService {
         firstName: r.first_name, lastName: r.last_name,
         email: r.email, phone: r.phone,
       };
+    });
+  }
+
+  async setActive(user: TenantJwtPayload, id: string, isActive: boolean) {
+    if (user.role === 'VIEWER') throw new ForbiddenException('Viewers cannot modify customers');
+    return this.withSchema(user.schemaName, async (client) => {
+      const res = await client.query(
+        `UPDATE customers SET is_active = $1, updated_at = NOW() WHERE id = $2 RETURNING id, is_active`,
+        [isActive, id],
+      );
+      if (!res.rows[0]) throw new NotFoundException('Customer not found');
+      return { id: res.rows[0].id, isActive: res.rows[0].is_active };
+    });
+  }
+
+  async softDelete(user: TenantJwtPayload, id: string) {
+    if (!['OWNER', 'MANAGER', 'ADMIN'].includes(user.role)) {
+      throw new ForbiddenException('Only Owner, Manager or Admin can delete customers');
+    }
+    return this.withSchema(user.schemaName, async (client) => {
+      const loanRes = await client.query(
+        `SELECT COUNT(*) AS n FROM loans WHERE customer_id = $1 AND status IN ('DISBURSED','APPROVED') AND deleted_at IS NULL`,
+        [id],
+      );
+      if (parseInt(loanRes.rows[0].n) > 0) {
+        throw new BadRequestException('Cannot delete customer with active loans. Close all loans first.');
+      }
+      const res = await client.query(
+        `UPDATE customers SET is_active = FALSE, updated_at = NOW() WHERE id = $1 RETURNING id`,
+        [id],
+      );
+      if (!res.rows[0]) throw new NotFoundException('Customer not found');
+      return { id: res.rows[0].id, deleted: true };
     });
   }
 

@@ -4,9 +4,9 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
-  getCustomer, updateCustomer, getBranches,
+  getCustomer, updateCustomer, getBranches, activateCustomer, deactivateCustomer, deleteCustomer,
   CustomerDetail, TenantBranch, UpdateCustomerPayload,
-  getTenantSession, CUSTOMER_ROLES,
+  getTenantSession, CUSTOMER_ROLES, USER_ADMIN_ROLES,
 } from '@/services/tenant-api';
 
 const STATES = [
@@ -40,6 +40,7 @@ export default function CustomerDetailPage() {
 
   const session = getTenantSession();
   const canEdit = CUSTOMER_ROLES.includes(session?.user.role ?? 'VIEWER');
+  const canAdmin = USER_ADMIN_ROLES.includes(session?.user.role ?? 'VIEWER');
 
   const [customer, setCustomer] = useState<CustomerDetail | null>(null);
   const [branches, setBranches] = useState<TenantBranch[]>([]);
@@ -48,6 +49,9 @@ export default function CustomerDetailPage() {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [toggling, setToggling] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const [form, setForm] = useState({
     firstName: '', lastName: '', phone: '', email: '',
@@ -132,6 +136,29 @@ export default function CustomerDetailPage() {
       setSaveError((err as Error).message);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function toggleActive() {
+    if (!customer) return;
+    setToggling(true);
+    try {
+      const fn = customer.isActive ? deactivateCustomer : activateCustomer;
+      const res = await fn(id);
+      setCustomer({ ...customer, isActive: res.isActive });
+    } catch {}
+    setToggling(false);
+  }
+
+  async function handleDelete() {
+    setDeleting(true);
+    try {
+      await deleteCustomer(id);
+      router.replace(`/${subdomain}/customers`);
+    } catch (err) {
+      alert((err as Error).message);
+      setDeleting(false);
+      setConfirmDelete(false);
     }
   }
 
@@ -262,14 +289,47 @@ export default function CustomerDetailPage() {
           </div>
           <p className="text-sm text-gray-500 mt-0.5">Customer since {fmtDate(customer.createdAt)}</p>
         </div>
-        {canEdit && (
-          <button
-            onClick={() => setEditing(true)}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 transition-colors"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
-            Edit
-          </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          {canEdit && (
+            <button
+              onClick={() => setEditing(true)}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 transition-colors"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+              Edit
+            </button>
+          )}
+          {canAdmin && (
+            <button
+              onClick={toggleActive}
+              disabled={toggling}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors disabled:opacity-50 ${customer.isActive ? 'bg-yellow-50 text-yellow-700 hover:bg-yellow-100 border border-yellow-200' : 'bg-green-50 text-green-700 hover:bg-green-100 border border-green-200'}`}
+            >
+              {toggling ? '…' : customer.isActive ? 'Deactivate' : 'Activate'}
+            </button>
+          )}
+          {canAdmin && (
+            <button
+              onClick={() => setConfirmDelete(true)}
+              className="px-4 py-2 rounded-lg text-sm font-semibold bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 transition-colors"
+            >
+              Delete
+            </button>
+          )}
+        </div>
+        {confirmDelete && (
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-sm w-full space-y-4">
+              <h2 className="text-lg font-bold text-gray-900">Delete Customer?</h2>
+              <p className="text-sm text-gray-600">This will deactivate the customer record. Customers with active loans cannot be deleted.</p>
+              <div className="flex gap-3">
+                <button onClick={() => setConfirmDelete(false)} className="flex-1 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
+                <button onClick={handleDelete} disabled={deleting} className="flex-1 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg disabled:opacity-50">
+                  {deleting ? 'Deleting…' : 'Confirm Delete'}
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </div>
 

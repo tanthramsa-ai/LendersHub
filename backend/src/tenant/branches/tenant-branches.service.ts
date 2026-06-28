@@ -1,4 +1,4 @@
-import { Injectable, ConflictException, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 
@@ -59,7 +59,10 @@ export class TenantBranchesService {
   }
 
   async create(user: TenantJwtPayload, dto: CreateBranchDto) {
-    if (user.role !== 'ADMIN') throw new ForbiddenException('Only admins can manage branches');
+    if (!['OWNER', 'ADMIN'].includes(user.role)) throw new ForbiddenException('Only Owner or Admin can manage branches');
+
+    if (!dto.name?.trim()) throw new BadRequestException('Branch name is required');
+    if (!dto.code) throw new BadRequestException('Branch code is required');
 
     return this.withSchema(user.schemaName, async (client) => {
       const existing = await client.query(`SELECT id FROM branches WHERE UPPER(code) = UPPER($1)`, [dto.code]);
@@ -97,7 +100,7 @@ export class TenantBranchesService {
   }
 
   async update(user: TenantJwtPayload, id: string, dto: UpdateBranchDto) {
-    if (user.role !== 'ADMIN') throw new ForbiddenException('Only admins can manage branches');
+    if (!['OWNER', 'ADMIN'].includes(user.role)) throw new ForbiddenException('Only Owner or Admin can manage branches');
 
     return this.withSchema(user.schemaName, async (client) => {
       const res = await client.query(`

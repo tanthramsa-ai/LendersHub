@@ -44,6 +44,7 @@ export class TenantUsersService {
   }
 
   async list(user: TenantJwtPayload, page: number, limit: number, search?: string) {
+    this.assertManager(user);
     return this.withSchema(user.schemaName, async (client) => {
       const offset = (page - 1) * limit;
       const sp = search ? `%${search}%` : null;
@@ -181,7 +182,7 @@ export class TenantUsersService {
 
   async create(user: TenantJwtPayload, dto: CreateUserDto) {
     this.assertManager(user);
-    if (!VALID_ROLES.includes(dto.role)) throw new ForbiddenException('Invalid role');
+    if (!VALID_ROLES.includes(dto.role)) throw new BadRequestException('Invalid role');
     if (!dto.phone?.trim()) throw new BadRequestException('Phone number is required');
 
     const hashed = await bcrypt.hash(dto.password, 10);
@@ -209,7 +210,7 @@ export class TenantUsersService {
 
   async update(user: TenantJwtPayload, id: string, dto: UpdateUserDto) {
     this.assertManager(user);
-    if (dto.role && !VALID_ROLES.includes(dto.role)) throw new ForbiddenException('Invalid role');
+    if (dto.role && !VALID_ROLES.includes(dto.role)) throw new BadRequestException('Invalid role');
 
     return this.withSchema(user.schemaName, async (client) => {
       const existing = await client.query(`SELECT id FROM users WHERE id = $1`, [id]);

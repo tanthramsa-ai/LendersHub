@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { TenantNotificationsService } from '../notifications/tenant-notifications.service';
+import { safePagination } from '../../common/utils/pagination';
 
 export interface CreateLoanDto {
   customerId: string;
@@ -369,6 +370,7 @@ export class TenantLoansService {
   async list(user: TenantJwtPayload, page: number, limit: number, opts: {
     status?: string; search?: string; branchId?: string; loanTypeId?: string; officerId?: string;
   } = {}) {
+    ({ page, limit } = safePagination(page, limit));
     return this.withSchema(user.schemaName, async (client) => {
       const offset = (page - 1) * limit;
 
@@ -490,10 +492,11 @@ export class TenantLoansService {
   }
 
   async create(user: TenantJwtPayload, dto: CreateLoanDto) {
-    if (user.role === 'VIEWER') throw new BadRequestException('You do not have permission to create loans');
+    if (!['ADMIN', 'LOAN_OFFICER'].includes(user.role)) throw new ForbiddenException('Only Admins and Loan Officers can create loans');
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.interestRate < 0 || dto.interestRate > 100) throw new BadRequestException('Invalid interest rate');
     if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
+    if (dto.firstDueDate && !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
 
     return this.withSchema(user.schemaName, async (client) => {
       // Validate customer
@@ -693,10 +696,12 @@ export class TenantLoansService {
   }
 
   async createWeeklyLoan(user: TenantJwtPayload, dto: CreateWeeklyLoanDto) {
-    if (user.role === 'VIEWER') throw new BadRequestException('You do not have permission to create loans');
+    if (!['ADMIN', 'LOAN_OFFICER'].includes(user.role)) throw new ForbiddenException('Only Admins and Loan Officers can create loans');
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.interestRate < 0 || dto.interestRate > 200) throw new BadRequestException('Invalid interest rate');
     if (dto.termWeeks < 1 || dto.termWeeks > 520) throw new BadRequestException('Term must be 1–520 weeks');
+    if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
+    if (!['FLAT', 'REDUCING'].includes(dto.calculationType)) throw new BadRequestException('calculationType must be FLAT or REDUCING');
 
     return this.withSchema(user.schemaName, async (client) => {
       const custRes = await client.query(`SELECT id, first_name, last_name FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
@@ -862,10 +867,13 @@ export class TenantLoansService {
   }
 
   async createDailyLoan(user: TenantJwtPayload, dto: CreateDailyLoanDto) {
-    if (user.role === 'VIEWER') throw new BadRequestException('You do not have permission to create loans');
+    if (!['ADMIN', 'LOAN_OFFICER'].includes(user.role)) throw new ForbiddenException('Only Admins and Loan Officers can create loans');
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.interestRate < 0 || dto.interestRate > 200) throw new BadRequestException('Invalid interest rate');
     if (dto.termDays < 1 || dto.termDays > 3650) throw new BadRequestException('Term must be 1–3650 days');
+    if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
+    if (!['FLAT', 'REDUCING'].includes(dto.calculationType)) throw new BadRequestException('calculationType must be FLAT or REDUCING');
+    if (!['DAILY_NO_SUNDAY', 'DAILY_WITH_SUNDAY'].includes(dto.cycleType)) throw new BadRequestException('cycleType must be DAILY_NO_SUNDAY or DAILY_WITH_SUNDAY');
 
     return this.withSchema(user.schemaName, async (client) => {
       const custRes = await client.query(`SELECT id, first_name, last_name FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
@@ -1019,11 +1027,12 @@ export class TenantLoansService {
   }
 
   async createMonthlyLoan(user: TenantJwtPayload, dto: CreateMonthlyLoanDto) {
-    if (user.role === 'VIEWER') throw new BadRequestException('You do not have permission to create loans');
+    if (!['ADMIN', 'LOAN_OFFICER'].includes(user.role)) throw new ForbiddenException('Only Admins and Loan Officers can create loans');
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
     if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
     if (!dto.branchId) throw new BadRequestException('Branch is required for monthly loans');
+    if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
 
     return this.withSchema(user.schemaName, async (client) => {
       const custRes = await client.query(`SELECT id FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
@@ -1177,7 +1186,7 @@ export class TenantLoansService {
   }
 
   async createAgentRiskLoan(user: TenantJwtPayload, dto: CreateAgentRiskLoanDto) {
-    if (user.role === 'VIEWER') throw new BadRequestException('You do not have permission to create loans');
+    if (!['ADMIN', 'LOAN_OFFICER'].includes(user.role)) throw new ForbiddenException('Only Admins and Loan Officers can create loans');
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
     if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
@@ -1323,7 +1332,7 @@ export class TenantLoansService {
   }
 
   async createTermLoan(user: TenantJwtPayload, dto: CreateTermLoanDto) {
-    if (user.role === 'VIEWER') throw new BadRequestException('You do not have permission to create loans');
+    if (!['ADMIN', 'LOAN_OFFICER'].includes(user.role)) throw new ForbiddenException('Only Admins and Loan Officers can create loans');
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.interestRate < 0 || dto.interestRate > 100) throw new BadRequestException('Invalid interest rate');
     if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
@@ -1395,7 +1404,43 @@ export class TenantLoansService {
     });
   }
 
+  async deleteLoan(user: TenantJwtPayload, loanId: string) {
+    if (!['OWNER', 'MANAGER', 'ADMIN'].includes(user.role)) {
+      throw new ForbiddenException('Only Owner, Manager or Admin can delete a loan');
+    }
+    return this.withSchema(user.schemaName, async (client) => {
+      const res = await client.query(
+        `SELECT id, status FROM loans WHERE id = $1 AND deleted_at IS NULL`,
+        [loanId],
+      );
+      if (!res.rows[0]) throw new NotFoundException('Loan not found');
+      if (res.rows[0].status === 'DISBURSED') {
+        throw new BadRequestException('Cannot delete an active (DISBURSED) loan. Close it first.');
+      }
+      await client.query(
+        `UPDATE loans SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1`,
+        [loanId],
+      );
+      return { id: loanId, deleted: true };
+    });
+  }
+
   async recordPayment(user: TenantJwtPayload, loanId: string, dto: RecordPaymentDto) {
+    if (user.role === 'VIEWER') throw new ForbiddenException('Viewers cannot record payments');
+
+    const VALID_METHODS = ['CASH', 'UPI', 'BANK_TRANSFER', 'CHEQUE', 'NEFT', 'RTGS'];
+    if (!dto.amount || dto.amount <= 0) throw new BadRequestException('Payment amount must be greater than zero');
+    if (!dto.paymentMethod || !VALID_METHODS.includes(dto.paymentMethod)) {
+      throw new BadRequestException(`paymentMethod must be one of: ${VALID_METHODS.join(', ')}`);
+    }
+    if (dto.paymentDate && !/^\d{4}-\d{2}-\d{2}$/.test(dto.paymentDate)) {
+      throw new BadRequestException('paymentDate must be YYYY-MM-DD');
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    if (dto.paymentDate && dto.paymentDate > today) {
+      throw new BadRequestException('paymentDate cannot be in the future');
+    }
+
     return this.withSchema(user.schemaName, async (client) => {
       const loanRes = await client.query(`SELECT id, status FROM loans WHERE id = $1`, [loanId]);
       if (!loanRes.rows[0]) throw new NotFoundException('Loan not found');
@@ -1403,7 +1448,22 @@ export class TenantLoansService {
         throw new BadRequestException('Payment can only be recorded on active loans');
       }
 
-      const paymentDate = dto.paymentDate ?? new Date().toISOString().slice(0, 10);
+      // Validate installment exists, is not already paid, and amount doesn't exceed outstanding
+      if (dto.installmentId) {
+        const instRes = await client.query(
+          `SELECT id, status, total_amount, paid_amount FROM installments WHERE id = $1`,
+          [dto.installmentId],
+        );
+        if (!instRes.rows[0]) throw new BadRequestException('Installment not found');
+        const inst = instRes.rows[0];
+        if (inst.status === 'PAID') throw new BadRequestException('This installment has already been fully paid');
+        const outstanding = parseFloat(inst.total_amount) - parseFloat(inst.paid_amount);
+        if (dto.amount > outstanding + 0.01) {
+          throw new BadRequestException(`Amount exceeds outstanding balance of ₹${outstanding.toFixed(2)}`);
+        }
+      }
+
+      const paymentDate = dto.paymentDate ?? today;
 
       const payRes = await client.query(`
         INSERT INTO payments (loan_id, installment_id, amount, payment_method, reference_number, collected_by, payment_date)
@@ -1422,10 +1482,9 @@ export class TenantLoansService {
                 ELSE status
               END,
               paid_at = CASE WHEN paid_amount + $1 >= total_amount THEN NOW() ELSE paid_at END,
-              updated_at = NOW()  -- only if you have updated_at on installments
+              updated_at = NOW()
           WHERE id = $2
         `, [dto.amount, dto.installmentId]).catch(() => {
-          // installments table may not have updated_at — retry without it
           return client.query(`
             UPDATE installments
             SET paid_amount = paid_amount + $1,

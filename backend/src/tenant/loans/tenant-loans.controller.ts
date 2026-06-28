@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, Request, ParseIntPipe, DefaultValuePipe } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, Request, ParseIntPipe, DefaultValuePipe } from '@nestjs/common';
 import { TenantLoansService, CreateLoanDto, CreateWeeklyLoanDto, CreateDailyLoanDto, CreateMonthlyLoanDto, CreateAgentRiskLoanDto, CreateTermLoanDto, RecordPaymentDto } from './tenant-loans.service';
 import { TenantJwtGuard } from '../auth/guards/tenant-jwt.guard';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
@@ -161,6 +161,11 @@ export class TenantLoansController {
   @Patch(':id/close')
   closeLoan(@Request() req: { user: TenantJwtPayload }, @Param('id') id: string) {
     return this.svc.closeLoan(req.user, id);
+  }
+
+  @Delete(':id')
+  deleteLoan(@Request() req: { user: TenantJwtPayload }, @Param('id') id: string) {
+    return this.svc.deleteLoan(req.user, id);
   }
 
   @Post(':id/payments')

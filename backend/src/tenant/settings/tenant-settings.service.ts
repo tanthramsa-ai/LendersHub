@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 
@@ -33,7 +33,12 @@ export class TenantSettingsService {
     }
   }
 
+  private assertAdmin(user: TenantJwtPayload) {
+    if (!['OWNER', 'ADMIN'].includes(user.role)) throw new ForbiddenException('Only admins can access settings');
+  }
+
   async getSmsConfig(user: TenantJwtPayload) {
+    this.assertAdmin(user);
     return this.withSchema(user.schemaName, async (client) => {
       const res = await client.query<{ key: string; value: string }>(
         `SELECT key, value FROM settings WHERE key IN ('sms_provider','sms_api_key','sms_sender_id')`,
@@ -49,6 +54,7 @@ export class TenantSettingsService {
   }
 
   async updateSmsConfig(user: TenantJwtPayload, dto: SmsConfigDto) {
+    this.assertAdmin(user);
     return this.withSchema(user.schemaName, async (client) => {
       const upsert = async (key: string, value: string | undefined) => {
         if (value === undefined) return;
@@ -73,6 +79,7 @@ export class TenantSettingsService {
   }
 
   async getWhatsAppConfig(user: TenantJwtPayload) {
+    this.assertAdmin(user);
     return this.withSchema(user.schemaName, async (client) => {
       const res = await client.query<{ key: string; value: string }>(
         `SELECT key, value FROM settings WHERE key LIKE 'whatsapp_%'`,
@@ -98,6 +105,7 @@ export class TenantSettingsService {
   }
 
   async updateWhatsAppConfig(user: TenantJwtPayload, dto: WhatsAppConfigDto) {
+    this.assertAdmin(user);
     return this.withSchema(user.schemaName, async (client) => {
       const upsert = async (key: string, value: string | undefined) => {
         if (value === undefined) return;

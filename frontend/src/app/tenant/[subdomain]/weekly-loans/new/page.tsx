@@ -7,7 +7,7 @@ import {
   getCustomers, createCustomer, getBranches, getLoanTypes,
   previewWeeklySchedule, createWeeklyLoan,
   Customer, TenantBranch, LoanType, WeeklySchedulePreview,
-  getTenantSession, LOAN_ROLES,
+  getTenantSession, LOAN_CREATE_ROLES,
 } from '@/services/tenant-api';
 
 const inputCls = 'w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-gray-900';
@@ -27,8 +27,9 @@ export default function NewWeeklyLoanPage() {
   const subdomain = params.subdomain;
 
   const session = getTenantSession();
-  if (!LOAN_ROLES.includes(session?.user.role ?? 'VIEWER')) {
-    return <div className="p-6 text-red-600 text-sm">You do not have permission to create loans.</div>;
+  if (!LOAN_CREATE_ROLES.includes(session?.user.role ?? 'VIEWER')) {
+    router.replace(`/${subdomain}/dashboard`);
+    return null;
   }
 
   const [step, setStep] = useState<Step>(1);

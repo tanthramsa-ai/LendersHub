@@ -6,6 +6,7 @@ import Link from 'next/link';
 import {
   createTermLoan, previewTermLoanSchedule, getCustomers, getBranches, getLoanTypes,
   Customer, TenantBranch, LoanType, TermSchedulePreview,
+  getTenantSession, LOAN_CREATE_ROLES,
 } from '@/services/tenant-api';
 
 const BRAND = '#0F4C81';
@@ -25,6 +26,12 @@ export default function NewTermLoanPage() {
   const router = useRouter();
   const params = useParams<{ subdomain: string }>();
   const subdomain = params.subdomain;
+
+  const session = getTenantSession();
+  if (!LOAN_CREATE_ROLES.includes(session?.user.role ?? 'VIEWER')) {
+    router.replace(`/${subdomain}/dashboard`);
+    return null;
+  }
 
   // Step 1: Customer
   const [step, setStep] = useState(1);

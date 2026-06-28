@@ -39,8 +39,11 @@ export const MANAGER_ROLES: UserRole[] = ['OWNER', 'MANAGER', 'ADMIN'];
 /** Only Owner and Admin can add/edit/deactivate users (Manager cannot) */
 export const USER_ADMIN_ROLES: UserRole[] = ['OWNER', 'ADMIN'];
 
-/** Roles that can create loans (all except VIEWER) */
+/** Roles that can VIEW loan pages (includes COLLECTOR who can see but not create) */
 export const LOAN_ROLES: UserRole[] = ['OWNER', 'MANAGER', 'ADMIN', 'LOAN_OFFICER', 'COLLECTOR'];
+
+/** Roles that can CREATE loans — COLLECTOR excluded (backend enforces this too) */
+export const LOAN_CREATE_ROLES: UserRole[] = ['OWNER', 'MANAGER', 'ADMIN', 'LOAN_OFFICER'];
 
 /** Roles that can record collection payments (all except VIEWER) */
 export const COLLECTION_ROLES: UserRole[] = ['OWNER', 'MANAGER', 'ADMIN', 'LOAN_OFFICER', 'COLLECTOR'];
@@ -288,6 +291,22 @@ export interface UpdateCustomerPayload {
 
 export function updateCustomer(id: string, dto: UpdateCustomerPayload) {
   return tenantFetch(`/api/v1/tenant/customers/${id}`, { method: 'PUT', body: JSON.stringify(dto) });
+}
+
+export function activateCustomer(id: string) {
+  return tenantFetch<{ id: string; isActive: boolean }>(`/api/v1/tenant/customers/${id}/activate`, { method: 'PATCH' });
+}
+
+export function deactivateCustomer(id: string) {
+  return tenantFetch<{ id: string; isActive: boolean }>(`/api/v1/tenant/customers/${id}/deactivate`, { method: 'PATCH' });
+}
+
+export function deleteCustomer(id: string) {
+  return tenantFetch<{ id: string; deleted: boolean }>(`/api/v1/tenant/customers/${id}`, { method: 'DELETE' });
+}
+
+export function deleteLoan(id: string) {
+  return tenantFetch<{ id: string; deleted: boolean }>(`/api/v1/tenant/loans/${id}`, { method: 'DELETE' });
 }
 
 // ── Loans ────────────────────────────────────────────────────────────────────
