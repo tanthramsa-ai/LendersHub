@@ -7,7 +7,16 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  app.enableCors();
+  app.enableCors({
+    origin: [
+      'https://app.lendershub.in',
+      'https://lenders-hub.vercel.app',
+      // Vercel preview/auto-suffixed deployments (e.g. lenders-hub-eight.vercel.app)
+      /^https:\/\/lenders-hub[a-z0-9-]*\.vercel\.app$/,
+      'http://localhost:3000',
+    ],
+    credentials: true,
+  });
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }));
   app.useGlobalFilters(new HttpExceptionFilter());
 

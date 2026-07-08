@@ -15,7 +15,7 @@ import 'dotenv/config';
 import { Pool } from 'pg';
 import * as bcrypt from 'bcrypt';
 
-const EMAIL = process.env.SUPER_ADMIN_EMAIL ?? 'admin@lendershub.com';
+const EMAIL = process.env.SUPER_ADMIN_EMAIL ?? 'admin@lendershub.in';
 const PASSWORD = process.env.SUPER_ADMIN_PASSWORD ?? 'Admin@LH2024!';
 
 async function seed() {
