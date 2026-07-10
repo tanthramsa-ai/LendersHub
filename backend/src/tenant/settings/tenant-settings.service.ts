@@ -1,6 +1,7 @@
 import { Injectable, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
+import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
 
 export interface SmsConfigDto {
   provider: 'fast2sms' | 'msg91' | 'console';
@@ -21,7 +22,10 @@ export interface WhatsAppConfigDto {
 
 @Injectable()
 export class TenantSettingsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private activity: TenantActivityLogService,
+  ) {}
 
   private async withSchema<T>(schemaName: string, fn: (client: import('pg').PoolClient) => Promise<T>): Promise<T> {
     const client = await this.prisma.pool.connect();
@@ -73,6 +77,14 @@ export class TenantSettingsService {
       if (dto.senderId !== undefined) {
         await upsert('sms_sender_id', dto.senderId);
       }
+
+      // Metadata deliberately excludes apiKey — never persist secret values in the activity log.
+      await this.activity.record(client, user, {
+        action: 'settings.sms_updated',
+        entityType: 'settings',
+        entityLabel: 'SMS configuration',
+        metadata: { provider: dto.provider },
+      });
 
       return { message: 'SMS configuration updated' };
     });
@@ -126,6 +138,14 @@ export class TenantSettingsService {
       if (isNew(dto.accessToken)) await upsert('whatsapp_access_token', dto.accessToken);
       if (dto.apiUrl !== undefined) await upsert('whatsapp_api_url', dto.apiUrl);
       if (isNew(dto.apiKey)) await upsert('whatsapp_api_key', dto.apiKey);
+
+      // Metadata deliberately excludes tokens/keys — never persist secret values in the activity log.
+      await this.activity.record(client, user, {
+        action: 'settings.whatsapp_updated',
+        entityType: 'settings',
+        entityLabel: 'WhatsApp configuration',
+        metadata: { provider: dto.provider },
+      });
 
       return { message: 'WhatsApp configuration updated' };
     });

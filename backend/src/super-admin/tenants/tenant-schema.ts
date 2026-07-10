@@ -270,5 +270,20 @@ export function tenantSchemaDDL(s: string): string[] {
      )`,
     `CREATE INDEX IF NOT EXISTS idx_${s}_ft_date  ON ${q}."fund_transactions" (transaction_date DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_${s}_ft_type  ON ${q}."fund_transactions" (type, transaction_date DESC)`,
+
+    // ── activity_log (per-tenant activity trail: loans, customers, users, etc.) ─
+    `CREATE TABLE IF NOT EXISTS ${q}."activity_log" (
+       id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+       action      TEXT        NOT NULL,
+       entity_type TEXT        NOT NULL,
+       entity_id   UUID,
+       entity_label TEXT,
+       actor_id    UUID,
+       actor_name  TEXT        NOT NULL,
+       actor_role  TEXT        NOT NULL,
+       metadata    JSONB,
+       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_${s}_activity_log_created_at ON ${q}."activity_log" (created_at DESC)`,
   ];
 }

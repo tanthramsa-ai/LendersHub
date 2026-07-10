@@ -26,6 +26,8 @@ import { TenantNotificationsService } from './notifications/tenant-notifications
 import { TenantNotificationsController } from './notifications/tenant-notifications.controller';
 import { TenantLedgerService } from './ledger/tenant-ledger.service';
 import { TenantLedgerController } from './ledger/tenant-ledger.controller';
+import { TenantActivityLogService } from './activity-log/tenant-activity-log.service';
+import { TenantActivityLogController } from './activity-log/tenant-activity-log.controller';
 
 @Module({
   imports: [
@@ -46,6 +48,7 @@ import { TenantLedgerController } from './ledger/tenant-ledger.controller';
     TenantAccountsService,
     TenantNotificationsService,
     TenantLedgerService,
+    TenantActivityLogService,
   ],
   controllers: [
     TenantAuthController,
@@ -60,6 +63,7 @@ import { TenantLedgerController } from './ledger/tenant-ledger.controller';
     TenantAccountsController,
     TenantNotificationsController,
     TenantLedgerController,
+    TenantActivityLogController,
   ],
 })
 export class TenantModule {}

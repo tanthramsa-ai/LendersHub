@@ -443,7 +443,12 @@ export class TenantService {
     const dir = filters.sortDir ?? 'desc';
 
     const where: Prisma.TenantWhereInput = {};
-    if (filters.status) where.status = filters.status as Prisma.EnumTenantStatusFilter;
+    if (filters.status) {
+      where.status = filters.status as Prisma.EnumTenantStatusFilter;
+    } else {
+      // Deleted tenants are hidden by default; explicitly filter status=DELETED to see them.
+      where.status = { not: 'DELETED' };
+    }
     if (filters.plan) where.plan = filters.plan as Prisma.EnumSubscriptionPlanNullableFilter;
     if (filters.subscriptionStatus) where.subscriptionStatus = filters.subscriptionStatus as Prisma.EnumSubscriptionStatusNullableFilter;
     if (filters.search) {
@@ -469,6 +474,78 @@ export class TenantService {
       }),
     ]);
     return { total, page, limit, tenants };
+  }
+
+  /** Locks out an ACTIVE tenant — login is blocked (tenant-auth requires status === 'ACTIVE'). Reversible via reactivate(). */
+  async suspend(id: string, actor: AuditActor, ipAddress: string) {
+    const tenant = await this.prisma.tenant.findUnique({ where: { id } });
+    if (!tenant) throw new NotFoundException('Tenant not found');
+    if (tenant.status === 'DELETED') throw new BadRequestException('Tenant has been deleted');
+    if (tenant.status === 'SUSPENDED') throw new ConflictException('Tenant is already suspended');
+
+    const updated = await this.prisma.tenant.update({ where: { id }, data: { status: 'SUSPENDED' } });
+
+    await this.auditLog.record({
+      actor, ipAddress,
+      action: 'tenant.suspended',
+      targetType: 'tenant',
+      targetId: id,
+      targetLabel: tenant.companyName,
+      metadata: { previousStatus: tenant.status },
+    });
+
+    return updated;
+  }
+
+  /** Restores a SUSPENDED tenant to ACTIVE, re-enabling login. */
+  async reactivate(id: string, actor: AuditActor, ipAddress: string) {
+    const tenant = await this.prisma.tenant.findUnique({ where: { id } });
+    if (!tenant) throw new NotFoundException('Tenant not found');
+    if (tenant.status === 'DELETED') throw new BadRequestException('Tenant has been deleted');
+    if (tenant.status !== 'SUSPENDED') throw new ConflictException('Only a suspended tenant can be reactivated');
+
+    const updated = await this.prisma.tenant.update({ where: { id }, data: { status: 'ACTIVE' } });
+
+    await this.auditLog.record({
+      actor, ipAddress,
+      action: 'tenant.reactivated',
+      targetType: 'tenant',
+      targetId: id,
+      targetLabel: tenant.companyName,
+    });
+
+    return updated;
+  }
+
+  /**
+   * Soft-delete only — the tenant's schema and data are NOT dropped. Sets
+   * status to DELETED (blocks login, same as SUSPENDED) and hides the tenant
+   * from the default list. Requires the caller to type the exact subdomain
+   * as confirmation (checked here, not just in the UI) since this is
+   * effectively irreversible from the product surface — there is no
+   * "undelete" endpoint, matching how destructive actions should require
+   * explicit, hard-to-fat-finger confirmation.
+   */
+  async softDelete(id: string, confirmSubdomain: string, actor: AuditActor, ipAddress: string) {
+    const tenant = await this.prisma.tenant.findUnique({ where: { id } });
+    if (!tenant) throw new NotFoundException('Tenant not found');
+    if (tenant.status === 'DELETED') throw new ConflictException('Tenant is already deleted');
+    if (confirmSubdomain !== tenant.subdomain) {
+      throw new BadRequestException('Confirmation subdomain does not match');
+    }
+
+    const updated = await this.prisma.tenant.update({ where: { id }, data: { status: 'DELETED' } });
+
+    await this.auditLog.record({
+      actor, ipAddress,
+      action: 'tenant.deleted',
+      targetType: 'tenant',
+      targetId: id,
+      targetLabel: tenant.companyName,
+      metadata: { previousStatus: tenant.status, subdomain: tenant.subdomain },
+    });
+
+    return updated;
   }
 
   async findOne(id: string) {

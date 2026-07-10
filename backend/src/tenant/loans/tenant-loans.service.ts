@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, BadRequestException, ForbiddenException 
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { TenantNotificationsService } from '../notifications/tenant-notifications.service';
+import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
 import { safePagination } from '../../common/utils/pagination';
 
 export interface CreateLoanDto {
@@ -355,6 +356,7 @@ export class TenantLoansService {
   constructor(
     private prisma: PrismaService,
     private notifications: TenantNotificationsService,
+    private activity: TenantActivityLogService,
   ) {}
 
   private async withSchema<T>(schemaName: string, fn: (client: import('pg').PoolClient) => Promise<T>): Promise<T> {
@@ -540,6 +542,14 @@ export class TenantLoansService {
         monthlyEmi: installments[0]?.total,
       };
 
+      await this.activity.record(client, user, {
+        action: 'loan.created',
+        entityType: 'loan',
+        entityId: loan.id,
+        entityLabel: loan.loan_number,
+        metadata: { cycleType: 'MONTHLY', principal: result.principal, termMonths: result.termMonths },
+      });
+
       // Notify managers about new loan
       const mgrsRes = await client.query<{ id: string }>(
         `SELECT id FROM users WHERE role IN ('OWNER','MANAGER','ADMIN') AND is_active = TRUE`,
@@ -567,12 +577,12 @@ export class TenantLoansService {
 
     return this.withSchema(user.schemaName, async (client) => {
       const res = await client.query(
-        `SELECT id, status FROM loans WHERE id = $1 AND deleted_at IS NULL`,
+        `SELECT id, status, loan_number FROM loans WHERE id = $1 AND deleted_at IS NULL`,
         [loanId],
       );
       if (!res.rows[0]) throw new NotFoundException('Loan not found');
 
-      const { status } = res.rows[0];
+      const { status, loan_number: loanNumber } = res.rows[0];
       if (status === 'CLOSED') throw new BadRequestException('Loan is already closed');
       if (!['APPROVED', 'DISBURSED', 'ACTIVE'].includes(status)) {
         throw new BadRequestException(`Cannot close a loan in ${status} status`);
@@ -589,6 +599,14 @@ export class TenantLoansService {
          WHERE loan_id = $1 AND status IN ('PENDING','PARTIALLY_PAID','OVERDUE')`,
         [loanId],
       );
+
+      await this.activity.record(client, user, {
+        action: 'loan.closed',
+        entityType: 'loan',
+        entityId: loanId,
+        entityLabel: loanNumber,
+        metadata: { previousStatus: status },
+      });
 
       return { id: loanId, status: 'CLOSED', closedAt: new Date() };
     });
@@ -754,6 +772,14 @@ export class TenantLoansService {
           link: `/weekly-loans/${loan.id}`,
         });
       }
+
+      await this.activity.record(client, user, {
+        action: 'loan.created',
+        entityType: 'loan',
+        entityId: loan.id,
+        entityLabel: loanNumber,
+        metadata: { cycleType: 'WEEKLY', principal: dto.principal, termWeeks: dto.termWeeks },
+      });
 
       return {
         id: loan.id, loanNumber, principal: dto.principal,
@@ -926,6 +952,14 @@ export class TenantLoansService {
         });
       }
 
+      await this.activity.record(client, user, {
+        action: 'loan.created',
+        entityType: 'loan',
+        entityId: loan.id,
+        entityLabel: loanNumber,
+        metadata: { cycleType: dto.cycleType, principal: dto.principal, termDays: dto.termDays },
+      });
+
       return {
         id: loan.id, loanNumber, principal: dto.principal,
         emi, termDays: dto.termDays, installmentCount: schedule.length,
@@ -1087,6 +1121,14 @@ export class TenantLoansService {
         });
       }
 
+      await this.activity.record(client, user, {
+        action: 'loan.created',
+        entityType: 'loan',
+        entityId: loan.id,
+        entityLabel: loanNumber,
+        metadata: { cycleType: 'MONTHLY', principal: dto.principal, termMonths: dto.termMonths },
+      });
+
       return {
         id: loan.id, loanNumber, principal: dto.principal,
         monthlyInterest, termMonths: dto.termMonths,
@@ -1245,6 +1287,14 @@ export class TenantLoansService {
         });
       }
 
+      await this.activity.record(client, user, {
+        action: 'loan.created',
+        entityType: 'loan',
+        entityId: loan.id,
+        entityLabel: loanNumber,
+        metadata: { cycleType: 'AGENT_RISK', principal: dto.principal, termMonths: dto.termMonths },
+      });
+
       return {
         id: loan.id, loanNumber, principal: dto.principal,
         monthlyInterest, termMonths: dto.termMonths,
@@ -1396,6 +1446,14 @@ export class TenantLoansService {
         });
       }
 
+      await this.activity.record(client, user, {
+        action: 'loan.created',
+        entityType: 'loan',
+        entityId: loan.id,
+        entityLabel: loanNumber,
+        metadata: { cycleType: 'TERM_LOAN', principal: dto.principal, termMonths: dto.termMonths },
+      });
+
       return {
         id: loan.id, loanNumber, principal: dto.principal, emi,
         termMonths: dto.termMonths, installmentCount: schedule.length,
@@ -1410,7 +1468,7 @@ export class TenantLoansService {
     }
     return this.withSchema(user.schemaName, async (client) => {
       const res = await client.query(
-        `SELECT id, status FROM loans WHERE id = $1 AND deleted_at IS NULL`,
+        `SELECT id, status, loan_number FROM loans WHERE id = $1 AND deleted_at IS NULL`,
         [loanId],
       );
       if (!res.rows[0]) throw new NotFoundException('Loan not found');
@@ -1421,6 +1479,12 @@ export class TenantLoansService {
         `UPDATE loans SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1`,
         [loanId],
       );
+      await this.activity.record(client, user, {
+        action: 'loan.deleted',
+        entityType: 'loan',
+        entityId: loanId,
+        entityLabel: res.rows[0].loan_number,
+      });
       return { id: loanId, deleted: true };
     });
   }
@@ -1522,6 +1586,14 @@ export class TenantLoansService {
           link: `/loans/${loanId}`,
         });
       }
+
+      await this.activity.record(client, user, {
+        action: 'payment.recorded',
+        entityType: 'loan',
+        entityId: loanId,
+        entityLabel: loanDetail?.loan_number ?? loanId,
+        metadata: { amount: dto.amount, paymentMethod: dto.paymentMethod, installmentId: dto.installmentId ?? null },
+      });
 
       return { id: payRes.rows[0].id, amount: dto.amount, paymentDate };
     });

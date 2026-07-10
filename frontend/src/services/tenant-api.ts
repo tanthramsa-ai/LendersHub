@@ -1258,3 +1258,38 @@ export function addLedgerTransaction(dto: {
     method: 'POST', body: JSON.stringify(dto),
   });
 }
+
+// ── Activity Log (who did what inside this tenant) ─────────────────────────────
+
+export interface TenantActivityEntry {
+  id: string;
+  action: string;
+  entityType: string;
+  entityId: string | null;
+  entityLabel: string | null;
+  actorId: string | null;
+  actorName: string;
+  actorRole: string;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface TenantActivityPage {
+  total: number;
+  page: number;
+  limit: number;
+  data: TenantActivityEntry[];
+  availableActions: string[];
+}
+
+export function getTenantActivity(params: {
+  page?: number; limit?: number; action?: string; entityType?: string; search?: string;
+} = {}) {
+  const qs = new URLSearchParams();
+  if (params.page) qs.set('page', String(params.page));
+  if (params.limit) qs.set('limit', String(params.limit));
+  if (params.action) qs.set('action', params.action);
+  if (params.entityType) qs.set('entityType', params.entityType);
+  if (params.search) qs.set('search', params.search);
+  return tenantFetch<TenantActivityPage>(`/api/v1/tenant/activity-log?${qs.toString()}`);
+}

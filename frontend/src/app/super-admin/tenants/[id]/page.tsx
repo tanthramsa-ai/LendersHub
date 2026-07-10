@@ -10,6 +10,7 @@ const STATUS_STYLE: Record<string, string> = {
   PROVISIONING: 'bg-yellow-900 text-yellow-300 animate-pulse',
   SUSPENDED: 'bg-orange-900 text-orange-300',
   FAILED: 'bg-red-900 text-red-300',
+  DELETED: 'bg-gray-800 text-gray-500',
 };
 
 const SUB_STATUS_STYLE: Record<string, string> = {
@@ -133,6 +134,59 @@ function AddBranchModal({ tenantId, onClose, onSuccess }: { tenantId: string; on
   );
 }
 
+// ── Delete Tenant Modal ──────────────────────────────────────────────────────
+function DeleteTenantModal({
+  subdomain, onClose, onConfirm, loading, error,
+}: { subdomain: string; onClose: () => void; onConfirm: (confirmSubdomain: string) => void; loading: boolean; error: string }) {
+  const [typed, setTyped] = useState('');
+  const canDelete = typed === subdomain;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="bg-gray-900 border border-red-900 rounded-2xl shadow-2xl w-full max-w-md p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-bold text-white text-lg">Delete Tenant</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-white text-xl font-bold">✕</button>
+        </div>
+
+        <div className="bg-red-950 border border-red-800 rounded-xl px-4 py-3 mb-4">
+          <p className="text-red-300 text-sm font-medium">This locks the tenant out immediately.</p>
+          <p className="text-red-400/80 text-xs mt-1">
+            The tenant&apos;s data and schema are kept (nothing is dropped), but there is
+            no undo action in this UI — login will be blocked the same as a suspended tenant.
+          </p>
+        </div>
+
+        <p className="text-sm text-gray-400 mb-2">
+          Type <span className="font-mono text-white">{subdomain}</span> to confirm.
+        </p>
+        <input
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          placeholder={subdomain}
+          autoFocus
+          className="w-full bg-gray-800 border border-gray-600 rounded-xl px-3 py-2.5 text-sm text-white font-mono focus:outline-none focus:ring-2 focus:ring-red-500"
+        />
+
+        {error && <p className="text-sm text-red-400 mt-3">{error}</p>}
+
+        <div className="flex gap-3 mt-5">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-gray-300 bg-gray-800 hover:bg-gray-700">
+            Cancel
+          </button>
+          <button
+            onClick={() => onConfirm(typed)}
+            disabled={!canDelete || loading}
+            className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white bg-red-600 hover:bg-red-500 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {loading ? 'Deleting…' : 'Delete Tenant'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Branch Card ───────────────────────────────────────────────────────────────
 function BranchCard({ branch, tenantId, router }: { branch: Branch; tenantId: string; router: ReturnType<typeof useRouter> }) {
   return (
@@ -188,6 +242,9 @@ export default function TenantDetailPage() {
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [error, setError] = useState('');
   const [showAddBranch, setShowAddBranch] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [lifecycleLoading, setLifecycleLoading] = useState(false);
+  const [lifecycleError, setLifecycleError] = useState('');
 
   useEffect(() => {
     if (!sessionStore.getToken()) { router.replace('/super-admin/login'); return; }
@@ -207,6 +264,43 @@ export default function TenantDetailPage() {
 
   function refreshBranches() {
     tenantsApi.listBranches(id).then(setBranches);
+  }
+
+  async function handleSuspend() {
+    setLifecycleLoading(true); setLifecycleError('');
+    try {
+      const updated = await tenantsApi.suspend(id);
+      setTenant((t) => t && { ...t, status: updated.status });
+    } catch (e: unknown) {
+      setLifecycleError(e instanceof Error ? e.message : 'Failed to suspend tenant');
+    } finally {
+      setLifecycleLoading(false);
+    }
+  }
+
+  async function handleReactivate() {
+    setLifecycleLoading(true); setLifecycleError('');
+    try {
+      const updated = await tenantsApi.reactivate(id);
+      setTenant((t) => t && { ...t, status: updated.status });
+    } catch (e: unknown) {
+      setLifecycleError(e instanceof Error ? e.message : 'Failed to reactivate tenant');
+    } finally {
+      setLifecycleLoading(false);
+    }
+  }
+
+  async function handleDeleteConfirm(confirmSubdomain: string) {
+    setLifecycleLoading(true); setLifecycleError('');
+    try {
+      const updated = await tenantsApi.softDelete(id, confirmSubdomain);
+      setTenant((t) => t && { ...t, status: updated.status });
+      setShowDeleteModal(false);
+    } catch (e: unknown) {
+      setLifecycleError(e instanceof Error ? e.message : 'Failed to delete tenant');
+    } finally {
+      setLifecycleLoading(false);
+    }
   }
 
   if (loading) {
@@ -240,10 +334,39 @@ export default function TenantDetailPage() {
           <h1 className="font-bold text-white">{tenant.companyName}</h1>
           <p className="text-xs text-gray-500 font-mono">{tenant.subdomain}</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${STATUS_STYLE[tenant.status] ?? 'bg-gray-800 text-gray-300'}`}>
             {tenant.status}
           </span>
+
+          {tenant.status === 'ACTIVE' && (
+            <button
+              onClick={handleSuspend}
+              disabled={lifecycleLoading}
+              className="px-3 py-2 text-sm rounded-lg bg-orange-950 border border-orange-800 text-orange-300 hover:bg-orange-900 font-medium transition-colors disabled:opacity-50"
+            >
+              Suspend
+            </button>
+          )}
+          {tenant.status === 'SUSPENDED' && (
+            <button
+              onClick={handleReactivate}
+              disabled={lifecycleLoading}
+              className="px-3 py-2 text-sm rounded-lg bg-emerald-950 border border-emerald-800 text-emerald-300 hover:bg-emerald-900 font-medium transition-colors disabled:opacity-50"
+            >
+              Reactivate
+            </button>
+          )}
+          {tenant.status !== 'DELETED' && (
+            <button
+              onClick={() => setShowDeleteModal(true)}
+              disabled={lifecycleLoading}
+              className="px-3 py-2 text-sm rounded-lg bg-red-950 border border-red-800 text-red-300 hover:bg-red-900 font-medium transition-colors disabled:opacity-50"
+            >
+              Delete
+            </button>
+          )}
+
           <button
             onClick={() => router.push(`/super-admin/tenants/${id}/subscription`)}
             className="flex items-center gap-2 px-4 py-2 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors"
@@ -252,6 +375,19 @@ export default function TenantDetailPage() {
           </button>
         </div>
       </header>
+
+      {lifecycleError && (
+        <div className="max-w-5xl mx-auto px-6 pt-4">
+          <p className="text-sm text-red-400 bg-red-950 border border-red-800 rounded-lg px-4 py-3">{lifecycleError}</p>
+        </div>
+      )}
+      {tenant.status === 'DELETED' && (
+        <div className="max-w-5xl mx-auto px-6 pt-4">
+          <p className="text-sm text-gray-400 bg-gray-900 border border-gray-800 rounded-lg px-4 py-3">
+            This tenant has been deleted. Their data is retained but login is blocked.
+          </p>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="bg-gray-900 border-b border-gray-800 px-6">
@@ -414,6 +550,16 @@ export default function TenantDetailPage() {
           tenantId={id}
           onClose={() => setShowAddBranch(false)}
           onSuccess={() => { setShowAddBranch(false); refreshBranches(); setTab('branches'); }}
+        />
+      )}
+
+      {showDeleteModal && (
+        <DeleteTenantModal
+          subdomain={tenant.subdomain}
+          onClose={() => { setShowDeleteModal(false); setLifecycleError(''); }}
+          onConfirm={handleDeleteConfirm}
+          loading={lifecycleLoading}
+          error={lifecycleError}
         />
       )}
     </div>

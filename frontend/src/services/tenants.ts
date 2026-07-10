@@ -114,7 +114,7 @@ export interface Tenant {
   primaryColor: string | null;
   customDomain: string | null;
   features: Record<string, boolean> | null;
-  status: 'PROVISIONING' | 'ACTIVE' | 'SUSPENDED' | 'FAILED';
+  status: 'PROVISIONING' | 'ACTIVE' | 'SUSPENDED' | 'FAILED' | 'DELETED';
   schemaName: string | null;
   plan: 'STARTER' | 'PROFESSIONAL' | 'ENTERPRISE' | null;
   billingCycle: 'MONTHLY' | 'QUARTERLY' | 'ANNUALLY' | null;
@@ -232,6 +232,19 @@ export const tenantsApi = {
     authFetch<SubscriptionResult>(`/api/v1/super-admin/tenants/${id}/subscription`, {
       method: 'PUT',
       body: JSON.stringify(payload),
+    }),
+
+  // Lifecycle
+  suspend: (id: string) =>
+    authFetch<Tenant>(`/api/v1/super-admin/tenants/${id}/suspend`, { method: 'PATCH' }),
+
+  reactivate: (id: string) =>
+    authFetch<Tenant>(`/api/v1/super-admin/tenants/${id}/reactivate`, { method: 'PATCH' }),
+
+  softDelete: (id: string, confirmSubdomain: string) =>
+    authFetch<Tenant>(`/api/v1/super-admin/tenants/${id}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ confirmSubdomain }),
     }),
 
   // Branch API

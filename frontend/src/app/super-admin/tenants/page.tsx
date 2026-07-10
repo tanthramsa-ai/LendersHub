@@ -10,13 +10,16 @@ type SortDir = 'asc' | 'desc';
 
 // Combined display status derived from both status + subscriptionStatus
 function resolveDisplayStatus(t: Tenant): { label: string; cls: string } {
+  // A deleted/suspended tenant always shows its lifecycle state — a stale
+  // subscriptionStatus (e.g. TRIAL) must never mask that the account is locked out.
+  if (t.status === 'DELETED') return { label: 'Deleted', cls: 'bg-gray-800 text-gray-500 line-through' };
+  if (t.status === 'SUSPENDED') return { label: 'Suspended', cls: 'bg-red-900 text-red-300' };
   if (t.subscriptionStatus === 'TRIAL') return { label: 'Trial', cls: 'bg-blue-900 text-blue-300' };
   if (t.subscriptionStatus === 'PAST_DUE') return { label: 'Past Due', cls: 'bg-orange-900 text-orange-300' };
   if (t.subscriptionStatus === 'CANCELLED') return { label: 'Cancelled', cls: 'bg-gray-800 text-gray-400' };
   switch (t.status) {
     case 'ACTIVE': return { label: 'Active', cls: 'bg-emerald-900 text-emerald-300' };
     case 'PROVISIONING': return { label: 'Provisioning', cls: 'bg-yellow-900 text-yellow-300 animate-pulse' };
-    case 'SUSPENDED': return { label: 'Suspended', cls: 'bg-red-900 text-red-300' };
     case 'FAILED': return { label: 'Failed', cls: 'bg-red-900 text-red-300' };
     default: return { label: t.status, cls: 'bg-gray-800 text-gray-300' };
   }
@@ -42,6 +45,7 @@ const STATUS_FILTER_OPTIONS = [
   { label: 'Provisioning', value: 'status:PROVISIONING' },
   { label: 'Suspended', value: 'status:SUSPENDED' },
   { label: 'Failed', value: 'status:FAILED' },
+  { label: 'Deleted', value: 'status:DELETED' },
 ];
 
 function SortIcon({ field, current, dir }: { field: SortField; current: SortField; dir: SortDir }) {

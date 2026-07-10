@@ -2,6 +2,7 @@ import { Injectable, ConflictException, NotFoundException, ForbiddenException, B
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
+import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
 
 export interface CreateUserDto {
   email: string;
@@ -27,7 +28,10 @@ const USER_ADMIN_ROLES = ['OWNER', 'ADMIN'];
 
 @Injectable()
 export class TenantUsersService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private activity: TenantActivityLogService,
+  ) {}
 
   private async withSchema<T>(schemaName: string, fn: (client: import('pg').PoolClient) => Promise<T>): Promise<T> {
     const client = await this.prisma.pool.connect();
@@ -198,6 +202,13 @@ export class TenantUsersService {
       `, [dto.email.trim().toLowerCase(), hashed, dto.firstName, dto.lastName, dto.phone, dto.role, dto.branchId ?? null]);
 
       const r = res.rows[0];
+      await this.activity.record(client, user, {
+        action: 'user.created',
+        entityType: 'user',
+        entityId: r.id,
+        entityLabel: `${r.first_name} ${r.last_name} (${r.email})`,
+        metadata: { role: r.role },
+      });
       return {
         id: r.id, email: r.email,
         firstName: r.first_name, lastName: r.last_name,
@@ -232,6 +243,13 @@ export class TenantUsersService {
       ]);
 
       const r = res.rows[0];
+      await this.activity.record(client, user, {
+        action: 'user.updated',
+        entityType: 'user',
+        entityId: r.id,
+        entityLabel: `${r.first_name} ${r.last_name} (${r.email})`,
+        metadata: { changedFields: Object.keys(dto) },
+      });
       return {
         id: r.id, email: r.email,
         firstName: r.first_name, lastName: r.last_name,
@@ -248,11 +266,18 @@ export class TenantUsersService {
 
     return this.withSchema(user.schemaName, async (client) => {
       const res = await client.query(
-        `UPDATE users SET is_active = $1, updated_at = NOW() WHERE id = $2 RETURNING id, is_active`,
+        `UPDATE users SET is_active = $1, updated_at = NOW() WHERE id = $2 RETURNING id, is_active, email, first_name, last_name`,
         [isActive, id],
       );
       if (!res.rows[0]) throw new NotFoundException('User not found');
-      return { id: res.rows[0].id, isActive: res.rows[0].is_active };
+      const r = res.rows[0];
+      await this.activity.record(client, user, {
+        action: isActive ? 'user.activated' : 'user.deactivated',
+        entityType: 'user',
+        entityId: r.id,
+        entityLabel: `${r.first_name} ${r.last_name} (${r.email})`,
+      });
+      return { id: r.id, isActive: r.is_active };
     });
   }
 
@@ -274,10 +299,17 @@ export class TenantUsersService {
 
     return this.withSchema(user.schemaName, async (client) => {
       const res = await client.query(
-        `UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2 RETURNING id`,
+        `UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2 RETURNING id, email, first_name, last_name`,
         [hashed, id],
       );
       if (!res.rows[0]) throw new NotFoundException('User not found');
+      const r = res.rows[0];
+      await this.activity.record(client, user, {
+        action: 'user.password_reset',
+        entityType: 'user',
+        entityId: r.id,
+        entityLabel: `${r.first_name} ${r.last_name} (${r.email})`,
+      });
       return { success: true };
     });
   }

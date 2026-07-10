@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
+import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
 
 export interface CreateLoanTypeDto {
   name: string;
@@ -17,7 +18,10 @@ const MANAGER_ROLES = ['OWNER', 'MANAGER', 'ADMIN'];
 
 @Injectable()
 export class TenantLoanTypesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private activity: TenantActivityLogService,
+  ) {}
 
   private async withSchema<T>(schemaName: string, fn: (client: import('pg').PoolClient) => Promise<T>): Promise<T> {
     const client = await this.prisma.pool.connect();
@@ -205,6 +209,12 @@ export class TenantLoanTypesService {
         dto.minTermMonths ?? null, dto.maxTermMonths ?? null,
       ]);
       const r = res.rows[0];
+      await this.activity.record(client, user, {
+        action: 'loan_type.created',
+        entityType: 'loan_type',
+        entityId: r.id,
+        entityLabel: r.name,
+      });
       return { id: r.id, name: r.name, description: r.description, isActive: r.is_active, createdAt: r.created_at };
     });
   }
@@ -237,6 +247,13 @@ export class TenantLoanTypesService {
         params,
       );
       const r = res.rows[0];
+      await this.activity.record(client, user, {
+        action: 'loan_type.updated',
+        entityType: 'loan_type',
+        entityId: r.id,
+        entityLabel: r.name,
+        metadata: { changedFields: Object.keys(dto) },
+      });
       return {
         id: r.id, name: r.name, description: r.description,
         minAmount: r.min_amount ? parseFloat(r.min_amount) : null,
@@ -255,10 +272,16 @@ export class TenantLoanTypesService {
     }
     return this.withSchema(user.schemaName, async (client) => {
       const res = await client.query(
-        `UPDATE loan_types SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL RETURNING id`,
+        `UPDATE loan_types SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL RETURNING id, name`,
         [id],
       );
       if (!res.rows[0]) throw new NotFoundException('Loan type not found');
+      await this.activity.record(client, user, {
+        action: 'loan_type.deleted',
+        entityType: 'loan_type',
+        entityId: res.rows[0].id,
+        entityLabel: res.rows[0].name,
+      });
       return { id };
     });
   }

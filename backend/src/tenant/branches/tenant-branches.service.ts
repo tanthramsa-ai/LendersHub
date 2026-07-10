@@ -1,6 +1,7 @@
 import { Injectable, ConflictException, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
+import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
 
 export interface CreateBranchDto {
   name: string;
@@ -26,7 +27,10 @@ export interface UpdateBranchDto {
 
 @Injectable()
 export class TenantBranchesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private activity: TenantActivityLogService,
+  ) {}
 
   private async withSchema<T>(schemaName: string, fn: (client: import('pg').PoolClient) => Promise<T>): Promise<T> {
     const client = await this.prisma.pool.connect();
@@ -76,6 +80,12 @@ export class TenantBranchesService {
           dto.state ?? null, dto.phone ?? null, dto.email ?? null, dto.managerName ?? null]);
 
       const b = res.rows[0];
+      await this.activity.record(client, user, {
+        action: 'branch.created',
+        entityType: 'branch',
+        entityId: b.id,
+        entityLabel: `${b.name} (${b.code})`,
+      });
       return {
         id: b.id, name: b.name, code: b.code,
         address: b.address, city: b.city, state: b.state,
@@ -121,6 +131,13 @@ export class TenantBranchesService {
 
       if (!res.rows[0]) throw new NotFoundException('Branch not found');
       const b = res.rows[0];
+      await this.activity.record(client, user, {
+        action: 'branch.updated',
+        entityType: 'branch',
+        entityId: b.id,
+        entityLabel: `${b.name} (${b.code})`,
+        metadata: { changedFields: Object.keys(dto) },
+      });
       return {
         id: b.id, name: b.name, code: b.code,
         address: b.address, city: b.city, state: b.state,

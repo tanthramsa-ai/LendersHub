@@ -2,6 +2,7 @@ import { Injectable, ConflictException, NotFoundException, ForbiddenException, B
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { sanitizeStrings } from '../../common/utils/sanitize';
+import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
 
 export interface CreateCustomerDto {
   firstName: string;
@@ -52,7 +53,10 @@ export interface UpdateCustomerDto {
 
 @Injectable()
 export class TenantCustomersService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private activity: TenantActivityLogService,
+  ) {}
 
   private async withSchema<T>(schemaName: string, fn: (client: import('pg').PoolClient) => Promise<T>): Promise<T> {
     const client = await this.prisma.pool.connect();
@@ -211,6 +215,12 @@ export class TenantCustomersService {
       ]);
 
       const r = res.rows[0];
+      await this.activity.record(client, user, {
+        action: 'customer.created',
+        entityType: 'customer',
+        entityId: r.id,
+        entityLabel: `${r.customer_code} — ${r.first_name} ${r.last_name ?? ''}`.trim(),
+      });
       return {
         id: r.id, customerCode: r.customer_code,
         firstName: r.first_name, lastName: r.last_name,
@@ -223,11 +233,18 @@ export class TenantCustomersService {
     if (user.role === 'VIEWER') throw new ForbiddenException('Viewers cannot modify customers');
     return this.withSchema(user.schemaName, async (client) => {
       const res = await client.query(
-        `UPDATE customers SET is_active = $1, updated_at = NOW() WHERE id = $2 RETURNING id, is_active`,
+        `UPDATE customers SET is_active = $1, updated_at = NOW() WHERE id = $2 RETURNING id, is_active, customer_code, first_name, last_name`,
         [isActive, id],
       );
       if (!res.rows[0]) throw new NotFoundException('Customer not found');
-      return { id: res.rows[0].id, isActive: res.rows[0].is_active };
+      const r = res.rows[0];
+      await this.activity.record(client, user, {
+        action: isActive ? 'customer.activated' : 'customer.deactivated',
+        entityType: 'customer',
+        entityId: r.id,
+        entityLabel: `${r.customer_code} — ${r.first_name} ${r.last_name ?? ''}`.trim(),
+      });
+      return { id: r.id, isActive: r.is_active };
     });
   }
 
@@ -244,11 +261,18 @@ export class TenantCustomersService {
         throw new BadRequestException('Cannot delete customer with active loans. Close all loans first.');
       }
       const res = await client.query(
-        `UPDATE customers SET is_active = FALSE, updated_at = NOW() WHERE id = $1 RETURNING id`,
+        `UPDATE customers SET is_active = FALSE, updated_at = NOW() WHERE id = $1 RETURNING id, customer_code, first_name, last_name`,
         [id],
       );
       if (!res.rows[0]) throw new NotFoundException('Customer not found');
-      return { id: res.rows[0].id, deleted: true };
+      const r = res.rows[0];
+      await this.activity.record(client, user, {
+        action: 'customer.deleted',
+        entityType: 'customer',
+        entityId: r.id,
+        entityLabel: `${r.customer_code} — ${r.first_name} ${r.last_name ?? ''}`.trim(),
+      });
+      return { id: r.id, deleted: true };
     });
   }
 
@@ -299,11 +323,19 @@ export class TenantCustomersService {
 
       params.push(id);
       const res = await client.query(
-        `UPDATE customers SET ${sets.join(', ')} WHERE id = $${params.length} RETURNING id`,
+        `UPDATE customers SET ${sets.join(', ')} WHERE id = $${params.length} RETURNING id, customer_code, first_name, last_name`,
         params,
       );
       if (!res.rows[0]) throw new NotFoundException('Customer not found');
-      return { id: res.rows[0].id };
+      const r = res.rows[0];
+      await this.activity.record(client, user, {
+        action: 'customer.updated',
+        entityType: 'customer',
+        entityId: r.id,
+        entityLabel: `${r.customer_code} — ${r.first_name} ${r.last_name ?? ''}`.trim(),
+        metadata: { changedFields: Object.keys(dto) },
+      });
+      return { id: r.id };
     });
   }
 }

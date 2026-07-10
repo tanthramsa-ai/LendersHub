@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Put, Patch, Param, Body, Query, Req,
+  Controller, Get, Post, Put, Patch, Delete, Param, Body, Query, Req,
   UseGuards, HttpCode, HttpStatus, ParseIntPipe, DefaultValuePipe,
 } from '@nestjs/common';
 import { TenantService } from './tenant.service';
@@ -66,6 +66,23 @@ export class TenantController {
   @Put(':id/subscription')
   configureSubscription(@Param('id') id: string, @Body() dto: ConfigureSubscriptionDto, @Req() req: any) {
     return this.tenants.configureSubscription(id, dto, this.actorFrom(req), this.ipFrom(req));
+  }
+
+  // ── Lifecycle: suspend / reactivate / delete ────────────────────────────────
+
+  @Patch(':id/suspend')
+  suspend(@Param('id') id: string, @Req() req: any) {
+    return this.tenants.suspend(id, this.actorFrom(req), this.ipFrom(req));
+  }
+
+  @Patch(':id/reactivate')
+  reactivate(@Param('id') id: string, @Req() req: any) {
+    return this.tenants.reactivate(id, this.actorFrom(req), this.ipFrom(req));
+  }
+
+  @Delete(':id')
+  softDelete(@Param('id') id: string, @Body() dto: { confirmSubdomain: string }, @Req() req: any) {
+    return this.tenants.softDelete(id, dto.confirmSubdomain ?? '', this.actorFrom(req), this.ipFrom(req));
   }
 
   // ── Branch endpoints ────────────────────────────────────────────────────────
