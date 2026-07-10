@@ -10,6 +10,50 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+
+  /* Landing page ("hub") palette + brand font — additive, used only by the marketing landing */
+  --color-hub-50: #f0fdfa;
+  --color-hub-100: #ccfbf1;
+  --color-hub-200: #99f6e4;
+  --color-hub-300: #5eead4;
+  --color-hub-400: #2dd4bf;
+  --color-hub-500: #14b8a6;
+  --color-hub-600: #0f766e;
+  --color-hub-700: #0d5c56;
+  --color-hub-800: #0b3d36;
+  --color-hub-900: #072824;
+  --color-hub-950: #041816;
+  --color-gold: #c9a227;
+  --color-gold-soft: #f5d78e;
+  --color-sand: #f4f0e6;
+  --font-brand: var(--font-bricolage);
+}
+
+/* Landing page animations */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(24px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes soft-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.85; }
+}
+@keyframes map-draw {
+  from { stroke-dashoffset: 120; }
+  to { stroke-dashoffset: 0; }
+}
+@utility animate-fade-up {
+  animation: fade-up 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@utility animate-soft-pulse {
+  animation: soft-pulse 4s ease-in-out infinite;
+}
+@utility animate-map-draw {
+  animation: map-draw 1.8s ease-out forwards;
+}
+.font-brand {
+  font-family: var(--font-bricolage), var(--font-geist-sans), system-ui, sans-serif;
+  font-optical-sizing: auto;
 }
 
 @media (prefers-color-scheme: dark) {
