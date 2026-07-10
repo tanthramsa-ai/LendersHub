@@ -10,6 +10,7 @@ import { DashboardController } from './dashboard/dashboard.controller';
 import { TenantService } from './tenants/tenant.service';
 import { TenantController } from './tenants/tenant.controller';
 import { EmailService } from './tenants/email.service';
+import { VercelDomainService } from './tenants/vercel-domain.service';
 import { UsersService } from './users/users.service';
 import { UsersController } from './users/users.controller';
 import { SystemHealthService } from './system-health/system-health.service';
@@ -29,6 +30,7 @@ import { SystemHealthController } from './system-health/system-health.controller
     DashboardService,
     TenantService,
     EmailService,
+    VercelDomainService,
     UsersService,
     SystemHealthService,
   ],

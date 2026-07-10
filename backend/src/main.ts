@@ -10,10 +10,13 @@ async function bootstrap() {
   app.enableCors({
     origin: [
       'https://app.lendershub.in',
+      // Any tenant subdomain (e.g. acme.lendershub.in) — matches app/www too
+      /^https:\/\/[a-z0-9-]+\.lendershub\.in$/,
       'https://lenders-hub.vercel.app',
       // Vercel preview/auto-suffixed deployments (e.g. lenders-hub-eight.vercel.app)
       /^https:\/\/lenders-hub[a-z0-9-]*\.vercel\.app$/,
       'http://localhost:3000',
+      'http://localhost:3010',
     ],
     credentials: true,
   });

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { sessionStore } from '@/services/super-admin-auth';
-import { tenantsApi, type Tenant } from '@/services/tenants';
+import { tenantsApi, tenantAppUrl, type Tenant } from '@/services/tenants';
 
 type SortField = 'createdAt' | 'mrr' | 'users';
 type SortDir = 'asc' | 'desc';
@@ -301,7 +301,22 @@ export default function TenantListPage() {
                           <p className="text-white font-medium">{t.companyName}</p>
                           <p className="text-gray-500 text-xs mt-0.5">{t.registrationNumber}</p>
                         </td>
-                        <td className="px-6 py-4 font-mono text-sm text-indigo-400">{t.subdomain}</td>
+                        <td className="px-6 py-4">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              window.open(tenantAppUrl(t), '_blank', 'noopener,noreferrer');
+                            }}
+                            disabled={t.status !== 'ACTIVE'}
+                            title={t.status === 'ACTIVE' ? `Open ${t.subdomain}` : 'Tenant is not active yet'}
+                            className="inline-flex items-center gap-1.5 font-mono text-sm text-indigo-400 hover:text-indigo-300 disabled:text-gray-600 disabled:cursor-not-allowed transition-colors"
+                          >
+                            {t.subdomain}
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                            </svg>
+                          </button>
+                        </td>
                         <td className="px-6 py-4">
                           {t.plan ? (
                             <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${PLAN_BADGE[t.plan] ?? 'bg-gray-800 text-gray-300'}`}>

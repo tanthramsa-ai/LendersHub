@@ -128,6 +128,24 @@ export interface Tenant {
   _count?: { users: number; loans: number };
 }
 
+/**
+ * Build the public URL for a tenant's app.
+ * - customDomain wins if set.
+ * - Otherwise, if NEXT_PUBLIC_TENANT_ROOT_DOMAIN is set (e.g. "lendershub.in"),
+ *   use host-based subdomains: https://{subdomain}.{root}
+ * - Otherwise (local dev), fall back to path-based routing on the current origin:
+ *   http://localhost:3000/{subdomain}
+ */
+export function tenantAppUrl(tenant: Pick<Tenant, 'subdomain' | 'customDomain'>): string {
+  if (tenant.customDomain) return `https://${tenant.customDomain}`;
+  const root = process.env.NEXT_PUBLIC_TENANT_ROOT_DOMAIN;
+  if (root) return `https://${tenant.subdomain}.${root}`;
+  if (typeof window !== 'undefined') {
+    return `${window.location.protocol}//${window.location.host}/${tenant.subdomain}`;
+  }
+  return `/${tenant.subdomain}`;
+}
+
 export interface CreateTenantResult {
   tenant: Tenant;
   admin: { id: string; email: string; firstName: string; lastName: string };

@@ -4,6 +4,7 @@ import { randomBytes } from 'crypto';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EmailService } from './email.service';
+import { VercelDomainService } from './vercel-domain.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { ConfigureSubscriptionDto } from './dto/configure-subscription.dto';
 import { tenantSchemaDDL } from './tenant-schema';
@@ -22,6 +23,14 @@ const BILLING_DISCOUNT: Record<string, number> = {
 
 const SUBDOMAIN_RE = /^[a-z0-9]([a-z0-9-]{1,18}[a-z0-9]|[a-z0-9]{0,18})$/;
 
+// Platform-reserved labels a tenant must never be allowed to claim — these are
+// used by the app/marketing/infra hosts and are excluded in the frontend middleware.
+const RESERVED_SUBDOMAINS = new Set([
+  'app', 'www', 'api', 'admin', 'super-admin', 'mail', 'smtp', 'ftp',
+  'ns', 'ns1', 'ns2', 'cdn', 'static', 'assets', 'status', 'blog', 'shop',
+  'sandbox', 'demo', 'staging',
+]);
+
 @Injectable()
 export class TenantService {
   private readonly logger = new Logger(TenantService.name);
@@ -29,11 +38,13 @@ export class TenantService {
   constructor(
     private prisma: PrismaService,
     private email: EmailService,
+    private vercel: VercelDomainService,
   ) {}
 
   async checkSubdomain(subdomain: string): Promise<{ available: boolean; valid: boolean }> {
     const valid = SUBDOMAIN_RE.test(subdomain);
     if (!valid) return { valid: false, available: false };
+    if (RESERVED_SUBDOMAINS.has(subdomain)) return { valid: false, available: false };
     const existing = await this.prisma.tenant.findUnique({ where: { subdomain } });
     return { valid: true, available: !existing };
   }
@@ -42,6 +53,9 @@ export class TenantService {
     this.logger.log(`[CREATE:1] Validating subdomain "${dto.subdomain}"`);
     if (!SUBDOMAIN_RE.test(dto.subdomain)) {
       throw new BadRequestException('Invalid subdomain format');
+    }
+    if (RESERVED_SUBDOMAINS.has(dto.subdomain)) {
+      throw new BadRequestException('This subdomain is reserved and cannot be used');
     }
 
     this.logger.log(`[CREATE:2] Checking for existing tenant`);
@@ -115,6 +129,11 @@ export class TenantService {
 
       this.logger.log(`[CREATE:7] Seeding admin into tenant schema`);
       await this.seedTenantAdmin(schemaName, dto.adminEmail, hashedPassword, dto.adminFirstName, dto.adminLastName);
+
+      // Register the subdomain with Vercel so it routes + gets a TLS cert.
+      // Non-fatal: a failure here shouldn't abort an otherwise-provisioned tenant.
+      this.logger.log(`[CREATE:7b] Registering Vercel domain`);
+      await this.vercel.addSubdomain(dto.subdomain);
 
       let subscriptionData = {};
       if (dto.plan && dto.billingCycle) {
