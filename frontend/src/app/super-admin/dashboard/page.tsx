@@ -355,7 +355,7 @@ export default function SuperAdminDashboardPage() {
                               <TenantLogo name={t.companyName} />
                               <div>
                                 <p className="font-medium text-white">{t.companyName}</p>
-                                <p className="text-xs text-gray-500">{t.subdomain}.lendershub.com</p>
+                                <p className="text-xs text-gray-500">{t.subdomain}.lendershub.in</p>
                               </div>
                             </div>
                           </td>

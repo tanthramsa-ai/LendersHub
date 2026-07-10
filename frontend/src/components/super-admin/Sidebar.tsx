@@ -102,7 +102,6 @@ const NAV: NavSection[] = [
             <path d="M10 6.667V10l2.5 1.667" />
           </svg>
         ),
-        badge: { value: 24, danger: true },
       },
       {
         href: '/super-admin/system-health',
@@ -133,7 +132,7 @@ function isActive(pathname: string, href: string, exact?: boolean) {
   return pathname.startsWith(href);
 }
 
-export default function Sidebar() {
+export default function Sidebar({ open = false, onClose }: { open?: boolean; onClose?: () => void }) {
   const pathname = usePathname();
   const router = useRouter();
 
@@ -160,16 +159,20 @@ export default function Sidebar() {
   }
 
   return (
-    <aside className="fixed inset-y-0 left-0 w-[280px] flex flex-col bg-gradient-to-b from-gray-900 to-gray-950 border-r border-gray-800 z-40">
+    <aside
+      className={`fixed inset-y-0 left-0 w-[280px] flex flex-col bg-gradient-to-b from-gray-900 to-gray-950 border-r border-gray-800 z-40 transition-transform duration-200 ${
+        open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
+      }`}
+    >
       {/* Logo */}
       <div className="px-6 py-7 border-b border-gray-800">
         <div className="flex items-center gap-3 mb-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-600 to-purple-700 flex items-center justify-center font-bold text-white text-lg shadow-lg shadow-violet-900/40">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-600 to-indigo-700 flex items-center justify-center font-bold text-white text-lg shadow-lg shadow-indigo-900/40">
             L
           </div>
           <span className="font-bold text-lg text-white tracking-tight">LendersHub</span>
         </div>
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold uppercase tracking-wider bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-sm">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold uppercase tracking-wider bg-indigo-600 text-white shadow-sm">
           <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
             <path d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" />
           </svg>
@@ -191,13 +194,14 @@ export default function Sidebar() {
                   <li key={item.href}>
                     <Link
                       href={item.href}
+                      onClick={onClose}
                       className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 ${
                         active
-                          ? 'bg-violet-600/20 text-white ring-1 ring-inset ring-violet-600/30'
+                          ? 'bg-indigo-600/20 text-white ring-1 ring-inset ring-indigo-500/30'
                           : 'text-gray-400 hover:text-white hover:bg-white/5'
                       }`}
                     >
-                      <span className={active ? 'text-violet-400' : 'text-gray-500'}>{item.icon}</span>
+                      <span className={active ? 'text-indigo-400' : 'text-gray-500'}>{item.icon}</span>
                       <span className="flex-1">{item.label}</span>
                       {item.badge && (
                         <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${item.badge.danger ? 'bg-red-900/60 text-red-400' : 'bg-amber-900/60 text-amber-400'}`}>
@@ -237,12 +241,12 @@ export default function Sidebar() {
           onClick={handleLogout}
           className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-white/5 transition-colors group"
         >
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center text-white text-xs font-bold shrink-0">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-indigo-600 flex items-center justify-center text-white text-xs font-bold shrink-0">
             {initials}
           </div>
           <div className="flex-1 text-left min-w-0">
             <p className="text-sm font-semibold text-white truncate">Super Admin</p>
-            <p className="text-xs text-gray-500 truncate">{email || 'admin@lendershub.com'}</p>
+            <p className="text-xs text-gray-500 truncate">{email || 'admin@lendershub.in'}</p>
           </div>
           <svg className="w-4 h-4 text-gray-600 group-hover:text-gray-400 transition-colors shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />

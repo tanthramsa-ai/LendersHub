@@ -276,7 +276,7 @@ export default function TenantLayout({ children }: { children: React.ReactNode }
           </div>
           <div className="min-w-0">
             <p className="font-bold text-white text-sm truncate">{tenant.companyName}</p>
-            <p className="text-xs text-blue-200 truncate">{tenant.subdomain}.lendershub.com</p>
+            <p className="text-xs text-blue-200 truncate">{tenant.subdomain}.{process.env.NEXT_PUBLIC_TENANT_ROOT_DOMAIN ?? 'lendershub.in'}</p>
           </div>
         </div>
 

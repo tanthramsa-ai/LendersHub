@@ -273,7 +273,7 @@ export default function NewTenantPage() {
         subdomain: form.subdomain,
         registrationNumber: form.registrationNumber || 'DRAFT',
         address: form.address || 'Draft',
-        adminEmail: form.adminEmail || `draft-${form.subdomain}@placeholder.lendershub.com`,
+        adminEmail: form.adminEmail || `draft-${form.subdomain}@placeholder.lendershub.in`,
         adminFirstName: form.adminFirstName || 'Draft',
         adminLastName: form.adminLastName || 'User',
         city: form.city || undefined,
@@ -350,7 +350,7 @@ export default function NewTenantPage() {
                   <Field label="Company Name" required>
                     <Input value={form.companyName} onChange={(e) => set('companyName', e.target.value)} placeholder="Swift Finance Ltd" required maxLength={100} />
                   </Field>
-                  <Field label="Subdomain" required hint={`${form.subdomain || '<subdomain>'}.lendershub.com`}>
+                  <Field label="Subdomain" required hint={`${form.subdomain || '<subdomain>'}.lendershub.in`}>
                     <div className="relative">
                       <Input value={form.subdomain} onChange={(e) => handleSubdomainChange(e.target.value)} placeholder="swiftfinance" required minLength={3} maxLength={20} />
                       {subdomainStatus !== 'idle' && subdomainStatus !== 'checking' && (
