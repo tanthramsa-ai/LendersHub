@@ -44,14 +44,16 @@ export class SuperAdminAuthController {
   @Post('change-password')
   @HttpCode(HttpStatus.OK)
   changePassword(@Body() dto: ChangePasswordDto, @Req() req: any) {
-    return this.auth.changePassword(req.user.id, dto);
+    const ip = req.ip ?? req.headers['x-forwarded-for'] ?? 'unknown';
+    return this.auth.changePassword(req.user.id, dto, ip);
   }
 
   @UseGuards(SuperAdminJwtGuard)
   @Post('disable-2fa')
   @HttpCode(HttpStatus.OK)
   disableTwoFactor(@Req() req: any) {
-    return this.auth.disableTwoFactor(req.user.id);
+    const ip = req.ip ?? req.headers['x-forwarded-for'] ?? 'unknown';
+    return this.auth.disableTwoFactor(req.user.id, ip);
   }
 
   @UseGuards(SuperAdminJwtGuard)

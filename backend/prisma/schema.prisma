@@ -51,6 +51,7 @@ model User {
   tenant        Tenant?         @relation(fields: [tenantId], references: [id], onDelete: SetNull)
   loans         Loan[]
   loginAuditLogs LoginAuditLog[]
+  auditLogs     AuditLog[]
 
   @@map("users")
 }
@@ -66,6 +67,31 @@ model LoginAuditLog {
   user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@map("login_audit_logs")
+}
+
+// Platform-level audit trail of super-admin actions (tenant provisioning,
+// subscription changes, branch/loan-type management, security-sensitive
+// account changes). Distinct from LoginAuditLog, which only tracks login
+// attempts. actorId is nullable + onDelete SetNull so history survives a
+// deleted actor account; actorEmail is a denormalized snapshot for the same
+// reason (displays correctly even if the user record is gone).
+model AuditLog {
+  id          String   @id @default(uuid())
+  actorId     String?  @map("actor_id")
+  actorEmail  String   @map("actor_email")
+  action      String
+  targetType  String   @map("target_type")
+  targetId    String?  @map("target_id")
+  targetLabel String?  @map("target_label")
+  metadata    Json?
+  ipAddress   String   @map("ip_address")
+  createdAt   DateTime @default(now()) @map("created_at")
+  actor       User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([action])
+  @@index([targetType, targetId])
+  @@map("audit_logs")
 }
 
 model Loan {

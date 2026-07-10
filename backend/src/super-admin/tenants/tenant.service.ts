@@ -5,6 +5,7 @@ import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EmailService } from './email.service';
 import { VercelDomainService } from './vercel-domain.service';
+import { AuditLogService, AuditActor } from '../audit-log/audit-log.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { ConfigureSubscriptionDto } from './dto/configure-subscription.dto';
 import { tenantSchemaDDL } from './tenant-schema';
@@ -39,6 +40,7 @@ export class TenantService {
     private prisma: PrismaService,
     private email: EmailService,
     private vercel: VercelDomainService,
+    private auditLog: AuditLogService,
   ) {}
 
   async checkSubdomain(subdomain: string): Promise<{ available: boolean; valid: boolean }> {
@@ -49,7 +51,7 @@ export class TenantService {
     return { valid: true, available: !existing };
   }
 
-  async create(dto: CreateTenantDto) {
+  async create(dto: CreateTenantDto, actor: AuditActor, ipAddress: string) {
     this.logger.log(`[CREATE:1] Validating subdomain "${dto.subdomain}"`);
     if (!SUBDOMAIN_RE.test(dto.subdomain)) {
       throw new BadRequestException('Invalid subdomain format');
@@ -163,9 +165,18 @@ export class TenantService {
       const provisionMs = Date.now() - provisionStart;
       this.logger.log(`[CREATE:DONE] Tenant ${dto.subdomain} provisioned in ${provisionMs}ms`);
 
+      await this.auditLog.record({
+        actor, ipAddress,
+        action: 'tenant.created',
+        targetType: 'tenant',
+        targetId: tenant.id,
+        targetLabel: dto.companyName,
+        metadata: { subdomain: dto.subdomain, plan: dto.plan ?? null, provisionedInMs: provisionMs },
+      });
+
       const loginUrl = process.env.APP_URL
         ? `${process.env.APP_URL}/${dto.subdomain}/login`
-        : `http://${dto.subdomain}.lendershub.com/login`;
+        : `http://${dto.subdomain}.lendershub.in/login`;
 
       let emailPreviewUrl: string | null = null;
       try {
@@ -271,8 +282,8 @@ export class TenantService {
     name: string; code: string;
     address?: string; city?: string; state?: string;
     phone?: string; email?: string; managerName?: string;
-  }) {
-    return this.withTenantSchema(tenantId, async (client) => {
+  }, actor: AuditActor, ipAddress: string) {
+    const branch = await this.withTenantSchema(tenantId, async (client) => {
       const res = await client.query(`
         INSERT INTO branches (name, code, address, city, state, phone, email, manager_name)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -287,6 +298,17 @@ export class TenantService {
         isActive: b.is_active, createdAt: b.created_at,
       };
     });
+
+    await this.auditLog.record({
+      actor, ipAddress,
+      action: 'branch.created',
+      targetType: 'branch',
+      targetId: branch.id,
+      targetLabel: `${branch.name} (${branch.code})`,
+      metadata: { tenantId },
+    });
+
+    return branch;
   }
 
   async getBranch(tenantId: string, branchId: string) {
@@ -326,8 +348,8 @@ export class TenantService {
   async updateBranch(tenantId: string, branchId: string, dto: {
     name?: string; address?: string; city?: string; state?: string;
     phone?: string; email?: string; managerName?: string; isActive?: boolean;
-  }) {
-    return this.withTenantSchema(tenantId, async (client) => {
+  }, actor: AuditActor, ipAddress: string) {
+    const branch = await this.withTenantSchema(tenantId, async (client) => {
       const res = await client.query(`
         UPDATE branches SET
           name         = COALESCE($1, name),
@@ -347,6 +369,17 @@ export class TenantService {
       const b = res.rows[0];
       return { id: b.id, name: b.name, code: b.code, isActive: b.is_active };
     });
+
+    await this.auditLog.record({
+      actor, ipAddress,
+      action: 'branch.updated',
+      targetType: 'branch',
+      targetId: branch.id,
+      targetLabel: `${branch.name} (${branch.code})`,
+      metadata: { tenantId, changes: dto },
+    });
+
+    return branch;
   }
 
   async createLoanType(tenantId: string, dto: {
@@ -354,8 +387,8 @@ export class TenantService {
     minAmount?: number; maxAmount?: number;
     minInterestRate?: number; maxInterestRate?: number;
     minTermMonths?: number; maxTermMonths?: number;
-  }) {
-    return this.withTenantSchema(tenantId, async (client) => {
+  }, actor: AuditActor, ipAddress: string) {
+    const loanType = await this.withTenantSchema(tenantId, async (client) => {
       const res = await client.query(`
         INSERT INTO loan_types (name, description, min_amount, max_amount, min_interest_rate, max_interest_rate, min_term_months, max_term_months)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -365,6 +398,17 @@ export class TenantService {
       const lt = res.rows[0];
       return { id: lt.id, name: lt.name, description: lt.description, isActive: lt.is_active };
     });
+
+    await this.auditLog.record({
+      actor, ipAddress,
+      action: 'loan_type.created',
+      targetType: 'loan_type',
+      targetId: loanType.id,
+      targetLabel: loanType.name,
+      metadata: { tenantId },
+    });
+
+    return loanType;
   }
 
   private async runWithBypass<T>(fn: (client: import('pg').PoolClient) => Promise<T>): Promise<T> {
@@ -440,7 +484,7 @@ export class TenantService {
     });
   }
 
-  async configureSubscription(id: string, dto: ConfigureSubscriptionDto) {
+  async configureSubscription(id: string, dto: ConfigureSubscriptionDto, actor: AuditActor, ipAddress: string) {
     const tenant = await this.prisma.tenant.findUnique({ where: { id } });
     if (!tenant) throw new NotFoundException('Tenant not found');
 
@@ -463,6 +507,19 @@ export class TenantService {
         subscriptionStartsAt,
         monthlyAmount,
         subscriptionStatus: hasTrial ? 'TRIAL' : 'ACTIVE',
+      },
+    });
+
+    await this.auditLog.record({
+      actor, ipAddress,
+      action: 'tenant.subscription_updated',
+      targetType: 'tenant',
+      targetId: id,
+      targetLabel: tenant.companyName,
+      metadata: {
+        fromPlan: tenant.plan, toPlan: dto.plan,
+        fromBillingCycle: tenant.billingCycle, toBillingCycle: dto.billingCycle,
+        monthlyAmount,
       },
     });
 

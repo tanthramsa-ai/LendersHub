@@ -94,6 +94,16 @@ const NAV: NavSection[] = [
     label: 'System',
     items: [
       {
+        href: '/super-admin/activity',
+        label: 'Activity Log',
+        icon: (
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 20 20" stroke="currentColor" strokeWidth={1.5}>
+            <path d="M6.667 2.5h6.666a1.667 1.667 0 0 1 1.667 1.667v11.666a1.667 1.667 0 0 1-1.667 1.667H6.667A1.667 1.667 0 0 1 5 15.833V4.167A1.667 1.667 0 0 1 6.667 2.5Z" />
+            <path d="M7.5 6.667h5M7.5 10h5M7.5 13.333h2.5" />
+          </svg>
+        ),
+      },
+      {
         href: '/super-admin/dashboard/alerts',
         label: 'Security Alerts',
         icon: (

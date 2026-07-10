@@ -13,12 +13,14 @@ import { SuperAdminLoginDto } from './dto/super-admin-login.dto';
 import { Verify2faDto } from './dto/verify-2fa.dto';
 import { ConfirmSetup2faDto } from './dto/confirm-setup-2fa.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { AuditLogService } from './audit-log/audit-log.service';
 
 @Injectable()
 export class SuperAdminAuthService {
   constructor(
     private prisma: PrismaService,
     private jwt: JwtService,
+    private auditLog: AuditLogService,
   ) {}
 
   async login(dto: SuperAdminLoginDto, ipAddress: string) {
@@ -93,6 +95,14 @@ export class SuperAdminAuthService {
     });
 
     await this.audit(userId, user.email, ipAddress, true, '2FA setup complete');
+    await this.auditLog.record({
+      actor: { id: userId, email: user.email },
+      ipAddress,
+      action: 'super_admin.2fa_enabled',
+      targetType: 'super_admin',
+      targetId: userId,
+      targetLabel: user.email,
+    });
 
     return { accessToken: this.signFullToken(user.id, user.email, true) };
   }
@@ -114,17 +124,27 @@ export class SuperAdminAuthService {
     return { accessToken: this.signFullToken(user.id, user.email, true) };
   }
 
-  async changePassword(userId: string, dto: ChangePasswordDto) {
+  async changePassword(userId: string, dto: ChangePasswordDto, ipAddress: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user || user.role !== 'SUPER_ADMIN') throw new ForbiddenException();
     const valid = await bcrypt.compare(dto.currentPassword, user.password);
     if (!valid) throw new UnauthorizedException('Current password is incorrect');
     const hashed = await bcrypt.hash(dto.newPassword, 10);
     await this.prisma.user.update({ where: { id: userId }, data: { password: hashed } });
+
+    await this.auditLog.record({
+      actor: { id: userId, email: user.email },
+      ipAddress,
+      action: 'super_admin.password_changed',
+      targetType: 'super_admin',
+      targetId: userId,
+      targetLabel: user.email,
+    });
+
     return { message: 'Password changed successfully' };
   }
 
-  async disableTwoFactor(userId: string) {
+  async disableTwoFactor(userId: string, ipAddress: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user || user.role !== 'SUPER_ADMIN') throw new ForbiddenException();
     if (!user.totpEnabled) throw new ConflictException('2FA is not enabled');
@@ -132,6 +152,16 @@ export class SuperAdminAuthService {
       where: { id: userId },
       data: { totpEnabled: false, totpSecret: null },
     });
+
+    await this.auditLog.record({
+      actor: { id: userId, email: user.email },
+      ipAddress,
+      action: 'super_admin.2fa_disabled',
+      targetType: 'super_admin',
+      targetId: userId,
+      targetLabel: user.email,
+    });
+
     return { message: '2FA disabled' };
   }
 

@@ -60,6 +60,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     (this as any).tenant = extended.tenant;
     (this as any).loan = extended.loan;
     (this as any).loginAuditLog = extended.loginAuditLog;
+    (this as any).auditLog = extended.auditLog;
   }
 
   async onModuleInit() {

@@ -15,6 +15,8 @@ import { UsersService } from './users/users.service';
 import { UsersController } from './users/users.controller';
 import { SystemHealthService } from './system-health/system-health.service';
 import { SystemHealthController } from './system-health/system-health.controller';
+import { AuditLogService } from './audit-log/audit-log.service';
+import { AuditLogController } from './audit-log/audit-log.controller';
 
 @Module({
   imports: [
@@ -33,7 +35,8 @@ import { SystemHealthController } from './system-health/system-health.controller
     VercelDomainService,
     UsersService,
     SystemHealthService,
+    AuditLogService,
   ],
-  controllers: [SuperAdminAuthController, DashboardController, TenantController, UsersController, SystemHealthController],
+  controllers: [SuperAdminAuthController, DashboardController, TenantController, UsersController, SystemHealthController, AuditLogController],
 })
 export class SuperAdminModule {}

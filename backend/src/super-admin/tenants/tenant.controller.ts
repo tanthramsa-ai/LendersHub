@@ -1,16 +1,25 @@
 import {
-  Controller, Get, Post, Put, Patch, Param, Body, Query,
+  Controller, Get, Post, Put, Patch, Param, Body, Query, Req,
   UseGuards, HttpCode, HttpStatus, ParseIntPipe, DefaultValuePipe,
 } from '@nestjs/common';
 import { TenantService } from './tenant.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { ConfigureSubscriptionDto } from './dto/configure-subscription.dto';
 import { SuperAdminJwtGuard } from '../guards/super-admin-jwt.guard';
+import type { AuditActor } from '../audit-log/audit-log.service';
 
 @UseGuards(SuperAdminJwtGuard)
 @Controller('api/v1/super-admin/tenants')
 export class TenantController {
   constructor(private tenants: TenantService) {}
+
+  private actorFrom(req: any): AuditActor {
+    return { id: req.user.id, email: req.user.email };
+  }
+
+  private ipFrom(req: any): string {
+    return req.ip ?? req.headers['x-forwarded-for'] ?? 'unknown';
+  }
 
   @Get('check-subdomain')
   checkSubdomain(@Query('subdomain') subdomain: string) {
@@ -24,8 +33,8 @@ export class TenantController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  create(@Body() dto: CreateTenantDto) {
-    return this.tenants.create(dto);
+  create(@Body() dto: CreateTenantDto, @Req() req: any) {
+    return this.tenants.create(dto, this.actorFrom(req), this.ipFrom(req));
   }
 
   @Get()
@@ -55,8 +64,8 @@ export class TenantController {
   }
 
   @Put(':id/subscription')
-  configureSubscription(@Param('id') id: string, @Body() dto: ConfigureSubscriptionDto) {
-    return this.tenants.configureSubscription(id, dto);
+  configureSubscription(@Param('id') id: string, @Body() dto: ConfigureSubscriptionDto, @Req() req: any) {
+    return this.tenants.configureSubscription(id, dto, this.actorFrom(req), this.ipFrom(req));
   }
 
   // ── Branch endpoints ────────────────────────────────────────────────────────
@@ -72,8 +81,8 @@ export class TenantController {
     name: string; code: string;
     address?: string; city?: string; state?: string;
     phone?: string; email?: string; managerName?: string;
-  }) {
-    return this.tenants.createBranch(id, dto);
+  }, @Req() req: any) {
+    return this.tenants.createBranch(id, dto, this.actorFrom(req), this.ipFrom(req));
   }
 
   @Get(':id/branches/:branchId')
@@ -86,8 +95,9 @@ export class TenantController {
     @Param('id') id: string,
     @Param('branchId') branchId: string,
     @Body() dto: { name?: string; address?: string; city?: string; state?: string; phone?: string; email?: string; managerName?: string; isActive?: boolean },
+    @Req() req: any,
   ) {
-    return this.tenants.updateBranch(id, branchId, dto);
+    return this.tenants.updateBranch(id, branchId, dto, this.actorFrom(req), this.ipFrom(req));
   }
 
   @Post(':id/loan-types')
@@ -97,7 +107,7 @@ export class TenantController {
     minAmount?: number; maxAmount?: number;
     minInterestRate?: number; maxInterestRate?: number;
     minTermMonths?: number; maxTermMonths?: number;
-  }) {
-    return this.tenants.createLoanType(id, dto);
+  }, @Req() req: any) {
+    return this.tenants.createLoanType(id, dto, this.actorFrom(req), this.ipFrom(req));
   }
 }
