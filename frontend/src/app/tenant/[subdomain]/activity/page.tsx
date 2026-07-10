@@ -27,6 +27,10 @@ const ACTION_LABELS: Record<string, string> = {
   'loan_type.deleted': 'Loan type deleted',
   'settings.sms_updated': 'SMS settings updated',
   'settings.whatsapp_updated': 'WhatsApp settings updated',
+  'installment.agent_assigned': 'Collector assigned',
+  'installment.agent_unassigned': 'Collector unassigned',
+  'ledger.credit_added': 'Ledger credit added',
+  'ledger.debit_added': 'Ledger debit added',
 };
 
 function actionLabel(action: string): string {
@@ -40,6 +44,8 @@ const ENTITY_BADGE: Record<string, string> = {
   branch: 'bg-amber-100 text-amber-700',
   loan_type: 'bg-indigo-100 text-indigo-700',
   settings: 'bg-gray-200 text-gray-700',
+  installment: 'bg-orange-100 text-orange-700',
+  fund_transaction: 'bg-emerald-100 text-emerald-700',
 };
 
 function entityBadge(type: string) {

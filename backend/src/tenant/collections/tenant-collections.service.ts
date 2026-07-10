@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
+import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
 
 export interface RecordCollectionPaymentDto {
   amount: number;
@@ -11,7 +12,10 @@ export interface RecordCollectionPaymentDto {
 
 @Injectable()
 export class TenantCollectionsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private activity: TenantActivityLogService,
+  ) {}
 
   // In-memory cache — avoids repeated ALTER TABLE calls per schema per process lifetime
   private migratedSchemas = new Set<string>();
@@ -188,10 +192,18 @@ export class TenantCollectionsService {
     await this.ensureAssignedTo(user.schemaName);
     return this.withSchema(user.schemaName, async (client) => {
       const res = await client.query(
-        `UPDATE installments SET assigned_to = $1 WHERE id = $2 RETURNING id`,
+        `UPDATE installments SET assigned_to = $1 WHERE id = $2
+         RETURNING id, (SELECT loan_number FROM loans WHERE id = installments.loan_id) AS loan_number`,
         [agentId ?? null, installmentId],
       );
       if (!res.rows[0]) throw new NotFoundException('Installment not found');
+      await this.activity.record(client, user, {
+        action: agentId ? 'installment.agent_assigned' : 'installment.agent_unassigned',
+        entityType: 'installment',
+        entityId: installmentId,
+        entityLabel: res.rows[0].loan_number,
+        metadata: { agentId },
+      });
       return { success: true };
     });
   }
@@ -201,7 +213,7 @@ export class TenantCollectionsService {
     if (!dto.amount || dto.amount <= 0) throw new BadRequestException('Amount must be positive');
     return this.withSchema(user.schemaName, async (client) => {
       const instRes = await client.query(
-        `SELECT i.*, l.id AS loan_id, l.status AS loan_status
+        `SELECT i.*, l.id AS loan_id, l.status AS loan_status, l.loan_number
          FROM installments i JOIN loans l ON l.id = i.loan_id WHERE i.id = $1`,
         [installmentId],
       );
@@ -234,6 +246,14 @@ export class TenantCollectionsService {
          WHERE id = $2`,
         [dto.amount, installmentId],
       );
+
+      await this.activity.record(client, user, {
+        action: 'payment.recorded',
+        entityType: 'loan',
+        entityId: inst.loan_id,
+        entityLabel: inst.loan_number,
+        metadata: { amount: dto.amount, paymentMethod: dto.paymentMethod, installmentId, source: 'collections' },
+      });
 
       return { success: true };
     });

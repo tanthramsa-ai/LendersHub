@@ -1,6 +1,7 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
+import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
 
 export interface CreateTransactionDto {
   transactionDate: string;   // YYYY-MM-DD
@@ -17,7 +18,10 @@ export interface CreateTransactionDto {
 
 @Injectable()
 export class TenantLedgerService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private activity: TenantActivityLogService,
+  ) {}
 
   private async withSchema<T>(schemaName: string, fn: (client: import('pg').PoolClient) => Promise<T>): Promise<T> {
     const client = await this.prisma.pool.connect();
@@ -273,6 +277,13 @@ export class TenantLedgerService {
         user.sub,
       ]);
       const r = res.rows[0];
+      await this.activity.record(client, user, {
+        action: r.type === 'CREDIT' ? 'ledger.credit_added' : 'ledger.debit_added',
+        entityType: 'fund_transaction',
+        entityId: r.id,
+        entityLabel: `${r.category} — ₹${r.amount}`,
+        metadata: { amount: parseFloat(r.amount), category: r.category, entityType: r.entity_type, entityId: r.entity_id },
+      });
       return {
         id: r.id, date: r.transaction_date, type: r.type, amount: parseFloat(r.amount),
         category: r.category, accountName: r.account_name,
