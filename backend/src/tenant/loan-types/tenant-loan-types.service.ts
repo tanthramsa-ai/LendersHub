@@ -110,8 +110,8 @@ export class TenantLoanTypesService {
         ? `WHERE l.loan_type_id = '${id}' AND l.deleted_at IS NULL AND (c.first_name || ' ' || c.last_name ILIKE $1 OR l.loan_number ILIKE $1 OR c.phone ILIKE $1)`
         : `WHERE l.loan_type_id = '${id}' AND l.deleted_at IS NULL`;
 
-      const [dataRes, countRes] = await Promise.all([
-        client.query(`
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const dataRes = await client.query(`
           SELECT l.id, l.loan_number, l.principal, l.interest_rate, l.term_months,
                  l.status, l.disbursed_at, l.created_at,
                  c.id AS customer_id, c.first_name || ' ' || c.last_name AS customer_name, c.phone
@@ -120,13 +120,12 @@ export class TenantLoanTypesService {
           ${where}
           ORDER BY l.created_at DESC
           LIMIT $1 OFFSET $2
-        `, dataParams),
-        client.query<{ total: string }>(`
+        `, dataParams);
+      const countRes = await client.query<{ total: string }>(`
           SELECT COUNT(*) AS total FROM loans l
           JOIN customers c ON c.id = l.customer_id
           ${countWhere}
-        `, countParams),
-      ]);
+        `, countParams);
 
       return {
         data: dataRes.rows.map((r) => ({
@@ -161,8 +160,8 @@ export class TenantLoanTypesService {
         ? `WHERE l.loan_type_id = '${id}' AND l.deleted_at IS NULL AND (c.first_name || ' ' || c.last_name ILIKE $1 OR c.phone ILIKE $1 OR c.customer_code ILIKE $1)`
         : `WHERE l.loan_type_id = '${id}' AND l.deleted_at IS NULL`;
 
-      const [dataRes, countRes] = await Promise.all([
-        client.query(`
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const dataRes = await client.query(`
           SELECT c.id, c.customer_code, c.first_name || ' ' || c.last_name AS name, c.phone,
                  COUNT(l.id) AS loan_count,
                  SUM(l.principal) FILTER (WHERE l.status IN ('DISBURSED','APPROVED')) AS active_principal
@@ -172,13 +171,12 @@ export class TenantLoanTypesService {
           GROUP BY c.id, c.customer_code, c.first_name, c.last_name, c.phone
           ORDER BY c.first_name
           LIMIT $1 OFFSET $2
-        `, dataParams),
-        client.query<{ total: string }>(`
+        `, dataParams);
+      const countRes = await client.query<{ total: string }>(`
           SELECT COUNT(DISTINCT c.id) AS total FROM loans l
           JOIN customers c ON c.id = l.customer_id
           ${countWhere}
-        `, countParams),
-      ]);
+        `, countParams);
 
       return {
         data: dataRes.rows.map((r) => ({

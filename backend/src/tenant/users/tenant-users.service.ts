@@ -57,8 +57,8 @@ export class TenantUsersService {
       const countParams = sp ? [sp] : [];
       const countCond = sp ? `WHERE (u.first_name ILIKE $1 OR u.last_name ILIKE $1 OR u.email ILIKE $1 OR u.phone ILIKE $1)` : '';
 
-      const [dataRes, countRes] = await Promise.all([
-        client.query(`
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const dataRes = await client.query(`
           SELECT u.id, u.email, u.first_name, u.last_name, u.phone, u.role, u.is_active, u.created_at,
                  u.branch_id, b.name AS branch_name,
                  COUNT(DISTINCT l.id) FILTER (WHERE l.status IN ('APPROVED','DISBURSED') AND l.deleted_at IS NULL) AS active_loans,
@@ -71,11 +71,10 @@ export class TenantUsersService {
           GROUP BY u.id, b.name
           ORDER BY u.created_at DESC
           LIMIT $1 OFFSET $2
-        `, dataParams),
-        client.query<{ total: string }>(`
+        `, dataParams);
+      const countRes = await client.query<{ total: string }>(`
           SELECT COUNT(*) AS total FROM users u ${countCond}
-        `, countParams),
-      ]);
+        `, countParams);
 
       return {
         data: dataRes.rows.map((r) => ({
@@ -96,15 +95,15 @@ export class TenantUsersService {
 
   async findOne(user: TenantJwtPayload, id: string) {
     return this.withSchema(user.schemaName, async (client) => {
-      const [userRes, statsRes] = await Promise.all([
-        client.query(`
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const userRes = await client.query(`
           SELECT u.id, u.email, u.first_name, u.last_name, u.phone, u.role,
                  u.is_active, u.created_at, u.updated_at,
                  u.branch_id, b.name AS branch_name, b.code AS branch_code
           FROM users u LEFT JOIN branches b ON b.id = u.branch_id
           WHERE u.id = $1
-        `, [id]),
-        client.query(`
+        `, [id]);
+      const statsRes = await client.query(`
           SELECT
             COUNT(*) FILTER (WHERE l.status IN ('APPROVED','DISBURSED') AND l.deleted_at IS NULL)  AS active_loans,
             COUNT(*) FILTER (WHERE l.status = 'CLOSED' AND l.deleted_at IS NULL)                   AS closed_loans,
@@ -113,8 +112,7 @@ export class TenantUsersService {
             COALESCE(SUM(l.principal) FILTER (WHERE l.status = 'DEFAULTED' AND l.deleted_at IS NULL), 0) AS npa_principal,
             COUNT(DISTINCT l.customer_id) FILTER (WHERE l.deleted_at IS NULL)                      AS total_customers
           FROM loans l WHERE l.loan_officer_id = $1
-        `, [id]),
-      ]);
+        `, [id]);
 
       if (!userRes.rows[0]) throw new NotFoundException('User not found');
       const r = userRes.rows[0];
@@ -148,8 +146,8 @@ export class TenantUsersService {
       const countParams: unknown[] = [id, ...(status ? [status] : [])];
       const countStatusCond = status ? `AND l.status = $2` : '';
 
-      const [dataRes, countRes] = await Promise.all([
-        client.query(`
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const dataRes = await client.query(`
           SELECT l.id, l.loan_number, l.principal, l.interest_rate, l.term_months, l.status,
                  l.first_due_date, l.disbursed_at, l.created_at,
                  c.first_name || ' ' || c.last_name AS customer_name, c.phone AS customer_phone,
@@ -161,12 +159,11 @@ export class TenantUsersService {
           GROUP BY l.id, c.first_name, c.last_name, c.phone
           ORDER BY l.created_at DESC
           LIMIT $1 OFFSET $2
-        `, dataParams),
-        client.query<{ total: string }>(`
+        `, dataParams);
+      const countRes = await client.query<{ total: string }>(`
           SELECT COUNT(*) AS total FROM loans l
           WHERE l.loan_officer_id = $1 AND l.deleted_at IS NULL ${countStatusCond}
-        `, countParams),
-      ]);
+        `, countParams);
 
       return {
         data: dataRes.rows.map((r) => ({

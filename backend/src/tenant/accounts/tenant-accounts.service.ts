@@ -18,16 +18,11 @@ export class TenantAccountsService {
 
   async getSummary(user: TenantJwtPayload) {
     return this.withSchema(user.schemaName, async (client) => {
-      const [
-        loansRes,
-        paymentsRes,
-        overdueRes,
-        statusRes,
-      ] = await Promise.all([
-        client.query<{
-          total_loans: string; total_principal: string; active_loans: string;
-          active_principal: string; closed_loans: string;
-        }>(`
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const loansRes = await client.query<{
+        total_loans: string; total_principal: string; active_loans: string;
+        active_principal: string; closed_loans: string;
+      }>(`
           SELECT
             COUNT(*) AS total_loans,
             COALESCE(SUM(principal), 0) AS total_principal,
@@ -35,8 +30,8 @@ export class TenantAccountsService {
             COALESCE(SUM(principal) FILTER (WHERE status = 'DISBURSED'), 0) AS active_principal,
             COUNT(*) FILTER (WHERE status = 'CLOSED') AS closed_loans
           FROM loans WHERE deleted_at IS NULL
-        `),
-        client.query<{ total_collected: string; this_month: string; last_month: string }>(`
+        `);
+      const paymentsRes = await client.query<{ total_collected: string; this_month: string; last_month: string }>(`
           SELECT
             COALESCE(SUM(amount), 0) AS total_collected,
             COALESCE(SUM(amount) FILTER (WHERE payment_date >= date_trunc('month', CURRENT_DATE)), 0) AS this_month,
@@ -45,18 +40,17 @@ export class TenantAccountsService {
               AND payment_date < date_trunc('month', CURRENT_DATE)
             ), 0) AS last_month
           FROM payments
-        `),
-        client.query<{ overdue_count: string; overdue_amount: string }>(`
+        `);
+      const overdueRes = await client.query<{ overdue_count: string; overdue_amount: string }>(`
           SELECT COUNT(*) AS overdue_count,
                  COALESCE(SUM(total_amount - paid_amount), 0) AS overdue_amount
           FROM installments WHERE status = 'OVERDUE'
-        `),
-        client.query<{ status: string; count: string; principal: string }>(`
+        `);
+      const statusRes = await client.query<{ status: string; count: string; principal: string }>(`
           SELECT status, COUNT(*) AS count, COALESCE(SUM(principal), 0) AS principal
           FROM loans WHERE deleted_at IS NULL
           GROUP BY status
-        `),
-      ]);
+        `);
 
       const l = loansRes.rows[0];
       const p = paymentsRes.rows[0];
@@ -97,8 +91,8 @@ export class TenantAccountsService {
 
   async getMonthlyTrend(user: TenantJwtPayload, months = 6) {
     return this.withSchema(user.schemaName, async (client) => {
-      const [disbursedRes, collectedRes] = await Promise.all([
-        client.query<{ month: string; count: string; amount: string }>(`
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const disbursedRes = await client.query<{ month: string; count: string; amount: string }>(`
           SELECT to_char(date_trunc('month', disbursed_at), 'YYYY-MM') AS month,
                  COUNT(*) AS count,
                  COALESCE(SUM(principal), 0) AS amount
@@ -108,8 +102,8 @@ export class TenantAccountsService {
             AND deleted_at IS NULL
           GROUP BY 1
           ORDER BY 1
-        `),
-        client.query<{ month: string; count: string; amount: string }>(`
+        `);
+      const collectedRes = await client.query<{ month: string; count: string; amount: string }>(`
           SELECT to_char(date_trunc('month', payment_date), 'YYYY-MM') AS month,
                  COUNT(*) AS count,
                  COALESCE(SUM(amount), 0) AS amount
@@ -117,8 +111,7 @@ export class TenantAccountsService {
           WHERE payment_date >= date_trunc('month', CURRENT_DATE - interval '${months - 1} months')
           GROUP BY 1
           ORDER BY 1
-        `),
-      ]);
+        `);
 
       // Build full month range
       const monthMap: Record<string, { disbursedCount: number; disbursedAmount: number; collectedCount: number; collectedAmount: number }> = {};

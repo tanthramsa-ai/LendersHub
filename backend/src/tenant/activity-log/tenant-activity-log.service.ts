@@ -114,14 +114,13 @@ export class TenantActivityLogService {
       const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
       const offset = (page - 1) * limit;
 
-      const [dataRes, countRes, actionsRes] = await Promise.all([
-        client.query(
-          `SELECT * FROM activity_log ${where} ORDER BY created_at DESC LIMIT $${idx} OFFSET $${idx + 1}`,
-          [...params, limit, offset],
-        ),
-        client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM activity_log ${where}`, params),
-        client.query<{ action: string }>(`SELECT DISTINCT action FROM activity_log ORDER BY action ASC`),
-      ]);
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const dataRes = await client.query(
+        `SELECT * FROM activity_log ${where} ORDER BY created_at DESC LIMIT $${idx} OFFSET $${idx + 1}`,
+        [...params, limit, offset],
+      );
+      const countRes = await client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM activity_log ${where}`, params);
+      const actionsRes = await client.query<{ action: string }>(`SELECT DISTINCT action FROM activity_log ORDER BY action ASC`);
 
       return {
         total: parseInt(countRes.rows[0].total),

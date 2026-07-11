@@ -70,8 +70,8 @@ export class TenantLedgerService {
       const limitIdx = month ? 2 : 1;
       const offsetIdx = month ? 3 : 2;
 
-      const [paymentsRes, ftRes, countRes] = await Promise.all([
-        client.query(`
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const paymentsRes = await client.query(`
           SELECT
             p.id, p.payment_date AS txn_date, p.amount,
             p.payment_method::TEXT AS account_name,
@@ -88,8 +88,8 @@ export class TenantLedgerService {
           WHERE 1=1 ${monthFilter}
           ORDER BY p.payment_date DESC
           LIMIT $${limitIdx} OFFSET $${offsetIdx}
-        `, params),
-        client.query(`
+        `, params);
+      const ftRes = await client.query(`
           SELECT
             ft.id, ft.transaction_date AS txn_date, ft.amount,
             COALESCE(ft.account_name, 'CASH') AS account_name,
@@ -100,13 +100,12 @@ export class TenantLedgerService {
           FROM fund_transactions ft
           WHERE ft.type = 'CREDIT' ${monthFilterFt}
           ORDER BY ft.transaction_date DESC
-        `, month ? [month + '-01'] : []),
-        client.query(`
+        `, month ? [month + '-01'] : []);
+      const countRes = await client.query(`
           SELECT
             (SELECT COUNT(*) FROM payments p WHERE 1=1 ${monthFilter.replace('p.payment_date', 'p.payment_date')}) +
             (SELECT COUNT(*) FROM fund_transactions ft WHERE ft.type = 'CREDIT' ${monthFilterFt}) AS total
-        `, month ? [month + '-01'] : []),
-      ]);
+        `, month ? [month + '-01'] : []);
 
       const combined = [
         ...paymentsRes.rows.map((r) => ({
@@ -141,8 +140,8 @@ export class TenantLedgerService {
       const monthFilterFt = month ? `AND DATE_TRUNC('month', ft.transaction_date) = DATE_TRUNC('month', $1::date)` : '';
       const params: unknown[] = month ? [month + '-01'] : [];
 
-      const [loansRes, ftRes] = await Promise.all([
-        client.query(`
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const loansRes = await client.query(`
           SELECT
             l.id, DATE(l.disbursed_at) AS txn_date, l.principal AS amount,
             'CASH' AS account_name, 'Cash / Bank' AS display_account,
@@ -154,8 +153,8 @@ export class TenantLedgerService {
           JOIN customers c ON c.id = l.customer_id
           WHERE l.deleted_at IS NULL AND l.disbursed_at IS NOT NULL ${monthFilter}
           ORDER BY l.disbursed_at DESC
-        `, params),
-        client.query(`
+        `, params);
+      const ftRes = await client.query(`
           SELECT
             ft.id, ft.transaction_date AS txn_date, ft.amount,
             COALESCE(ft.account_name, 'CASH') AS account_name,
@@ -165,8 +164,7 @@ export class TenantLedgerService {
           FROM fund_transactions ft
           WHERE ft.type = 'DEBIT' ${monthFilterFt}
           ORDER BY ft.transaction_date DESC
-        `, params),
-      ]);
+        `, params);
 
       const combined = [
         ...loansRes.rows.map((r) => ({
@@ -302,17 +300,16 @@ export class TenantLedgerService {
       const limitIdx = month ? 2 : 1;
       const offsetIdx = month ? 3 : 2;
 
-      const [dataRes, countRes] = await Promise.all([
-        client.query(`
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const dataRes = await client.query(`
           SELECT ft.*, u.first_name || ' ' || u.last_name AS created_by_name
           FROM fund_transactions ft
           LEFT JOIN users u ON u.id = ft.created_by
           WHERE 1=1 ${monthFilter}
           ORDER BY ft.transaction_date DESC, ft.created_at DESC
           LIMIT $${limitIdx} OFFSET $${offsetIdx}
-        `, params),
-        client.query(`SELECT COUNT(*) AS total FROM fund_transactions ft WHERE 1=1 ${monthFilter}`, month ? [month + '-01'] : []),
-      ]);
+        `, params);
+      const countRes = await client.query(`SELECT COUNT(*) AS total FROM fund_transactions ft WHERE 1=1 ${monthFilter}`, month ? [month + '-01'] : []);
 
       return {
         data: dataRes.rows.map((r) => ({

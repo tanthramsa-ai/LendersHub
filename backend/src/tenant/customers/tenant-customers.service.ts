@@ -98,8 +98,8 @@ export class TenantCustomersService {
       const dataParams = [...filterParams, limit, offset];
       const limitIdx = idx; const offsetIdx = idx + 1;
 
-      const [dataRes, countRes] = await Promise.all([
-        client.query(`
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const dataRes = await client.query(`
           SELECT c.id, c.customer_code, c.first_name, c.last_name, c.email, c.phone,
                  c.pan_number, c.credit_score, c.city, c.state, c.locality, c.branch_id,
                  c.is_active, c.created_at,
@@ -109,9 +109,8 @@ export class TenantCustomersService {
           ${whereClause}
           ORDER BY c.customer_code ASC
           LIMIT $${limitIdx} OFFSET $${offsetIdx}
-        `, dataParams),
-        client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM customers c ${countWhere}`, countParams),
-      ]);
+        `, dataParams);
+      const countRes = await client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM customers c ${countWhere}`, countParams);
 
       return {
         data: dataRes.rows.map((r) => ({

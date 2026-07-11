@@ -20,22 +20,23 @@ export class TenantDashboardService {
 
       if (isCollector) {
         // Collectors see only their assigned installments
-        const [assignedRes, todayCollectedRes, overdueRes] = await Promise.all([
-          client.query<{ total: string; amount: string }>(
-            `SELECT COUNT(*) AS total, COALESCE(SUM(total_amount - paid_amount), 0) AS amount
+        // NOTE: queries run sequentially — a single pg connection can only
+        // execute one query at a time (concurrent client.query() on one client
+        // is deprecated and races). Serial has no cost here: one connection.
+        const assignedRes = await client.query<{ total: string; amount: string }>(
+          `SELECT COUNT(*) AS total, COALESCE(SUM(total_amount - paid_amount), 0) AS amount
              FROM installments WHERE assigned_to = $1 AND status IN ('PENDING','PARTIALLY_PAID','OVERDUE')`,
-            [user.sub],
-          ),
-          client.query<{ total: string }>(
-            `SELECT COALESCE(SUM(amount), 0) AS total FROM payments
+          [user.sub],
+        );
+        const todayCollectedRes = await client.query<{ total: string }>(
+          `SELECT COALESCE(SUM(amount), 0) AS total FROM payments
              WHERE collected_by = $1 AND payment_date = $2`,
-            [user.sub, today],
-          ),
-          client.query<{ total: string }>(
-            `SELECT COUNT(*) AS total FROM installments WHERE assigned_to = $1 AND status = 'OVERDUE'`,
-            [user.sub],
-          ),
-        ]);
+          [user.sub, today],
+        );
+        const overdueRes = await client.query<{ total: string }>(
+          `SELECT COUNT(*) AS total FROM installments WHERE assigned_to = $1 AND status = 'OVERDUE'`,
+          [user.sub],
+        );
         return {
           totalCustomers: 0,
           totalLoans: parseInt(assignedRes.rows[0].total),
@@ -49,33 +50,25 @@ export class TenantDashboardService {
 
       const officerCond = `AND l.loan_officer_id = $1`;
 
-      const [
-        customersRes,
-        loansRes,
-        activeLoansRes,
-        todayCollectionRes,
-        pendingRes,
-        overdueInstallmentsRes,
-      ] = await Promise.all([
-        isManager
-          ? client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM customers WHERE is_active = TRUE AND deleted_at IS NULL`)
-          : client.query<{ total: string }>(`SELECT COUNT(DISTINCT c.id) AS total FROM customers c JOIN loans l ON l.customer_id = c.id WHERE l.loan_officer_id = $1 AND c.deleted_at IS NULL`, [user.sub]),
-        isManager
-          ? client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM loans l WHERE deleted_at IS NULL`)
-          : client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM loans l WHERE deleted_at IS NULL ${officerCond}`, [user.sub]),
-        isManager
-          ? client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM loans l WHERE status = 'DISBURSED' AND deleted_at IS NULL`)
-          : client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM loans l WHERE status = 'DISBURSED' AND deleted_at IS NULL ${officerCond}`, [user.sub]),
-        isManager
-          ? client.query<{ total: string }>(`SELECT COALESCE(SUM(p.amount), 0) AS total FROM payments p JOIN loans l ON l.id = p.loan_id WHERE p.payment_date = $1`, [today])
-          : client.query<{ total: string }>(`SELECT COALESCE(SUM(p.amount), 0) AS total FROM payments p JOIN loans l ON l.id = p.loan_id WHERE p.payment_date = $1 AND l.loan_officer_id = $2`, [today, user.sub]),
-        isManager
-          ? client.query<{ total: string }>(`SELECT COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS total FROM installments i JOIN loans l ON l.id = i.loan_id WHERE i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE')`)
-          : client.query<{ total: string }>(`SELECT COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS total FROM installments i JOIN loans l ON l.id = i.loan_id WHERE i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE') ${officerCond}`, [user.sub]),
-        isManager
-          ? client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM installments i JOIN loans l ON l.id = i.loan_id WHERE i.status = 'OVERDUE'`)
-          : client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM installments i JOIN loans l ON l.id = i.loan_id WHERE i.status = 'OVERDUE' ${officerCond}`, [user.sub]),
-      ]);
+      // Sequential (see note above): one connection cannot run queries concurrently.
+      const customersRes = isManager
+        ? await client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM customers WHERE is_active = TRUE AND deleted_at IS NULL`)
+        : await client.query<{ total: string }>(`SELECT COUNT(DISTINCT c.id) AS total FROM customers c JOIN loans l ON l.customer_id = c.id WHERE l.loan_officer_id = $1 AND c.deleted_at IS NULL`, [user.sub]);
+      const loansRes = isManager
+        ? await client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM loans l WHERE deleted_at IS NULL`)
+        : await client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM loans l WHERE deleted_at IS NULL ${officerCond}`, [user.sub]);
+      const activeLoansRes = isManager
+        ? await client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM loans l WHERE status = 'DISBURSED' AND deleted_at IS NULL`)
+        : await client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM loans l WHERE status = 'DISBURSED' AND deleted_at IS NULL ${officerCond}`, [user.sub]);
+      const todayCollectionRes = isManager
+        ? await client.query<{ total: string }>(`SELECT COALESCE(SUM(p.amount), 0) AS total FROM payments p JOIN loans l ON l.id = p.loan_id WHERE p.payment_date = $1`, [today])
+        : await client.query<{ total: string }>(`SELECT COALESCE(SUM(p.amount), 0) AS total FROM payments p JOIN loans l ON l.id = p.loan_id WHERE p.payment_date = $1 AND l.loan_officer_id = $2`, [today, user.sub]);
+      const pendingRes = isManager
+        ? await client.query<{ total: string }>(`SELECT COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS total FROM installments i JOIN loans l ON l.id = i.loan_id WHERE i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE')`)
+        : await client.query<{ total: string }>(`SELECT COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS total FROM installments i JOIN loans l ON l.id = i.loan_id WHERE i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE') ${officerCond}`, [user.sub]);
+      const overdueInstallmentsRes = isManager
+        ? await client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM installments i JOIN loans l ON l.id = i.loan_id WHERE i.status = 'OVERDUE'`)
+        : await client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM installments i JOIN loans l ON l.id = i.loan_id WHERE i.status = 'OVERDUE' ${officerCond}`, [user.sub]);
 
       return {
         totalCustomers: parseInt(customersRes.rows[0].total),
@@ -100,16 +93,15 @@ export class TenantDashboardService {
       const officerParams = isManager ? [] : [user.sub];
       const officerWhere = isManager ? `WHERE l.deleted_at IS NULL` : `WHERE l.deleted_at IS NULL AND l.loan_officer_id = $1`;
 
-      const [loansRes, paymentsRes] = await Promise.all([
-        client.query(`
+      const loansRes = await client.query(`
           SELECT l.id, l.loan_number, l.principal, l.status, l.created_at,
                  c.first_name || ' ' || c.last_name AS customer_name
           FROM loans l
           JOIN customers c ON c.id = l.customer_id
           ${officerWhere}
           ORDER BY l.created_at DESC LIMIT 5
-        `, officerParams),
-        client.query(`
+        `, officerParams);
+      const paymentsRes = await client.query(`
           SELECT p.id, p.amount, p.payment_method, p.payment_date, p.created_at,
                  l.loan_number,
                  c.first_name || ' ' || c.last_name AS customer_name
@@ -118,8 +110,7 @@ export class TenantDashboardService {
           JOIN customers c ON c.id = l.customer_id
           ${officerWhere}
           ORDER BY p.created_at DESC LIMIT 5
-        `, officerParams),
-      ]);
+        `, officerParams);
 
       const activity = [
         ...loansRes.rows.map((r) => ({
@@ -175,8 +166,7 @@ export class TenantDashboardService {
         countParams = [user.sub];
       }
 
-      const [dataRes, countRes] = await Promise.all([
-        client.query(`
+      const dataRes = await client.query(`
           SELECT l.id, l.loan_number, l.principal, l.interest_rate, l.term_months,
                  l.status, l.disbursed_at, l.first_due_date, l.created_at,
                  c.first_name || ' ' || c.last_name AS customer_name,
@@ -189,9 +179,8 @@ export class TenantDashboardService {
           GROUP BY l.id, c.first_name, c.last_name, c.phone
           ORDER BY l.disbursed_at DESC NULLS LAST, l.created_at DESC
           LIMIT $1 OFFSET $2
-        `, params),
-        client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM loans l ${countWhere}`, countParams),
-      ]);
+        `, params);
+      const countRes = await client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM loans l ${countWhere}`, countParams);
 
       return {
         data: dataRes.rows.map((r) => ({

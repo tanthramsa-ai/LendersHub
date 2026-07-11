@@ -17,6 +17,7 @@ async function bootstrap() {
       /^https:\/\/lenders-hub[a-z0-9-]*\.vercel\.app$/,
       'http://localhost:3000',
       'http://localhost:3010',
+      'http://localhost:3020',
     ],
     credentials: true,
   });

@@ -52,19 +52,18 @@ export class TenantNotificationsService {
     return this.withSchema(user.schemaName, async (client) => {
       const offset = (page - 1) * limit;
       const extraWhere = unreadOnly ? 'AND is_read = FALSE' : '';
-      const [dataRes, countRes] = await Promise.all([
-        client.query(
-          `SELECT id, title, body, type, entity_type, entity_id, link, is_read, read_at, created_at
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const dataRes = await client.query(
+        `SELECT id, title, body, type, entity_type, entity_id, link, is_read, read_at, created_at
            FROM notifications WHERE user_id = $3 ${extraWhere}
            ORDER BY is_read ASC, created_at DESC
            LIMIT $1 OFFSET $2`,
-          [limit, offset, user.sub],
-        ),
-        client.query<{ total: string }>(
-          `SELECT COUNT(*) AS total FROM notifications WHERE user_id = $1 ${extraWhere}`,
-          [user.sub],
-        ),
-      ]);
+        [limit, offset, user.sub],
+      );
+      const countRes = await client.query<{ total: string }>(
+        `SELECT COUNT(*) AS total FROM notifications WHERE user_id = $1 ${extraWhere}`,
+        [user.sub],
+      );
       return {
         data: dataRes.rows.map((r) => ({
           id: r.id, title: r.title, body: r.body,

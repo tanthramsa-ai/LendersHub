@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   UnauthorizedException,
   NotFoundException,
   BadRequestException,
@@ -30,6 +31,13 @@ function randomOtp(): string {
 
 @Injectable()
 export class TenantAuthService {
+  private readonly logger = new Logger(TenantAuthService.name);
+
+  // TEMPORARY stopgap until SMS delivery is configured: when MASTER_OTP is set,
+  // it is accepted as a LOGIN OTP for any user (in addition to the real texted
+  // code). MUST be unset once a real SMS provider is live. See consumeOtp().
+  private readonly masterOtp = (process.env.MASTER_OTP ?? '').trim();
+
   constructor(
     private prisma: PrismaService,
     private jwt: JwtService,
@@ -261,6 +269,13 @@ export class TenantAuthService {
     otp: string,
     purpose: 'LOGIN' | 'RESET_PASSWORD',
   ): Promise<boolean> {
+    // TEMPORARY: master-OTP bypass for LOGIN only, while SMS is not configured.
+    // Restricted to LOGIN so it can never be used to reset a password.
+    if (purpose === 'LOGIN' && this.masterOtp && otp === this.masterOtp) {
+      this.logger.warn(`Master OTP used for login (user ${userId}). Remove MASTER_OTP once SMS is live.`);
+      return true;
+    }
+
     const res = await client.query<{ id: string }>(
       `SELECT id FROM otp_tokens
        WHERE user_id = $1 AND otp = $2 AND purpose = $3

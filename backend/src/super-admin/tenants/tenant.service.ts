@@ -257,12 +257,11 @@ export class TenantService {
 
   async listBranches(tenantId: string) {
     return this.withTenantSchema(tenantId, async (client) => {
-      const [branchRes, userCount, customerCount, loanCount] = await Promise.all([
-        client.query(`SELECT * FROM branches ORDER BY created_at ASC`),
-        client.query<{ branch_id: string | null; n: string }>(`SELECT branch_id, COUNT(*) AS n FROM users GROUP BY branch_id`),
-        client.query<{ branch_id: string | null; n: string }>(`SELECT branch_id, COUNT(*) AS n FROM customers GROUP BY branch_id`),
-        client.query<{ branch_id: string | null; n: string }>(`SELECT branch_id, COUNT(*) AS n FROM loans GROUP BY branch_id`).catch(() => ({ rows: [] as { branch_id: string | null; n: string }[] })),
-      ]);
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const branchRes = await client.query(`SELECT * FROM branches ORDER BY created_at ASC`);
+      const userCount = await client.query<{ branch_id: string | null; n: string }>(`SELECT branch_id, COUNT(*) AS n FROM users GROUP BY branch_id`);
+      const customerCount = await client.query<{ branch_id: string | null; n: string }>(`SELECT branch_id, COUNT(*) AS n FROM customers GROUP BY branch_id`);
+      const loanCount = await client.query<{ branch_id: string | null; n: string }>(`SELECT branch_id, COUNT(*) AS n FROM loans GROUP BY branch_id`).catch(() => ({ rows: [] as { branch_id: string | null; n: string }[] }));
       const uMap = Object.fromEntries(userCount.rows.map((r) => [r.branch_id ?? 'null', parseInt(r.n)]));
       const cMap = Object.fromEntries(customerCount.rows.map((r) => [r.branch_id ?? 'null', parseInt(r.n)]));
       const lMap = Object.fromEntries(loanCount.rows.map((r) => [r.branch_id ?? 'null', parseInt(r.n)]));
@@ -313,16 +312,15 @@ export class TenantService {
 
   async getBranch(tenantId: string, branchId: string) {
     return this.withTenantSchema(tenantId, async (client) => {
-      const [branchRes, counts, loanTypes] = await Promise.all([
-        client.query(`SELECT * FROM branches WHERE id = $1`, [branchId]),
-        client.query<{ users: string; customers: string; loans: string }>(`
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const branchRes = await client.query(`SELECT * FROM branches WHERE id = $1`, [branchId]);
+      const counts = await client.query<{ users: string; customers: string; loans: string }>(`
           SELECT
             (SELECT COUNT(*) FROM users     WHERE branch_id = $1) AS users,
             (SELECT COUNT(*) FROM customers WHERE branch_id = $1) AS customers,
             (SELECT COUNT(*) FROM loans     WHERE branch_id = $1) AS loans
-        `, [branchId]),
-        client.query(`SELECT id, name, description, min_amount, max_amount, min_interest_rate, max_interest_rate, min_term_months, max_term_months, is_active FROM loan_types ORDER BY name`).catch(() => ({ rows: [] })),
-      ]);
+        `, [branchId]);
+      const loanTypes = await client.query(`SELECT id, name, description, min_amount, max_amount, min_interest_rate, max_interest_rate, min_term_months, max_term_months, is_active FROM loan_types ORDER BY name`).catch(() => ({ rows: [] }));
       if (!branchRes.rows[0]) throw new NotFoundException('Branch not found');
       const b = branchRes.rows[0];
       const c = counts.rows[0];

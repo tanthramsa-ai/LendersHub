@@ -406,8 +406,8 @@ export class TenantLoansService {
       const limitIdx = idx;
       const offsetIdx = idx + 1;
 
-      const [dataRes, countRes] = await Promise.all([
-        client.query(`
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const dataRes = await client.query(`
           SELECT l.id, l.loan_number, l.principal, l.interest_rate, l.term_months,
                  l.status, l.purpose, l.disbursed_at, l.first_due_date, l.created_at,
                  c.first_name || ' ' || c.last_name AS customer_name, c.phone AS customer_phone,
@@ -419,13 +419,12 @@ export class TenantLoansService {
           GROUP BY l.id, c.first_name, c.last_name, c.phone
           ORDER BY l.loan_number ASC
           LIMIT $${limitIdx} OFFSET $${offsetIdx}
-        `, dataParams),
-        client.query<{ total: string }>(`
+        `, dataParams);
+      const countRes = await client.query<{ total: string }>(`
           SELECT COUNT(*) AS total FROM loans l
           JOIN customers c ON c.id = l.customer_id
           ${whereClause}
-        `, countParams),
-      ]);
+        `, countParams);
 
       return {
         data: dataRes.rows.map((r) => ({
@@ -445,8 +444,8 @@ export class TenantLoansService {
 
   async findOne(user: TenantJwtPayload, id: string) {
     return this.withSchema(user.schemaName, async (client) => {
-      const [loanRes, installmentsRes, paymentsRes] = await Promise.all([
-        client.query(`
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const loanRes = await client.query(`
           SELECT l.*, c.first_name || ' ' || c.last_name AS customer_name,
                  c.phone AS customer_phone, c.id AS customer_id_ref,
                  b.name AS branch_name
@@ -454,10 +453,9 @@ export class TenantLoansService {
           JOIN customers c ON c.id = l.customer_id
           LEFT JOIN branches b ON b.id = l.branch_id
           WHERE l.id = $1
-        `, [id]),
-        client.query(`SELECT * FROM installments WHERE loan_id = $1 ORDER BY installment_number`, [id]),
-        client.query(`SELECT * FROM payments WHERE loan_id = $1 ORDER BY created_at DESC`, [id]),
-      ]);
+        `, [id]);
+      const installmentsRes = await client.query(`SELECT * FROM installments WHERE loan_id = $1 ORDER BY installment_number`, [id]);
+      const paymentsRes = await client.query(`SELECT * FROM payments WHERE loan_id = $1 ORDER BY created_at DESC`, [id]);
 
       if (!loanRes.rows[0]) throw new NotFoundException('Loan not found');
       const l = loanRes.rows[0];
@@ -651,8 +649,8 @@ export class TenantLoansService {
       const dataParams = [...filterParams, limit, offset];
       const limitIdx = idx; const offsetIdx = idx + 1;
 
-      const [dataRes, countRes] = await Promise.all([
-        client.query(`
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const dataRes = await client.query(`
           SELECT l.id, l.loan_number, l.principal, l.interest_rate,
                  l.term_months AS term_weeks, l.emi_amount, l.status,
                  l.cycle_type, l.calculation_type,
@@ -681,12 +679,11 @@ export class TenantLoansService {
           GROUP BY l.id, c.id, c.first_name, c.last_name, c.phone, b.name
           ORDER BY l.loan_number ASC
           LIMIT $${limitIdx} OFFSET $${offsetIdx}
-        `, dataParams),
-        client.query<{ total: string }>(
+        `, dataParams);
+      const countRes = await client.query<{ total: string }>(
           `SELECT COUNT(*) AS total FROM loans l JOIN customers c ON c.id = l.customer_id ${whereClause}`,
           filterParams,
-        ),
-      ]);
+        );
 
       return {
         data: dataRes.rows.map((r) => ({
@@ -831,8 +828,8 @@ export class TenantLoansService {
       const dataParams = [...filterParams, limit, offset];
       const limitIdx = idx; const offsetIdx = idx + 1;
 
-      const [dataRes, countRes] = await Promise.all([
-        client.query(`
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const dataRes = await client.query(`
           SELECT l.id, l.loan_number, l.principal, l.interest_rate,
                  l.term_months AS term_days, l.emi_amount, l.status,
                  l.cycle_type, l.calculation_type,
@@ -860,12 +857,11 @@ export class TenantLoansService {
           GROUP BY l.id, c.id, c.first_name, c.last_name, c.phone, b.name
           ORDER BY l.loan_number ASC
           LIMIT $${limitIdx} OFFSET $${offsetIdx}
-        `, dataParams),
-        client.query<{ total: string }>(
+        `, dataParams);
+      const countRes = await client.query<{ total: string }>(
           `SELECT COUNT(*) AS total FROM loans l JOIN customers c ON c.id = l.customer_id ${whereClause}`,
           filterParams,
-        ),
-      ]);
+        );
 
       return {
         data: dataRes.rows.map((r) => ({
@@ -1005,8 +1001,8 @@ export class TenantLoansService {
       const dataParams = [...filterParams, limit, offset];
       const limitIdx = idx; const offsetIdx = idx + 1;
 
-      const [dataRes, countRes] = await Promise.all([
-        client.query(`
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const dataRes = await client.query(`
           SELECT l.id, l.loan_number, l.principal, l.interest_rate,
                  l.term_months, l.emi_amount, l.status,
                  l.disbursed_at, l.first_due_date, l.created_at,
@@ -1028,12 +1024,11 @@ export class TenantLoansService {
           GROUP BY l.id, c.id, c.first_name, c.last_name, c.phone, b.name
           ORDER BY l.loan_number ASC
           LIMIT $${limitIdx} OFFSET $${offsetIdx}
-        `, dataParams),
-        client.query<{ total: string }>(
+        `, dataParams);
+      const countRes = await client.query<{ total: string }>(
           `SELECT COUNT(*) AS total FROM loans l JOIN customers c ON c.id = l.customer_id ${whereClause}`,
           filterParams,
-        ),
-      ]);
+        );
 
       return {
         data: dataRes.rows.map((r) => ({
@@ -1172,8 +1167,8 @@ export class TenantLoansService {
       const dataParams = [...filterParams, limit, offset];
       const limitIdx = idx; const offsetIdx = idx + 1;
 
-      const [dataRes, countRes] = await Promise.all([
-        client.query(`
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const dataRes = await client.query(`
           SELECT l.id, l.loan_number, l.principal, l.interest_rate,
                  l.term_months, l.emi_amount, l.status,
                  l.disbursed_at, l.first_due_date, l.created_at,
@@ -1195,12 +1190,11 @@ export class TenantLoansService {
           GROUP BY l.id, c.id, c.first_name, c.last_name, c.phone, b.name
           ORDER BY l.loan_number ASC
           LIMIT $${limitIdx} OFFSET $${offsetIdx}
-        `, dataParams),
-        client.query<{ total: string }>(
+        `, dataParams);
+      const countRes = await client.query<{ total: string }>(
           `SELECT COUNT(*) AS total FROM loans l JOIN customers c ON c.id = l.customer_id ${whereClause}`,
           filterParams,
-        ),
-      ]);
+        );
 
       return {
         data: dataRes.rows.map((r) => ({
@@ -1334,8 +1328,8 @@ export class TenantLoansService {
       }
 
       const where = `WHERE ${conditions.join(' AND ')}`;
-      const [dataRes, countRes] = await Promise.all([
-        client.query(`
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const dataRes = await client.query(`
           SELECT l.id, l.loan_number, l.customer_id, l.principal, l.interest_rate,
                  l.term_months, l.emi_amount, l.status, l.disbursed_at, l.first_due_date,
                  l.calculation_type, l.branch_id, l.created_at,
@@ -1353,13 +1347,12 @@ export class TenantLoansService {
           GROUP BY l.id, c.first_name, c.last_name, c.phone, b.name
           ORDER BY l.loan_number ASC
           LIMIT $${idx} OFFSET $${idx + 1}
-        `, [...filterParams, limit, offset]),
-        client.query<{ total: string }>(`
+        `, [...filterParams, limit, offset]);
+      const countRes = await client.query<{ total: string }>(`
           SELECT COUNT(*) AS total FROM loans l
           JOIN customers c ON c.id = l.customer_id
           ${where}
-        `, filterParams),
-      ]);
+        `, filterParams);
 
       return {
         data: dataRes.rows.map((r) => ({

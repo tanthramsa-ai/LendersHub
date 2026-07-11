@@ -44,25 +44,24 @@ export class TenantCollectionsService {
   async getStats(user: TenantJwtPayload) {
     return this.withSchema(user.schemaName, async (client) => {
       const today = new Date().toISOString().slice(0, 10);
-      const [todayRes, overdueRes, collectedRes, pendingRes] = await Promise.all([
-        client.query<{ count: string; amount: string }>(
-          `SELECT COUNT(*) AS count, COALESCE(SUM(total_amount - paid_amount), 0) AS amount
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const todayRes = await client.query<{ count: string; amount: string }>(
+        `SELECT COUNT(*) AS count, COALESCE(SUM(total_amount - paid_amount), 0) AS amount
            FROM installments WHERE due_date = $1 AND status IN ('PENDING','PARTIALLY_PAID')`,
-          [today],
-        ),
-        client.query<{ count: string; amount: string }>(
-          `SELECT COUNT(*) AS count, COALESCE(SUM(total_amount - paid_amount), 0) AS amount
+        [today],
+      );
+      const overdueRes = await client.query<{ count: string; amount: string }>(
+        `SELECT COUNT(*) AS count, COALESCE(SUM(total_amount - paid_amount), 0) AS amount
            FROM installments WHERE status = 'OVERDUE'`,
-        ),
-        client.query<{ amount: string }>(
-          `SELECT COALESCE(SUM(amount), 0) AS amount FROM payments WHERE payment_date = $1`,
-          [today],
-        ),
-        client.query<{ amount: string }>(
-          `SELECT COALESCE(SUM(total_amount - paid_amount), 0) AS amount
+      );
+      const collectedRes = await client.query<{ amount: string }>(
+        `SELECT COALESCE(SUM(amount), 0) AS amount FROM payments WHERE payment_date = $1`,
+        [today],
+      );
+      const pendingRes = await client.query<{ amount: string }>(
+        `SELECT COALESCE(SUM(total_amount - paid_amount), 0) AS amount
            FROM installments WHERE status IN ('PENDING','PARTIALLY_PAID','OVERDUE')`,
-        ),
-      ]);
+      );
       return {
         todayCount: parseInt(todayRes.rows[0].count),
         todayAmount: parseFloat(todayRes.rows[0].amount),
@@ -92,9 +91,9 @@ export class TenantCollectionsService {
         ? `AND (c.first_name || ' ' || c.last_name ILIKE $2 OR l.loan_number ILIKE $2 OR c.phone ILIKE $2)`
         : '';
 
-      const [dataRes, countRes] = await Promise.all([
-        client.query(
-          `SELECT i.id, i.installment_number, i.due_date, i.total_amount, i.paid_amount,
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const dataRes = await client.query(
+        `SELECT i.id, i.installment_number, i.due_date, i.total_amount, i.paid_amount,
                   i.total_amount - i.paid_amount AS balance, i.status, i.assigned_to,
                   l.id AS loan_id, l.loan_number,
                   c.id AS customer_id, c.first_name || ' ' || c.last_name AS customer_name, c.phone,
@@ -107,17 +106,16 @@ export class TenantCollectionsService {
            ${selfFilter} ${searchFilter}
            ORDER BY c.first_name, l.loan_number
            LIMIT $2 OFFSET $3`,
-          dataParams,
-        ),
-        client.query<{ total: string }>(
-          `SELECT COUNT(*) AS total FROM installments i
+        dataParams,
+      );
+      const countRes = await client.query<{ total: string }>(
+        `SELECT COUNT(*) AS total FROM installments i
            JOIN loans l ON l.id = i.loan_id
            JOIN customers c ON c.id = l.customer_id
            WHERE i.due_date = $1 AND i.status IN ('PENDING','PARTIALLY_PAID')
            ${selfFilter} ${countFilter}`,
-          countParams,
-        ),
-      ]);
+        countParams,
+      );
 
       return { data: dataRes.rows.map(this.mapRow), total: parseInt(countRes.rows[0].total), page, limit };
     });
@@ -139,9 +137,9 @@ export class TenantCollectionsService {
         ? `AND (c.first_name || ' ' || c.last_name ILIKE $1 OR l.loan_number ILIKE $1 OR c.phone ILIKE $1)`
         : '';
 
-      const [dataRes, countRes] = await Promise.all([
-        client.query(
-          `SELECT i.id, i.installment_number, i.due_date, i.total_amount, i.paid_amount,
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const dataRes = await client.query(
+        `SELECT i.id, i.installment_number, i.due_date, i.total_amount, i.paid_amount,
                   i.total_amount - i.paid_amount AS balance, i.status, i.assigned_to,
                   CURRENT_DATE - i.due_date AS days_overdue,
                   l.id AS loan_id, l.loan_number,
@@ -155,17 +153,16 @@ export class TenantCollectionsService {
            ${selfFilter} ${searchFilter}
            ORDER BY i.due_date ASC
            LIMIT $1 OFFSET $2`,
-          dataParams,
-        ),
-        client.query<{ total: string }>(
-          `SELECT COUNT(*) AS total FROM installments i
+        dataParams,
+      );
+      const countRes = await client.query<{ total: string }>(
+        `SELECT COUNT(*) AS total FROM installments i
            JOIN loans l ON l.id = i.loan_id
            JOIN customers c ON c.id = l.customer_id
            WHERE i.status = 'OVERDUE'
            ${selfFilter} ${countFilter}`,
-          countParams,
-        ),
-      ]);
+        countParams,
+      );
 
       return {
         data: dataRes.rows.map((r) => ({ ...this.mapRow(r), daysOverdue: parseInt(r.days_overdue ?? 0) })),
