@@ -1,6 +1,6 @@
 import {
   Controller, Get, Post, Patch, Delete, Param, Body, Query,
-  UseGuards, Request, ParseIntPipe, DefaultValuePipe,
+  UseGuards, Request, ParseIntPipe, DefaultValuePipe, ParseUUIDPipe,
 } from '@nestjs/common';
 import { TenantLoanTypesService, CreateLoanTypeDto } from './tenant-loan-types.service';
 import { TenantJwtGuard } from '../auth/guards/tenant-jwt.guard';
@@ -17,14 +17,14 @@ export class TenantLoanTypesController {
   }
 
   @Get(':id')
-  findOne(@Request() req: { user: TenantJwtPayload }, @Param('id') id: string) {
+  findOne(@Request() req: { user: TenantJwtPayload }, @Param('id', ParseUUIDPipe) id: string) {
     return this.svc.findOne(req.user, id);
   }
 
   @Get(':id/loans')
   getLoansByType(
     @Request() req: { user: TenantJwtPayload },
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
     @Query('search') search?: string,
@@ -35,7 +35,7 @@ export class TenantLoanTypesController {
   @Get(':id/customers')
   getCustomersByType(
     @Request() req: { user: TenantJwtPayload },
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
     @Query('search') search?: string,
@@ -51,14 +51,14 @@ export class TenantLoanTypesController {
   @Patch(':id')
   update(
     @Request() req: { user: TenantJwtPayload },
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: Partial<CreateLoanTypeDto> & { isActive?: boolean },
   ) {
     return this.svc.update(req.user, id, dto);
   }
 
   @Delete(':id')
-  remove(@Request() req: { user: TenantJwtPayload }, @Param('id') id: string) {
+  remove(@Request() req: { user: TenantJwtPayload }, @Param('id', ParseUUIDPipe) id: string) {
     return this.svc.remove(req.user, id);
   }
 }

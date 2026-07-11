@@ -78,18 +78,35 @@ export class TenantCollectionsService {
     return this.withSchema(user.schemaName, async (client) => {
       const today = new Date().toISOString().slice(0, 10);
       const offset = (page - 1) * limit;
-      // Agent (LOAN_OFFICER) sees only installments assigned to them or in their loans
-      const selfFilter = user.role === 'LOAN_OFFICER'
-        ? `AND (i.assigned_to = '${user.sub}' OR l.loan_officer_id = '${user.sub}')`
-        : '';
-      const searchFilter = search
-        ? `AND (c.first_name || ' ' || c.last_name ILIKE $4 OR l.loan_number ILIKE $4 OR c.phone ILIKE $4)`
-        : '';
-      const dataParams: unknown[] = search ? [today, limit, offset, `%${search}%`] : [today, limit, offset];
-      const countParams: unknown[] = search ? [today, `%${search}%`] : [today];
-      const countFilter = search
-        ? `AND (c.first_name || ' ' || c.last_name ILIKE $2 OR l.loan_number ILIKE $2 OR c.phone ILIKE $2)`
-        : '';
+      // Agent (LOAN_OFFICER) sees only installments assigned to them or in their loans.
+      // user.sub is bound as a parameter (not interpolated) — data and count queries
+      // have independent parameter lists, so they build filters separately.
+      const dataParams: unknown[] = [today, limit, offset];
+      let selfFilter = '';
+      if (user.role === 'LOAN_OFFICER') {
+        dataParams.push(user.sub);
+        const p = `$${dataParams.length}`;
+        selfFilter = `AND (i.assigned_to = ${p} OR l.loan_officer_id = ${p})`;
+      }
+      let searchFilter = '';
+      if (search) {
+        dataParams.push(`%${search}%`);
+        const p = `$${dataParams.length}`;
+        searchFilter = `AND (c.first_name || ' ' || c.last_name ILIKE ${p} OR l.loan_number ILIKE ${p} OR c.phone ILIKE ${p})`;
+      }
+      const countParams: unknown[] = [today];
+      let countSelf = '';
+      if (user.role === 'LOAN_OFFICER') {
+        countParams.push(user.sub);
+        const p = `$${countParams.length}`;
+        countSelf = `AND (i.assigned_to = ${p} OR l.loan_officer_id = ${p})`;
+      }
+      let countFilter = '';
+      if (search) {
+        countParams.push(`%${search}%`);
+        const p = `$${countParams.length}`;
+        countFilter = `AND (c.first_name || ' ' || c.last_name ILIKE ${p} OR l.loan_number ILIKE ${p} OR c.phone ILIKE ${p})`;
+      }
 
       // Sequential: a single pg connection cannot run queries concurrently.
       const dataRes = await client.query(
@@ -113,7 +130,7 @@ export class TenantCollectionsService {
            JOIN loans l ON l.id = i.loan_id
            JOIN customers c ON c.id = l.customer_id
            WHERE i.due_date = $1 AND i.status IN ('PENDING','PARTIALLY_PAID')
-           ${selfFilter} ${countFilter}`,
+           ${countSelf} ${countFilter}`,
         countParams,
       );
 
@@ -125,17 +142,34 @@ export class TenantCollectionsService {
     await this.ensureAssignedTo(user.schemaName);
     return this.withSchema(user.schemaName, async (client) => {
       const offset = (page - 1) * limit;
-      const selfFilter = user.role === 'LOAN_OFFICER'
-        ? `AND (i.assigned_to = '${user.sub}' OR l.loan_officer_id = '${user.sub}')`
-        : '';
-      const searchFilter = search
-        ? `AND (c.first_name || ' ' || c.last_name ILIKE $3 OR l.loan_number ILIKE $3 OR c.phone ILIKE $3)`
-        : '';
-      const dataParams: unknown[] = search ? [limit, offset, `%${search}%`] : [limit, offset];
-      const countParams: unknown[] = search ? [`%${search}%`] : [];
-      const countFilter = search
-        ? `AND (c.first_name || ' ' || c.last_name ILIKE $1 OR l.loan_number ILIKE $1 OR c.phone ILIKE $1)`
-        : '';
+      // user.sub bound as a parameter (not interpolated); data/count queries build
+      // their filters against independent parameter lists.
+      const dataParams: unknown[] = [limit, offset];
+      let selfFilter = '';
+      if (user.role === 'LOAN_OFFICER') {
+        dataParams.push(user.sub);
+        const p = `$${dataParams.length}`;
+        selfFilter = `AND (i.assigned_to = ${p} OR l.loan_officer_id = ${p})`;
+      }
+      let searchFilter = '';
+      if (search) {
+        dataParams.push(`%${search}%`);
+        const p = `$${dataParams.length}`;
+        searchFilter = `AND (c.first_name || ' ' || c.last_name ILIKE ${p} OR l.loan_number ILIKE ${p} OR c.phone ILIKE ${p})`;
+      }
+      const countParams: unknown[] = [];
+      let countSelf = '';
+      if (user.role === 'LOAN_OFFICER') {
+        countParams.push(user.sub);
+        const p = `$${countParams.length}`;
+        countSelf = `AND (i.assigned_to = ${p} OR l.loan_officer_id = ${p})`;
+      }
+      let countFilter = '';
+      if (search) {
+        countParams.push(`%${search}%`);
+        const p = `$${countParams.length}`;
+        countFilter = `AND (c.first_name || ' ' || c.last_name ILIKE ${p} OR l.loan_number ILIKE ${p} OR c.phone ILIKE ${p})`;
+      }
 
       // Sequential: a single pg connection cannot run queries concurrently.
       const dataRes = await client.query(
@@ -160,7 +194,7 @@ export class TenantCollectionsService {
            JOIN loans l ON l.id = i.loan_id
            JOIN customers c ON c.id = l.customer_id
            WHERE i.status = 'OVERDUE'
-           ${selfFilter} ${countFilter}`,
+           ${countSelf} ${countFilter}`,
         countParams,
       );
 

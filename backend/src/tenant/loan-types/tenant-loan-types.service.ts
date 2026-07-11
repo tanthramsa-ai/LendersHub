@@ -93,22 +93,26 @@ export class TenantLoanTypesService {
   }
 
   async getLoansByType(user: TenantJwtPayload, id: string, page: number, limit: number, search?: string) {
+    if (!MANAGER_ROLES.includes(user.role)) {
+      throw new ForbiddenException('Only Owner, Manager or Admin can view loan-type breakdowns');
+    }
     return this.withSchema(user.schemaName, async (client) => {
       const offset = (page - 1) * limit;
-      const conditions = [`l.loan_type_id = '${id}'`, `l.deleted_at IS NULL`];
-      const dataParams: unknown[] = [limit, offset];
-      const countParams: unknown[] = [];
+      // id is passed as a bound parameter ($3) — never interpolated (prevents SQL injection).
+      const conditions = [`l.loan_type_id = $3`, `l.deleted_at IS NULL`];
+      const dataParams: unknown[] = [limit, offset, id];
+      const countParams: unknown[] = [id];
 
       if (search) {
         const sp = `%${search}%`;
-        conditions.push(`(c.first_name || ' ' || c.last_name ILIKE $3 OR l.loan_number ILIKE $3 OR c.phone ILIKE $3)`);
+        conditions.push(`(c.first_name || ' ' || c.last_name ILIKE $4 OR l.loan_number ILIKE $4 OR c.phone ILIKE $4)`);
         dataParams.push(sp);
         countParams.push(sp);
       }
       const where = `WHERE ${conditions.join(' AND ')}`;
       const countWhere = search
-        ? `WHERE l.loan_type_id = '${id}' AND l.deleted_at IS NULL AND (c.first_name || ' ' || c.last_name ILIKE $1 OR l.loan_number ILIKE $1 OR c.phone ILIKE $1)`
-        : `WHERE l.loan_type_id = '${id}' AND l.deleted_at IS NULL`;
+        ? `WHERE l.loan_type_id = $1 AND l.deleted_at IS NULL AND (c.first_name || ' ' || c.last_name ILIKE $2 OR l.loan_number ILIKE $2 OR c.phone ILIKE $2)`
+        : `WHERE l.loan_type_id = $1 AND l.deleted_at IS NULL`;
 
       // Sequential: a single pg connection cannot run queries concurrently.
       const dataRes = await client.query(`
@@ -143,22 +147,26 @@ export class TenantLoanTypesService {
   }
 
   async getCustomersByType(user: TenantJwtPayload, id: string, page: number, limit: number, search?: string) {
+    if (!MANAGER_ROLES.includes(user.role)) {
+      throw new ForbiddenException('Only Owner, Manager or Admin can view loan-type breakdowns');
+    }
     return this.withSchema(user.schemaName, async (client) => {
       const offset = (page - 1) * limit;
-      const conditions = [`l.loan_type_id = '${id}'`, `l.deleted_at IS NULL`];
-      const dataParams: unknown[] = [limit, offset];
-      const countParams: unknown[] = [];
+      // id is passed as a bound parameter ($3) — never interpolated (prevents SQL injection).
+      const conditions = [`l.loan_type_id = $3`, `l.deleted_at IS NULL`];
+      const dataParams: unknown[] = [limit, offset, id];
+      const countParams: unknown[] = [id];
 
       if (search) {
         const sp = `%${search}%`;
-        conditions.push(`(c.first_name || ' ' || c.last_name ILIKE $3 OR c.phone ILIKE $3 OR c.customer_code ILIKE $3)`);
+        conditions.push(`(c.first_name || ' ' || c.last_name ILIKE $4 OR c.phone ILIKE $4 OR c.customer_code ILIKE $4)`);
         dataParams.push(sp);
         countParams.push(sp);
       }
       const where = `WHERE ${conditions.join(' AND ')}`;
       const countWhere = search
-        ? `WHERE l.loan_type_id = '${id}' AND l.deleted_at IS NULL AND (c.first_name || ' ' || c.last_name ILIKE $1 OR c.phone ILIKE $1 OR c.customer_code ILIKE $1)`
-        : `WHERE l.loan_type_id = '${id}' AND l.deleted_at IS NULL`;
+        ? `WHERE l.loan_type_id = $1 AND l.deleted_at IS NULL AND (c.first_name || ' ' || c.last_name ILIKE $2 OR c.phone ILIKE $2 OR c.customer_code ILIKE $2)`
+        : `WHERE l.loan_type_id = $1 AND l.deleted_at IS NULL`;
 
       // Sequential: a single pg connection cannot run queries concurrently.
       const dataRes = await client.query(`
