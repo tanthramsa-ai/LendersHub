@@ -4,9 +4,9 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
-  getDashboardStats, getRecentActivity, getActiveLoans,
+  getDashboardStats, getRecentActivity, getActiveLoans, getMonthlyTrend,
   getTenantSession,
-  DashboardStats, ActivityItem, ActiveLoan,
+  DashboardStats, ActivityItem, ActiveLoan, MonthlyTrend,
   MANAGER_ROLES, LOAN_ROLES,
 } from '@/services/tenant-api';
 
@@ -24,6 +24,11 @@ function fmtDate(d: string | null) {
   return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
+function fmtMonth(m: string) {
+  const [y, mo] = m.split('-');
+  return new Date(parseInt(y), parseInt(mo) - 1).toLocaleDateString('en-IN', { month: 'short' });
+}
+
 const STATUS_COLORS: Record<string, string> = {
   DISBURSED: 'bg-green-100 text-green-700',
   PENDING:   'bg-yellow-100 text-yellow-700',
@@ -32,9 +37,6 @@ const STATUS_COLORS: Record<string, string> = {
   DEFAULTED: 'bg-red-100 text-red-700',
   REJECTED:  'bg-red-100 text-red-600',
 };
-
-const MOCK_CHART_BARS = [45, 62, 38, 75, 55, 80, 68, 91, 72, 85, 60, 95];
-const MOCK_MONTHS = ['Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar', 'Apr', 'May'];
 
 export default function TenantDashboardPage() {
   const params = useParams<{ subdomain: string }>();
@@ -53,16 +55,18 @@ export default function TenantDashboardPage() {
   const [loans, setLoans] = useState<ActiveLoan[]>([]);
   const [loansTotal, setLoansTotal] = useState(0);
   const [loansPage, setLoansPage] = useState(1);
+  const [trend, setTrend] = useState<MonthlyTrend[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setLoading(true);
-    Promise.all([getDashboardStats(), getRecentActivity(), getActiveLoans(1, 10)])
-      .then(([s, a, l]) => {
+    Promise.all([getDashboardStats(), getRecentActivity(), getActiveLoans(1, 10), getMonthlyTrend(12)])
+      .then(([s, a, l, t]) => {
         setStats(s as DashboardStats & { roleView?: string });
         setActivity(a.activity);
         setLoans(l.data);
         setLoansTotal(l.total);
+        setTrend(t);
       })
       .catch(console.error)
       .finally(() => setLoading(false));
@@ -207,21 +211,33 @@ export default function TenantDashboardPage() {
                 <p className="text-xs text-gray-400 mt-0.5">Monthly collection performance</p>
               </div>
             </div>
-            <div className="flex items-end gap-1.5 h-36">
-              {MOCK_CHART_BARS.map((h, i) => (
-                <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                  <div
-                    className="w-full rounded-t-sm transition-all"
-                    style={{ height: `${h}%`, backgroundColor: i === MOCK_CHART_BARS.length - 1 ? ACCENT : `${BRAND}66` }}
-                  />
+            {trend.length === 0 ? (
+              <div className="flex items-center justify-center h-36">
+                <p className="text-sm text-gray-400">No collection data yet</p>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-end gap-1.5 h-36">
+                  {trend.map((t, i) => {
+                    const maxVal = Math.max(...trend.map((d) => d.collectedAmount), 1);
+                    return (
+                      <div key={t.month} className="flex-1 flex flex-col items-center gap-1">
+                        <div
+                          className="w-full rounded-t-sm transition-all min-h-[2px]"
+                          style={{ height: `${(t.collectedAmount / maxVal) * 100}%`, backgroundColor: i === trend.length - 1 ? ACCENT : `${BRAND}66` }}
+                          title={fmtCurrency(t.collectedAmount)}
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
-              ))}
-            </div>
-            <div className="flex gap-1.5 mt-1">
-              {MOCK_MONTHS.map((m, i) => (
-                <div key={i} className="flex-1 text-center text-xs text-gray-400 truncate">{m}</div>
-              ))}
-            </div>
+                <div className="flex gap-1.5 mt-1">
+                  {trend.map((t) => (
+                    <div key={t.month} className="flex-1 text-center text-xs text-gray-400 truncate">{fmtMonth(t.month)}</div>
+                  ))}
+                </div>
+              </>
+            )}
             <div className="flex items-center gap-4 mt-4 pt-4 border-t border-gray-100">
               <div>
                 <p className="text-xs text-gray-400">Today</p>
@@ -276,7 +292,7 @@ export default function TenantDashboardPage() {
               </div>
             )}
             <div className="mt-4 pt-4 border-t border-gray-100">
-              <Link href={`/tenant/${subdomain}/collections`} className="text-xs font-medium flex items-center justify-center gap-1" style={{ color: BRAND }}>
+              <Link href={`/tenant/${subdomain}/activity`} className="text-xs font-medium flex items-center justify-center gap-1" style={{ color: BRAND }}>
                 View all activity
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
               </Link>
@@ -385,7 +401,10 @@ export default function TenantDashboardPage() {
       </div>
 
       {/* Quick Actions */}
-      <div className={`grid gap-4 grid-cols-2 lg:grid-cols-${quickActions.length}`}>
+      <div className={`grid gap-4 grid-cols-2 ${
+        quickActions.length === 1 ? 'lg:grid-cols-1' :
+        quickActions.length === 2 ? 'lg:grid-cols-2' : 'lg:grid-cols-3'
+      }`}>
         {quickActions.map((a) => (
           <Link key={a.href} href={a.href} className="bg-white rounded-xl p-4 shadow-sm border border-gray-100 hover:shadow-md transition-shadow flex items-center gap-4">
             <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0" style={{ backgroundColor: `${a.color}15` }}>

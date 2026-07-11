@@ -26,30 +26,21 @@ const SUBROUTE_PERMISSIONS: { suffix: string; roles: UserRole[] }[] = [
 const BRAND = '#0F4C81';
 const BRAND_DARK = '#0a3660';
 
-const NAV: { href: string; label: string; icon: React.ReactNode; roles: UserRole[] }[] = [
+type NavItem = { href: string; label: string; icon: React.ReactNode; roles: UserRole[] };
+
+// Loan-cadence variants are collapsed into a single "Loans" sidebar group so the
+// full-access roles (OWNER/MANAGER/ADMIN) aren't staring at 6 loan-related rows
+// competing for equal weight with Customers, Ledger, Team, etc.
+const LOANS_GROUP_ICON = (
+  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+  </svg>
+);
+
+const LOANS_GROUP_ITEMS: NavItem[] = [
   {
-    href: 'dashboard', label: 'Dashboard', roles: ALL_ROLES,
-    icon: (
-      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-      </svg>
-    ),
-  },
-  {
-    href: 'customers', label: 'Customers', roles: ALL_ROLES,
-    icon: (
-      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
-      </svg>
-    ),
-  },
-  {
-    href: 'loans', label: 'Loans', roles: ALL_ROLES,
-    icon: (
-      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-      </svg>
-    ),
+    href: 'loans', label: 'All Loans', roles: ALL_ROLES,
+    icon: LOANS_GROUP_ICON,
   },
   {
     href: 'weekly-loans', label: 'Weekly Loans', roles: CAN_CREATE_LOANS,
@@ -84,18 +75,42 @@ const NAV: { href: string; label: string; icon: React.ReactNode; roles: UserRole
     ),
   },
   {
-    href: 'ledger', label: 'Ledger', roles: ALL_ROLES,
-    icon: (
-      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 11h.01M12 11h.01M15 11h.01M12 7h.01M15 7h.01M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-      </svg>
-    ),
-  },
-  {
     href: 'loan-types', label: 'Loan Types', roles: MANAGER_ROLES,
     icon: (
       <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+      </svg>
+    ),
+  },
+];
+
+// Rendered before the collapsible Loans group.
+const NAV_TOP: NavItem[] = [
+  {
+    href: 'dashboard', label: 'Dashboard', roles: ALL_ROLES,
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+      </svg>
+    ),
+  },
+  {
+    href: 'customers', label: 'Customers', roles: ALL_ROLES,
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+      </svg>
+    ),
+  },
+];
+
+// Rendered after the collapsible Loans group.
+const NAV_BOTTOM: NavItem[] = [
+  {
+    href: 'ledger', label: 'Ledger', roles: ALL_ROLES,
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 11h.01M12 11h.01M15 11h.01M12 7h.01M15 7h.01M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
       </svg>
     ),
   },
@@ -142,6 +157,9 @@ const NAV: { href: string; label: string; icon: React.ReactNode; roles: UserRole
   },
 ];
 
+// Flat list of every routable nav item (top-level + nested under the Loans group), used for role guards.
+const ALL_NAV_ITEMS: NavItem[] = [...NAV_TOP, ...LOANS_GROUP_ITEMS, ...NAV_BOTTOM];
+
 export default function TenantLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -151,6 +169,7 @@ export default function TenantLayout({ children }: { children: React.ReactNode }
   const [user, setUser] = useState<TenantUser | null>(null);
   const [tenant, setTenant] = useState<TenantInfo | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [loansOpen, setLoansOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [showNotifDropdown, setShowNotifDropdown] = useState(false);
   const [notifList, setNotifList] = useState<TenantNotification[]>([]);
@@ -194,7 +213,7 @@ export default function TenantLayout({ children }: { children: React.ReactNode }
       router.replace(`/${subdomain}/dashboard`);
       return;
     }
-    const currentNav = NAV.find((item) => pathname.includes(`/${subdomain}/${item.href}`));
+    const currentNav = ALL_NAV_ITEMS.find((item) => pathname.includes(`/${subdomain}/${item.href}`));
     if (currentNav && !currentNav.roles.includes(role)) {
       router.replace(`/${subdomain}/dashboard`);
       return;
@@ -204,6 +223,13 @@ export default function TenantLayout({ children }: { children: React.ReactNode }
     const interval = setInterval(fetchUnreadCount, 60000);
     return () => clearInterval(interval);
   }, [subdomain, router, isLoginPage, fetchUnreadCount]);
+
+  // Auto-expand the Loans group when navigating into one of its routes.
+  useEffect(() => {
+    if (LOANS_GROUP_ITEMS.some((item) => pathname.includes(`/${subdomain}/${item.href}`))) {
+      setLoansOpen(true);
+    }
+  }, [pathname, subdomain]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -290,7 +316,89 @@ export default function TenantLayout({ children }: { children: React.ReactNode }
 
         {/* Nav */}
         <nav className="flex-1 px-3 py-5 space-y-0.5 overflow-y-auto">
-          {NAV.filter((item) => item.roles.includes(user.role as UserRole)).map((item) => {
+          {NAV_TOP.filter((item) => item.roles.includes(user.role as UserRole)).map((item) => {
+            const active = isActive(item.href);
+            return (
+              <Link
+                key={item.href}
+                href={`/${subdomain}/${item.href}`}
+                onClick={() => setSidebarOpen(false)}
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                  active
+                    ? 'bg-white/20 text-white'
+                    : 'text-blue-100 hover:bg-white/10 hover:text-white'
+                }`}
+              >
+                <span className={`flex-shrink-0 ${active ? 'text-white' : 'text-blue-300'}`}>
+                  {item.icon}
+                </span>
+                {item.label}
+                {active && (
+                  <span className="ml-auto w-1.5 h-1.5 rounded-full bg-white" />
+                )}
+              </Link>
+            );
+          })}
+
+          {/* Loans group */}
+          {(() => {
+            const visibleLoanItems = LOANS_GROUP_ITEMS.filter((item) => item.roles.includes(user.role as UserRole));
+            if (visibleLoanItems.length === 0) return null;
+            const groupActive = visibleLoanItems.some((item) => isActive(item.href));
+            return (
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setLoansOpen((v) => !v)}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                    groupActive && !loansOpen
+                      ? 'bg-white/20 text-white'
+                      : 'text-blue-100 hover:bg-white/10 hover:text-white'
+                  }`}
+                >
+                  <span className={`flex-shrink-0 ${groupActive ? 'text-white' : 'text-blue-300'}`}>
+                    {LOANS_GROUP_ICON}
+                  </span>
+                  Loans
+                  <svg
+                    className={`w-4 h-4 ml-auto flex-shrink-0 transition-transform ${loansOpen ? 'rotate-90' : ''}`}
+                    fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
+                {loansOpen && (
+                  <div className="mt-0.5 ml-3 pl-3 border-l border-white/10 space-y-0.5">
+                    {visibleLoanItems.map((item) => {
+                      const active = isActive(item.href);
+                      return (
+                        <Link
+                          key={item.href}
+                          href={`/${subdomain}/${item.href}`}
+                          onClick={() => setSidebarOpen(false)}
+                          className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                            active
+                              ? 'bg-white/20 text-white'
+                              : 'text-blue-100 hover:bg-white/10 hover:text-white'
+                          }`}
+                        >
+                          <span className={`flex-shrink-0 ${active ? 'text-white' : 'text-blue-300'}`}>
+                            {item.icon}
+                          </span>
+                          {item.label}
+                          {active && (
+                            <span className="ml-auto w-1.5 h-1.5 rounded-full bg-white" />
+                          )}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {NAV_BOTTOM.filter((item) => item.roles.includes(user.role as UserRole)).map((item) => {
             const active = isActive(item.href);
             return (
               <Link
