@@ -900,14 +900,13 @@ All pages use shared layout (`layout.tsx`) with sidebar navigation, notification
 
 ### Route Architecture
 
-Next.js serves two parallel route trees pointing to the same components:
+All tenant pages live under a single tree:
 
 ```
-/app/tenant/[subdomain]/...   ← canonical (SSR middleware rewrite target)
-/app/[subdomain]/...          ← direct subdomain path (identical files)
+/app/tenant/[subdomain]/...
 ```
 
-Middleware rewrites `acme.lendershub.in/loans` → `/tenant/acme/loans` at the edge, so both paths render the same page. Any new page must be created in both trees.
+The middleware (`frontend/src/middleware.ts`) rewrites every incoming request to this tree before Next.js resolves a route — `acme.lendershub.in/loans` (host-based) and `app.lendershub.in/acme/loans` (path-based) both rewrite to `/tenant/acme/loans`. An earlier duplicate tree at `/app/[subdomain]/...` was removed (2026-07-10) once this was confirmed unreachable in both routing modes.
 
 ---
 
