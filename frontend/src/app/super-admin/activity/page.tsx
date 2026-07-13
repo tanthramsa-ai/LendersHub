@@ -8,6 +8,8 @@ import { auditLogApi, type AuditLogEntry } from '@/services/audit-log';
 const ACTION_LABELS: Record<string, string> = {
   'tenant.created': 'Tenant created',
   'tenant.subscription_updated': 'Subscription updated',
+  'tenant.user.created': 'Tenant user created',
+  'tenant.user.password_reset': 'Tenant user password reset',
   'branch.created': 'Branch created',
   'branch.updated': 'Branch updated',
   'loan_type.created': 'Loan type created',
@@ -22,6 +24,7 @@ function actionLabel(action: string): string {
 
 const TARGET_TYPE_BADGE: Record<string, string> = {
   tenant: 'bg-indigo-900 text-indigo-300',
+  tenant_user: 'bg-violet-900 text-violet-300',
   branch: 'bg-blue-900 text-blue-300',
   loan_type: 'bg-teal-900 text-teal-300',
   super_admin: 'bg-amber-900 text-amber-300',

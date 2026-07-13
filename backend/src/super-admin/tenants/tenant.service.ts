@@ -373,6 +373,43 @@ export class TenantService {
     };
   }
 
+  async resetTenantUserPassword(
+    tenantId: string,
+    userId: string,
+    newPassword: string,
+    actor: AuditActor,
+    ipAddress: string,
+  ) {
+    if (!newPassword || newPassword.length < 6) {
+      throw new BadRequestException('Password must be at least 6 characters');
+    }
+
+    const hashed = await bcrypt.hash(newPassword, 10);
+
+    const user = await this.withTenantSchema(tenantId, async (client) => {
+      const res = await client.query(
+        `UPDATE users SET password = $1, updated_at = NOW()
+         WHERE id = $2
+         RETURNING id, email, first_name, last_name, role`,
+        [hashed, userId],
+      );
+      if (!res.rows[0]) throw new NotFoundException('User not found');
+      return res.rows[0];
+    });
+
+    await this.auditLog.record({
+      actor,
+      ipAddress,
+      action: 'tenant.user.password_reset',
+      targetType: 'tenant_user',
+      targetId: user.id,
+      targetLabel: `${user.email} (${user.role})`,
+      metadata: { tenantId, firstName: user.first_name, lastName: user.last_name },
+    });
+
+    return { success: true };
+  }
+
   async getBranch(tenantId: string, branchId: string) {
     return this.withTenantSchema(tenantId, async (client) => {
       // Sequential: a single pg connection cannot run queries concurrently.

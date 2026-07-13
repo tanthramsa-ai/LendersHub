@@ -331,6 +331,72 @@ function BranchCard({ branch, tenantId, router }: { branch: Branch; tenantId: st
   );
 }
 
+// ── Reset Tenant User Password Modal ──────────────────────────────────────────
+function ResetTenantUserPasswordModal({
+  tenantId,
+  user,
+  onClose,
+  onSuccess,
+}: {
+  tenantId: string;
+  user: TenantUserRecord;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const inputCls = 'w-full bg-gray-800 border border-gray-600 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500';
+  const labelCls = 'text-xs font-semibold text-gray-400 uppercase tracking-wide block mb-1.5';
+  const displayName = `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() || user.email;
+
+  async function submit() {
+    if (password.length < 6) return setError('Password must be at least 6 characters');
+    setError('');
+    setLoading(true);
+    try {
+      await tenantsApi.resetTenantUserPassword(tenantId, user.id, password);
+      onSuccess();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to reset password');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-sm p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-bold text-white text-lg">Reset Password</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-white text-xl font-bold">✕</button>
+        </div>
+        <p className="text-sm text-gray-400 mb-4">{displayName} · {user.email}</p>
+        <div className="mb-4">
+          <label className={labelCls}>New Password *</label>
+          <input
+            type="text"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Min 6 characters"
+            className={inputCls}
+            autoFocus
+          />
+        </div>
+        {error && <p className="text-sm text-red-400 mb-3">{error}</p>}
+        <button
+          onClick={submit}
+          disabled={loading}
+          className="w-full py-3 rounded-xl font-bold text-white text-sm bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60"
+        >
+          {loading ? 'Resetting…' : 'Reset Password'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 type Tab = 'details' | 'branches' | 'users';
 
@@ -345,6 +411,7 @@ export default function TenantDetailPage() {
   const [usersLoading, setUsersLoading] = useState(false);
   const [usersLoaded, setUsersLoaded] = useState(false);
   const [showAddUser, setShowAddUser] = useState(false);
+  const [resetUser, setResetUser] = useState<TenantUserRecord | null>(null);
   const [tab, setTab] = useState<Tab>('details');
   const [loading, setLoading] = useState(true);
   const [branchesLoading, setBranchesLoading] = useState(false);
@@ -661,6 +728,7 @@ export default function TenantDetailPage() {
                         <th className="px-6 py-3 font-medium">Role</th>
                         <th className="px-6 py-3 font-medium">Status</th>
                         <th className="px-6 py-3 font-medium">Joined</th>
+                        <th className="px-6 py-3 font-medium">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -680,6 +748,15 @@ export default function TenantDetailPage() {
                             </span>
                           </td>
                           <td className="px-6 py-3 text-gray-400 text-xs">{new Date(u.createdAt).toLocaleDateString('en-IN')}</td>
+                          <td className="px-6 py-3">
+                            <button
+                              type="button"
+                              onClick={() => setResetUser(u)}
+                              className="text-xs font-medium text-indigo-400 hover:text-indigo-300 whitespace-nowrap"
+                            >
+                              Reset Password
+                            </button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -704,6 +781,15 @@ export default function TenantDetailPage() {
           tenantId={id}
           onClose={() => setShowAddUser(false)}
           onSuccess={() => { setShowAddUser(false); refreshUsers(); }}
+        />
+      )}
+
+      {resetUser && (
+        <ResetTenantUserPasswordModal
+          tenantId={id}
+          user={resetUser}
+          onClose={() => setResetUser(null)}
+          onSuccess={() => setResetUser(null)}
         />
       )}
 

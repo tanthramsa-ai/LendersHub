@@ -102,6 +102,16 @@ export class TenantController {
     return this.tenants.createTenantUser(id, dto, this.actorFrom(req), this.ipFrom(req));
   }
 
+  @Patch(':id/users/:userId/reset-password')
+  resetTenantUserPassword(
+    @Param('id') id: string,
+    @Param('userId') userId: string,
+    @Body() dto: { password?: string },
+    @Req() req: any,
+  ) {
+    return this.tenants.resetTenantUserPassword(id, userId, dto?.password ?? '', this.actorFrom(req), this.ipFrom(req));
+  }
+
   // ── Branch endpoints ────────────────────────────────────────────────────────
 
   @Get(':id/branches')

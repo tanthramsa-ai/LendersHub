@@ -281,6 +281,12 @@ export const tenantsApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+
+  resetTenantUserPassword: (tenantId: string, userId: string, password: string) =>
+    authFetch<{ success: boolean }>(`/api/v1/super-admin/tenants/${tenantId}/users/${userId}/reset-password`, {
+      method: 'PATCH',
+      body: JSON.stringify({ password }),
+    }),
 };
 
 export interface TenantUserRecord {
