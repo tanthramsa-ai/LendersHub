@@ -3,20 +3,22 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { getTermLoan, closeLoan, recordPayment, getTenantSession, MANAGER_ROLES, COLLECTION_ROLES, TermLoanDetail, TermInstallment } from '@/services/tenant-api';
+import { getTermLoan, closeLoan, reopenLoan, recordPayment, getTenantSession, MANAGER_ROLES, COLLECTION_ROLES, TermLoanDetail, TermInstallment } from '@/services/tenant-api';
+import { CloseLoanModal, CloseCommentBanner, ReopenLoanModal } from '@/components/CloseLoanModal';
 
 const STATUS_COLORS: Record<string, string> = {
   PAID: 'bg-green-100 text-green-700',
   PARTIALLY_PAID: 'bg-blue-100 text-blue-700',
   PENDING: 'bg-yellow-100 text-yellow-700',
   OVERDUE: 'bg-red-100 text-red-700',
+  WAIVED: 'bg-slate-200 text-slate-600',
 };
 
 const LOAN_STATUS_COLORS: Record<string, string> = {
   DISBURSED: 'bg-green-100 text-green-700',
   PENDING:   'bg-yellow-100 text-yellow-700',
   APPROVED:  'bg-blue-100 text-blue-700',
-  CLOSED:    'bg-gray-100 text-gray-500',
+  CLOSED:    'bg-slate-200 text-slate-800',
   DEFAULTED: 'bg-red-100 text-red-700',
 };
 
@@ -45,6 +47,7 @@ function tileColor(status: string, isNpa: boolean) {
   if (status === 'PAID') return 'bg-green-500 text-white border-green-500';
   if (status === 'PARTIALLY_PAID') return 'bg-blue-400 text-white border-blue-400';
   if (status === 'OVERDUE') return 'bg-red-400 text-white border-red-400';
+  if (status === 'WAIVED') return 'bg-slate-300 text-slate-600 border-slate-400';
   return 'bg-gray-100 text-gray-500 border-gray-200';
 }
 
@@ -67,6 +70,8 @@ export default function TermLoanDetailPage() {
   const [paying, setPaying] = useState(false);
   const [closing, setClosing] = useState(false);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
+  const [showReopenConfirm, setShowReopenConfirm] = useState(false);
+  const [reopening, setReopening] = useState(false);
   const [err, setErr] = useState('');
   const [tooltip, setTooltip] = useState<{ num: number; x: number; y: number } | null>(null);
 
@@ -104,16 +109,28 @@ export default function TermLoanDetailPage() {
     } finally { setPaying(false); }
   }
 
-  async function handleClose() {
+  async function handleClose(comment: string) {
     setClosing(true); setErr('');
     try {
-      await closeLoan(id);
+      await closeLoan(id, { comment });
       router.refresh();
       await load();
       setShowCloseConfirm(false);
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : 'Close failed');
     } finally { setClosing(false); }
+  }
+
+  async function handleReopen(comment: string) {
+    setReopening(true); setErr('');
+    try {
+      await reopenLoan(id, { comment });
+      router.refresh();
+      await load();
+      setShowReopenConfirm(false);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Reopen failed');
+    } finally { setReopening(false); }
   }
 
   if (loading) return <div className="p-10 text-center text-gray-400 text-sm">Loading…</div>;
@@ -160,8 +177,22 @@ export default function TermLoanDetailPage() {
               Close Loan
             </button>
           )}
+          {canClose && loan.status === 'CLOSED' && (
+            <button onClick={() => { setErr(''); setShowReopenConfirm(true); }}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors">
+              Reopen Loan
+            </button>
+          )}
         </div>
       </div>
+
+      {loan.status === 'CLOSED' && (
+        <CloseCommentBanner
+          comment={loan.closeComment}
+          closedAt={loan.closedAt}
+          hasWaivedInstallments={loan.installments.some((i) => i.status === 'WAIVED')}
+        />
+      )}
 
       {err && <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg">{err}</div>}
 
@@ -212,6 +243,7 @@ export default function TermLoanDetailPage() {
             { color: 'bg-blue-400', label: 'Partial' },
             { color: 'bg-yellow-100 border border-yellow-300', label: 'Pending' },
             { color: 'bg-red-400', label: 'Overdue' },
+            { color: 'bg-slate-300 border border-slate-400', label: 'Waived' },
           ].map((l) => (
             <span key={l.label} className="flex items-center gap-1">
               <span className={`w-3 h-3 rounded ${l.color}`} />
@@ -237,7 +269,7 @@ export default function TermLoanDetailPage() {
             </thead>
             <tbody className="divide-y divide-gray-50">
               {loan.installments.map((inst) => (
-                <tr key={inst.id} className={`hover:bg-gray-50 ${inst.status === 'OVERDUE' ? 'bg-red-50/50' : ''}`}>
+                <tr key={inst.id} className={`hover:bg-gray-50 ${inst.status === 'OVERDUE' ? 'bg-red-50/50' : inst.status === 'WAIVED' ? 'bg-slate-50' : ''}`}>
                   <td className="px-3 py-2.5 text-gray-400">{inst.number}</td>
                   <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap">{fmtDate(inst.dueDate)}</td>
                   <td className="px-3 py-2.5 font-medium text-gray-800">{fmt(inst.principal)}</td>
@@ -362,27 +394,26 @@ export default function TermLoanDetailPage() {
 
       {/* Close loan confirmation */}
       {showCloseConfirm && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4">
-            <h2 className="text-lg font-bold text-gray-900">Close Loan</h2>
-            <p className="text-sm text-gray-600">
-              This will mark <strong>{loan.loanNumber}</strong> as CLOSED. Any remaining unpaid installments will be forgiven.
-            </p>
-            {outstanding > 0 && (
-              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
-                Outstanding balance: <strong>{fmt(outstanding)}</strong>
-              </div>
-            )}
-            {err && <p className="text-sm text-red-600">{err}</p>}
-            <div className="flex gap-3 pt-2">
-              <button onClick={() => setShowCloseConfirm(false)} className="flex-1 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
-              <button disabled={closing} onClick={handleClose}
-                className="flex-1 py-2 text-sm font-medium text-white bg-gray-800 hover:bg-gray-900 rounded-lg disabled:opacity-40">
-                {closing ? 'Closing…' : 'Confirm Close'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <CloseLoanModal
+          loanNumber={loan.loanNumber}
+          outstanding={outstanding}
+          closing={closing}
+          error={err}
+          onCancel={() => { setShowCloseConfirm(false); setErr(''); }}
+          onConfirm={handleClose}
+        />
+      )}
+
+      {showReopenConfirm && (
+        <ReopenLoanModal
+          loanNumber={loan.loanNumber}
+          previousCloseComment={loan.closeComment}
+          waivedCount={loan.installments.filter((i) => i.status === 'WAIVED').length}
+          reopening={reopening}
+          error={err}
+          onCancel={() => { setShowReopenConfirm(false); setErr(''); }}
+          onConfirm={handleReopen}
+        />
       )}
     </div>
   );

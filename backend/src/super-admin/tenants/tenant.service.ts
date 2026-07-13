@@ -241,7 +241,7 @@ export class TenantService {
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           name TEXT NOT NULL, description TEXT,
           min_amount NUMERIC(14,2), max_amount NUMERIC(14,2),
-          min_interest_rate NUMERIC(6,4), max_interest_rate NUMERIC(6,4),
+          min_interest_rate NUMERIC(7,4), max_interest_rate NUMERIC(7,4),
           min_term_months SMALLINT, max_term_months SMALLINT,
           is_active BOOLEAN NOT NULL DEFAULT TRUE,
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -308,6 +308,69 @@ export class TenantService {
     });
 
     return branch;
+  }
+
+  // ── Tenant user management (super-admin bootstrap) ──────────────────────────
+
+  async listTenantUsers(tenantId: string) {
+    return this.withTenantSchema(tenantId, async (client) => {
+      const res = await client.query(`
+        SELECT id, email, first_name, last_name, phone, role, is_active, created_at
+        FROM users
+        ORDER BY created_at ASC
+      `);
+      return res.rows.map((u) => ({
+        id: u.id, email: u.email,
+        firstName: u.first_name, lastName: u.last_name,
+        phone: u.phone, role: u.role,
+        isActive: u.is_active, createdAt: u.created_at,
+      }));
+    });
+  }
+
+  async createTenantUser(
+    tenantId: string,
+    dto: { email: string; password: string; firstName: string; lastName: string; phone?: string; role: string },
+    actor: AuditActor,
+    ipAddress: string,
+  ) {
+    const VALID_ROLES = ['OWNER', 'MANAGER', 'ADMIN', 'LOAN_OFFICER', 'COLLECTOR', 'VIEWER'];
+    if (!dto.email?.trim()) throw new BadRequestException('Email is required');
+    if (!dto.firstName?.trim() || !dto.lastName?.trim()) throw new BadRequestException('First and last name are required');
+    if (!dto.password || dto.password.length < 6) throw new BadRequestException('Password must be at least 6 characters');
+    if (!VALID_ROLES.includes(dto.role)) throw new BadRequestException('Invalid role');
+
+    const hashed = await bcrypt.hash(dto.password, 10);
+    const phone = dto.phone?.replace(/\s|-/g, '').trim() || null;
+
+    const user = await this.withTenantSchema(tenantId, async (client) => {
+      const existing = await client.query(`SELECT id FROM users WHERE LOWER(email) = LOWER($1)`, [dto.email.trim()]);
+      if (existing.rows.length > 0) throw new ConflictException('A user with this email already exists in this tenant');
+
+      const res = await client.query(
+        `INSERT INTO users (email, password, first_name, last_name, phone, role)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id, email, first_name, last_name, phone, role, is_active, created_at`,
+        [dto.email.trim().toLowerCase(), hashed, dto.firstName.trim(), dto.lastName.trim(), phone, dto.role],
+      );
+      return res.rows[0];
+    });
+
+    await this.auditLog.record({
+      actor, ipAddress,
+      action: 'tenant.user.created',
+      targetType: 'tenant_user',
+      targetId: user.id,
+      targetLabel: `${user.email} (${user.role})`,
+      metadata: { tenantId },
+    });
+
+    return {
+      id: user.id, email: user.email,
+      firstName: user.first_name, lastName: user.last_name,
+      phone: user.phone, role: user.role,
+      isActive: user.is_active, createdAt: user.created_at,
+    };
   }
 
   async getBranch(tenantId: string, branchId: string) {

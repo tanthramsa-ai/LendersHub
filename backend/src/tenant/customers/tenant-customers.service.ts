@@ -3,6 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { sanitizeStrings } from '../../common/utils/sanitize';
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
+import { validateCustomerFields } from './customer-validation';
 
 export interface CreateCustomerDto {
   firstName: string;
@@ -20,7 +21,7 @@ export interface CreateCustomerDto {
   pincode?: string;
   occupation?: string;
   loanPurpose?: string;
-  altContact: string;
+  altContact?: string;
   altContactName?: string;
   altContactRelation?: string;
   creditScore?: number;
@@ -176,14 +177,7 @@ export class TenantCustomersService {
   async create(user: TenantJwtPayload, dto: CreateCustomerDto) {
     if (user.role === 'VIEWER') throw new ForbiddenException('Customers cannot add customers');
     dto = sanitizeStrings(dto);
-    if (!dto.firstName?.trim()) throw new BadRequestException('First name is required');
-    if (!dto.phone?.trim()) throw new BadRequestException('Phone number is required');
-    if (!dto.address?.trim()) throw new BadRequestException('Address is required');
-    if (!dto.locality?.trim()) throw new BadRequestException('Locality is required');
-    if (!dto.altContact?.trim()) throw new BadRequestException('Alternate contact number is required');
-    if (!dto.panNumber?.trim() && !dto.aadhaarLast4?.trim()) {
-      throw new BadRequestException('At least one of PAN number or Aadhaar number is required');
-    }
+    validateCustomerFields({ ...dto, requireCore: true });
 
     return this.withSchema(user.schemaName, async (client) => {
       const countRes = await client.query<{ n: string }>(`SELECT COUNT(*) AS n FROM customers`);
@@ -209,7 +203,7 @@ export class TenantCustomersService {
         dto.dateOfBirth ?? null,
         dto.address, dto.locality, dto.city ?? null, dto.state ?? null, dto.pincode ?? null,
         dto.occupation ?? null, dto.loanPurpose ?? null,
-        dto.altContact, dto.altContactName ?? null, dto.altContactRelation ?? null,
+        dto.altContact?.trim() || null, dto.altContactName ?? null, dto.altContactRelation ?? null,
         dto.creditScore ?? null, dto.branchId ?? null, user.sub,
       ]);
 
@@ -277,9 +271,21 @@ export class TenantCustomersService {
 
   async update(user: TenantJwtPayload, id: string, dto: UpdateCustomerDto) {
     if (user.role === 'VIEWER') throw new ForbiddenException('You do not have permission to update customers');
+    dto = sanitizeStrings(dto);
+    validateCustomerFields({ ...dto, requireCore: false });
+
     return this.withSchema(user.schemaName, async (client) => {
-      const existing = await client.query(`SELECT id, phone FROM customers WHERE id = $1`, [id]);
+      const existing = await client.query(
+        `SELECT id, phone, pan_number, aadhaar_last4 FROM customers WHERE id = $1`,
+        [id],
+      );
       if (!existing.rows[0]) throw new NotFoundException('Customer not found');
+
+      const nextPan = dto.panNumber !== undefined ? dto.panNumber : existing.rows[0].pan_number;
+      const nextAadhaar = dto.aadhaarLast4 !== undefined ? dto.aadhaarLast4 : existing.rows[0].aadhaar_last4;
+      if (!String(nextPan ?? '').trim() && !String(nextAadhaar ?? '').trim()) {
+        throw new BadRequestException('At least one of PAN number or Aadhaar number is required');
+      }
 
       if (dto.phone && dto.phone !== existing.rows[0].phone) {
         const dup = await client.query(`SELECT id FROM customers WHERE phone = $1 AND id != $2`, [dto.phone, id]);

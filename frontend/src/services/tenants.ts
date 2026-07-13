@@ -271,4 +271,34 @@ export const tenantsApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+
+  // Tenant users (super-admin bootstrap)
+  listTenantUsers: (id: string) =>
+    authFetch<TenantUserRecord[]>(`/api/v1/super-admin/tenants/${id}/users`),
+
+  createTenantUser: (id: string, payload: CreateTenantUserPayload) =>
+    authFetch<TenantUserRecord>(`/api/v1/super-admin/tenants/${id}/users`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 };
+
+export interface TenantUserRecord {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  phone: string | null;
+  role: string;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface CreateTenantUserPayload {
+  email: string;
+  password: string;
+  firstName: string;
+  lastName: string;
+  phone?: string;
+  role: string;
+}

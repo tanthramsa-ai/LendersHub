@@ -85,6 +85,23 @@ export class TenantController {
     return this.tenants.softDelete(id, dto.confirmSubdomain ?? '', this.actorFrom(req), this.ipFrom(req));
   }
 
+  // ── Tenant user endpoints (super-admin bootstrap) ───────────────────────────
+
+  @Get(':id/users')
+  listTenantUsers(@Param('id') id: string) {
+    return this.tenants.listTenantUsers(id);
+  }
+
+  @Post(':id/users')
+  @HttpCode(HttpStatus.CREATED)
+  createTenantUser(@Param('id') id: string, @Body() dto: {
+    email: string; password: string;
+    firstName: string; lastName: string;
+    phone?: string; role: string;
+  }, @Req() req: any) {
+    return this.tenants.createTenantUser(id, dto, this.actorFrom(req), this.ipFrom(req));
+  }
+
   // ── Branch endpoints ────────────────────────────────────────────────────────
 
   @Get(':id/branches')

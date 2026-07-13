@@ -16,8 +16,12 @@ async function tenantFetch<T>(path: string, options?: RequestInit): Promise<T> {
     },
   });
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body?.message ?? `Request failed: ${res.status}`);
+    const body = await res.json().catch(() => ({})) as { message?: string | string[] };
+    const raw = body?.message;
+    const message = Array.isArray(raw)
+      ? raw.join('; ')
+      : (raw ?? `Request failed: ${res.status}`);
+    throw new Error(message);
   }
   return res.json() as Promise<T>;
 }
@@ -268,7 +272,7 @@ export interface CreateCustomerPayload {
   pincode?: string;
   occupation?: string;
   loanPurpose?: string;
-  altContact: string;
+  altContact?: string;
   altContactName?: string;
   altContactRelation?: string;
   creditScore?: number;
@@ -440,6 +444,9 @@ export interface WeeklyLoanDetail extends WeeklyLoan {
   promissoryNoteUrl?: string | null;
   loanTypeId?: string | null;
   customerPhone: string;
+  closedAt?: string | null;
+  closeComment?: string | null;
+  reopenComment?: string | null;
   installments: WeeklyInstallment[];
   payments: Array<{
     id: string; amount: number; method: string;
@@ -531,6 +538,9 @@ export interface DailyLoanDetail extends DailyLoan {
   promissoryNoteUrl?: string | null;
   loanTypeId?: string | null;
   customerPhone: string;
+  closedAt?: string | null;
+  closeComment?: string | null;
+  reopenComment?: string | null;
   installments: DailyInstallment[];
   payments: Array<{
     id: string; amount: number; method: string;
@@ -624,6 +634,9 @@ export interface MonthlyLoanDetail extends MonthlyLoan {
   promissoryNoteUrl?: string | null;
   loanTypeId?: string | null;
   customerPhone: string;
+  closedAt?: string | null;
+  closeComment?: string | null;
+  reopenComment?: string | null;
   installments: MonthlyInstallment[];
   payments: Array<{
     id: string; amount: number; method: string;
@@ -690,6 +703,9 @@ export interface AgentRiskLoanDetail extends AgentRiskLoan {
   purpose?: string | null; emiAmount: number | null;
   securityDocUrl?: string | null; promissoryNoteUrl?: string | null;
   loanTypeId?: string | null; customerPhone: string;
+  closedAt?: string | null;
+  closeComment?: string | null;
+  reopenComment?: string | null;
   installments: MonthlyInstallment[];
   payments: Array<{ id: string; amount: number; method: string; referenceNumber?: string | null; paymentDate: string; createdAt: string }>;
 }
@@ -740,6 +756,9 @@ export interface TermLoanDetail extends TermLoan {
   purpose?: string | null; emiAmount: number | null;
   securityDocUrl?: string | null; promissoryNoteUrl?: string | null;
   loanTypeId?: string | null; customerPhone: string;
+  closedAt?: string | null;
+  closeComment?: string | null;
+  reopenComment?: string | null;
   installments: TermInstallment[];
   payments: Array<{ id: string; amount: number; method: string; referenceNumber?: string; paymentDate: string; createdAt: string }>;
 }
@@ -985,8 +1004,30 @@ export function resetTenantUserPassword(id: string, password: string) {
 
 // ── Loan Actions ──────────────────────────────────────────────────────────────
 
-export function closeLoan(id: string) {
-  return tenantFetch<{ id: string; status: string; closedAt: string }>(`/api/v1/tenant/loans/${id}/close`, { method: 'PATCH' });
+export function closeLoan(id: string, dto: { comment: string }) {
+  return tenantFetch<{
+    id: string;
+    status: string;
+    closedAt: string;
+    closeComment: string;
+    closedWithPendingDues: boolean;
+    outstanding: number;
+  }>(`/api/v1/tenant/loans/${id}/close`, {
+    method: 'PATCH',
+    body: JSON.stringify(dto),
+  });
+}
+
+export function reopenLoan(id: string, dto: { comment: string }) {
+  return tenantFetch<{
+    id: string;
+    status: string;
+    reopenComment: string;
+    restoredInstallments: number;
+  }>(`/api/v1/tenant/loans/${id}/reopen`, {
+    method: 'PATCH',
+    body: JSON.stringify(dto),
+  });
 }
 
 // ── Settings: SMS Config ──────────────────────────────────────────────────────

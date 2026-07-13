@@ -4,6 +4,7 @@ import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { TenantNotificationsService } from '../notifications/tenant-notifications.service';
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
 import { safePagination } from '../../common/utils/pagination';
+import { assertNoSpecialChars } from '../customers/customer-validation';
 
 export interface CreateLoanDto {
   customerId: string;
@@ -351,8 +352,28 @@ function generateInstallments(principal: number, annualRate: number, termMonths:
   return installments;
 }
 
+function loanDetailLink(cycleType: string | null | undefined, loanId: string): string {
+  switch (cycleType) {
+    case 'WEEKLY':
+      return `/weekly-loans/${loanId}`;
+    case 'DAILY_NO_SUNDAY':
+    case 'DAILY_WITH_SUNDAY':
+      return `/daily-loans/${loanId}`;
+    case 'MONTHLY':
+      return `/monthly-loans/${loanId}`;
+    case 'AGENT_RISK':
+      return `/agent-risk-loans/${loanId}`;
+    case 'TERM_LOAN':
+    default:
+      return `/loans/${loanId}`;
+  }
+}
+
 @Injectable()
 export class TenantLoansService {
+  // Schemas that already have interest_rate widened to NUMERIC(7,4)
+  private widenedInterestSchemas = new Set<string>();
+
   constructor(
     private prisma: PrismaService,
     private notifications: TenantNotificationsService,
@@ -363,10 +384,22 @@ export class TenantLoansService {
     const client = await this.prisma.pool.connect();
     try {
       await client.query(`SET search_path = "${schemaName}", public`);
+      await this.ensureInterestRatePrecision(client, schemaName);
       return await fn(client);
     } finally {
       client.release();
     }
+  }
+
+  /** NUMERIC(6,4) only fits ≤99.9999; app allows up to 200% p.a. */
+  private async ensureInterestRatePrecision(client: import('pg').PoolClient, schemaName: string): Promise<void> {
+    if (this.widenedInterestSchemas.has(schemaName)) return;
+    await client.query(`ALTER TABLE loans ALTER COLUMN interest_rate TYPE NUMERIC(7,4)`);
+    await client.query(`ALTER TABLE loan_types ALTER COLUMN min_interest_rate TYPE NUMERIC(7,4)`).catch(() => undefined);
+    await client.query(`ALTER TABLE loan_types ALTER COLUMN max_interest_rate TYPE NUMERIC(7,4)`).catch(() => undefined);
+    await client.query(`ALTER TABLE loans ADD COLUMN IF NOT EXISTS close_comment TEXT`).catch(() => undefined);
+    await client.query(`ALTER TABLE loans ADD COLUMN IF NOT EXISTS reopen_comment TEXT`).catch(() => undefined);
+    this.widenedInterestSchemas.add(schemaName);
   }
 
   async list(user: TenantJwtPayload, page: number, limit: number, opts: {
@@ -475,6 +508,9 @@ export class TenantLoansService {
         branchName: l.branch_name ?? null,
         loanTypeId: l.loan_type_id ?? null,
         disbursedAt: l.disbursed_at, firstDueDate: l.first_due_date,
+        closedAt: l.closed_at ?? null,
+        closeComment: l.close_comment ?? null,
+        reopenComment: l.reopen_comment ?? null,
         createdAt: l.created_at, updatedAt: l.updated_at,
         installments: installmentsRes.rows.map((i) => ({
           id: i.id, number: i.installment_number, dueDate: i.due_date,
@@ -497,6 +533,7 @@ export class TenantLoansService {
     if (dto.interestRate < 0 || dto.interestRate > 100) throw new BadRequestException('Invalid interest rate');
     if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
     if (dto.firstDueDate && !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
+    assertNoSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
       // Validate customer
@@ -568,27 +605,68 @@ export class TenantLoansService {
     });
   }
 
-  async closeLoan(user: TenantJwtPayload, loanId: string) {
+  async closeLoan(user: TenantJwtPayload, loanId: string, dto: { comment?: string } = {}) {
     if (!['OWNER', 'MANAGER', 'ADMIN'].includes(user.role)) {
       throw new BadRequestException('Only Owner, Manager or Admin can close a loan');
     }
 
+    const comment = (dto.comment ?? '').trim();
+    if (!comment) {
+      throw new BadRequestException('Comment is required when closing a loan');
+    }
+    if (comment.length > 1000) {
+      throw new BadRequestException('Comment must be 1000 characters or fewer');
+    }
+
     return this.withSchema(user.schemaName, async (client) => {
-      const res = await client.query(
-        `SELECT id, status, loan_number FROM loans WHERE id = $1 AND deleted_at IS NULL`,
+      const res = await client.query<{
+        id: string;
+        status: string;
+        loan_number: string;
+        loan_officer_id: string | null;
+        cycle_type: string | null;
+        first_name: string | null;
+        last_name: string | null;
+      }>(
+        `SELECT l.id, l.status, l.loan_number, l.loan_officer_id, l.cycle_type,
+                c.first_name, c.last_name
+         FROM loans l
+         LEFT JOIN customers c ON c.id = l.customer_id
+         WHERE l.id = $1 AND l.deleted_at IS NULL`,
         [loanId],
       );
       if (!res.rows[0]) throw new NotFoundException('Loan not found');
 
-      const { status, loan_number: loanNumber } = res.rows[0];
+      const {
+        status,
+        loan_number: loanNumber,
+        loan_officer_id: loanOfficerId,
+        cycle_type: cycleType,
+        first_name: firstName,
+        last_name: lastName,
+      } = res.rows[0];
       if (status === 'CLOSED') throw new BadRequestException('Loan is already closed');
       if (!['APPROVED', 'DISBURSED', 'ACTIVE'].includes(status)) {
         throw new BadRequestException(`Cannot close a loan in ${status} status`);
       }
 
-      await client.query(
-        `UPDATE loans SET status = 'CLOSED', closed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+      const duesRes = await client.query<{ outstanding: string; unpaid_count: string }>(
+        `SELECT
+           COALESCE(SUM(total_amount - paid_amount), 0) AS outstanding,
+           COUNT(*) AS unpaid_count
+         FROM installments
+         WHERE loan_id = $1 AND status IN ('PENDING','PARTIALLY_PAID','OVERDUE')`,
         [loanId],
+      );
+      const outstanding = parseFloat(duesRes.rows[0]?.outstanding ?? '0');
+      const unpaidCount = parseInt(duesRes.rows[0]?.unpaid_count ?? '0', 10);
+      const closedWithPendingDues = unpaidCount > 0 || outstanding > 0;
+
+      await client.query(
+        `UPDATE loans
+         SET status = 'CLOSED', closed_at = NOW(), close_comment = $2, updated_at = NOW()
+         WHERE id = $1`,
+        [loanId, comment],
       );
 
       // Mark remaining unpaid installments as WAIVED
@@ -603,10 +681,125 @@ export class TenantLoansService {
         entityType: 'loan',
         entityId: loanId,
         entityLabel: loanNumber,
-        metadata: { previousStatus: status },
+        metadata: {
+          previousStatus: status,
+          closedWithPendingDues,
+          outstanding,
+          unpaidInstallments: unpaidCount,
+          comment,
+        },
       });
 
-      return { id: loanId, status: 'CLOSED', closedAt: new Date() };
+      // Notify loan officer + managers (except the person who closed it)
+      const notifyIds = new Set<string>();
+      if (loanOfficerId) notifyIds.add(loanOfficerId);
+      const mgrsRes = await client.query<{ id: string }>(
+        `SELECT id FROM users WHERE role IN ('OWNER','MANAGER','ADMIN') AND is_active = TRUE`,
+      );
+      for (const m of mgrsRes.rows) notifyIds.add(m.id);
+      notifyIds.delete(user.sub);
+
+      const closerName = `${user.firstName} ${user.lastName}`.trim() || user.email;
+      const customerName = [firstName, lastName].filter(Boolean).join(' ') || 'customer';
+      const body = closedWithPendingDues
+        ? `Closed by ${closerName} for ${customerName}. ₹${outstanding.toLocaleString('en-IN')} outstanding waived across ${unpaidCount} installment${unpaidCount === 1 ? '' : 's'}.`
+        : `Closed by ${closerName} for ${customerName} with no pending dues.`;
+
+      for (const uid of notifyIds) {
+        await TenantNotificationsService.insertNotification(client, {
+          userId: uid,
+          title: `Loan closed — ${loanNumber}`,
+          body,
+          type: 'loan',
+          entityType: 'loan',
+          entityId: loanId,
+          link: loanDetailLink(cycleType, loanId),
+        });
+      }
+
+      return {
+        id: loanId,
+        status: 'CLOSED',
+        closedAt: new Date(),
+        closeComment: comment,
+        closedWithPendingDues,
+        outstanding,
+      };
+    });
+  }
+
+  async reopenLoan(user: TenantJwtPayload, loanId: string, dto: { comment?: string } = {}) {
+    if (!['OWNER', 'MANAGER', 'ADMIN'].includes(user.role)) {
+      throw new BadRequestException('Only Owner, Manager or Admin can reopen a loan');
+    }
+
+    const comment = (dto.comment ?? '').trim();
+    if (!comment) {
+      throw new BadRequestException('Comment is required when reopening a loan');
+    }
+    if (comment.length > 1000) {
+      throw new BadRequestException('Comment must be 1000 characters or fewer');
+    }
+
+    return this.withSchema(user.schemaName, async (client) => {
+      const res = await client.query(
+        `SELECT id, status, loan_number, close_comment FROM loans WHERE id = $1 AND deleted_at IS NULL`,
+        [loanId],
+      );
+      if (!res.rows[0]) throw new NotFoundException('Loan not found');
+
+      const { status, loan_number: loanNumber, close_comment: previousCloseComment } = res.rows[0];
+      if (status !== 'CLOSED') {
+        throw new BadRequestException('Only closed loans can be reopened');
+      }
+
+      const waivedRes = await client.query<{ n: string }>(
+        `SELECT COUNT(*) AS n FROM installments WHERE loan_id = $1 AND status = 'WAIVED'`,
+        [loanId],
+      );
+      const restoredCount = parseInt(waivedRes.rows[0]?.n ?? '0', 10);
+
+      await client.query(
+        `UPDATE loans
+         SET status = 'DISBURSED',
+             closed_at = NULL,
+             reopen_comment = $2,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [loanId, comment],
+      );
+
+      // Restore previously waived installments based on payment + due date
+      await client.query(
+        `UPDATE installments
+         SET status = CASE
+           WHEN paid_amount >= total_amount THEN 'PAID'
+           WHEN paid_amount > 0 THEN 'PARTIALLY_PAID'
+           WHEN due_date < CURRENT_DATE THEN 'OVERDUE'
+           ELSE 'PENDING'
+         END
+         WHERE loan_id = $1 AND status = 'WAIVED'`,
+        [loanId],
+      );
+
+      await this.activity.record(client, user, {
+        action: 'loan.reopened',
+        entityType: 'loan',
+        entityId: loanId,
+        entityLabel: loanNumber,
+        metadata: {
+          comment,
+          restoredInstallments: restoredCount,
+          previousCloseComment: previousCloseComment ?? null,
+        },
+      });
+
+      return {
+        id: loanId,
+        status: 'DISBURSED',
+        reopenComment: comment,
+        restoredInstallments: restoredCount,
+      };
     });
   }
 
@@ -717,6 +910,7 @@ export class TenantLoansService {
     if (dto.termWeeks < 1 || dto.termWeeks > 520) throw new BadRequestException('Term must be 1–520 weeks');
     if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
     if (!['FLAT', 'REDUCING'].includes(dto.calculationType)) throw new BadRequestException('calculationType must be FLAT or REDUCING');
+    assertNoSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
       const custRes = await client.query(`SELECT id, first_name, last_name FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
@@ -896,6 +1090,7 @@ export class TenantLoansService {
     if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
     if (!['FLAT', 'REDUCING'].includes(dto.calculationType)) throw new BadRequestException('calculationType must be FLAT or REDUCING');
     if (!['DAILY_NO_SUNDAY', 'DAILY_WITH_SUNDAY'].includes(dto.cycleType)) throw new BadRequestException('cycleType must be DAILY_NO_SUNDAY or DAILY_WITH_SUNDAY');
+    assertNoSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
       const custRes = await client.query(`SELECT id, first_name, last_name FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
@@ -1062,6 +1257,7 @@ export class TenantLoansService {
     if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
     if (!dto.branchId) throw new BadRequestException('Branch is required for monthly loans');
     if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
+    assertNoSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
       const custRes = await client.query(`SELECT id FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
@@ -1227,6 +1423,7 @@ export class TenantLoansService {
     if (dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
     if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
     if (!dto.branchId) throw new BadRequestException('Branch is required for agent risk loans');
+    assertNoSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
       const custRes = await client.query(`SELECT id FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
@@ -1380,6 +1577,7 @@ export class TenantLoansService {
     if (dto.interestRate < 0 || dto.interestRate > 100) throw new BadRequestException('Invalid interest rate');
     if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
     if (!dto.branchId) throw new BadRequestException('Branch is required');
+    assertNoSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
       const custRes = await client.query(`SELECT id FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);

@@ -8,6 +8,7 @@ const BRAND = '#0F4C81';
 const ACTION_LABELS: Record<string, string> = {
   'loan.created': 'Loan created',
   'loan.closed': 'Loan closed',
+  'loan.reopened': 'Loan reopened',
   'loan.deleted': 'Loan deleted',
   'payment.recorded': 'Payment recorded',
   'customer.created': 'Customer added',

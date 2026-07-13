@@ -3,7 +3,16 @@
 import { useEffect, useState } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { sessionStore } from '@/services/super-admin-auth';
-import { tenantsApi, type TenantDetail, type Branch, type CreateBranchPayload } from '@/services/tenants';
+import { tenantsApi, type TenantDetail, type Branch, type CreateBranchPayload, type TenantUserRecord, type CreateTenantUserPayload } from '@/services/tenants';
+
+const TENANT_ROLES: { value: string; label: string }[] = [
+  { value: 'OWNER', label: 'Owner' },
+  { value: 'MANAGER', label: 'Manager' },
+  { value: 'ADMIN', label: 'Admin' },
+  { value: 'LOAN_OFFICER', label: 'Loan Officer' },
+  { value: 'COLLECTOR', label: 'Collector' },
+  { value: 'VIEWER', label: 'Viewer' },
+];
 
 const STATUS_STYLE: Record<string, string> = {
   ACTIVE: 'bg-emerald-900 text-emerald-300',
@@ -134,6 +143,101 @@ function AddBranchModal({ tenantId, onClose, onSuccess }: { tenantId: string; on
   );
 }
 
+// ── Add Tenant User Modal ─────────────────────────────────────────────────────
+function AddTenantUserModal({ tenantId, onClose, onSuccess }: { tenantId: string; onClose: () => void; onSuccess: () => void }) {
+  const [form, setForm] = useState<CreateTenantUserPayload>({
+    email: '', password: '', firstName: '', lastName: '', phone: '', role: 'ADMIN',
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  function set(k: keyof CreateTenantUserPayload, v: string) { setForm((f) => ({ ...f, [k]: v })); }
+
+  async function submit() {
+    if (!form.firstName.trim() || !form.lastName.trim()) return setError('First and last name are required');
+    if (!form.email.trim()) return setError('Email is required');
+    if (form.password.length < 6) return setError('Password must be at least 6 characters');
+    setError(''); setLoading(true);
+    try {
+      await tenantsApi.createTenantUser(tenantId, {
+        ...form,
+        email: form.email.trim(),
+        phone: form.phone?.trim() || undefined,
+      });
+      onSuccess();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to create user');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const inputCls = 'w-full bg-gray-800 border border-gray-600 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500';
+  const labelCls = 'text-xs font-semibold text-gray-400 uppercase tracking-wide block mb-1.5';
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between mb-5">
+          <h2 className="font-bold text-white text-lg">Add User</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-white text-xl font-bold">✕</button>
+        </div>
+
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>First Name *</label>
+              <input value={form.firstName} onChange={(e) => set('firstName', e.target.value)} className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls}>Last Name *</label>
+              <input value={form.lastName} onChange={(e) => set('lastName', e.target.value)} className={inputCls} />
+            </div>
+          </div>
+
+          <div>
+            <label className={labelCls}>Email *</label>
+            <input type="email" value={form.email} onChange={(e) => set('email', e.target.value)}
+              placeholder="user@example.com" className={inputCls} />
+          </div>
+
+          <div>
+            <label className={labelCls}>Mobile Number</label>
+            <div className="flex gap-2">
+              <span className="flex items-center px-3 border border-gray-600 rounded-xl text-sm text-gray-400 bg-gray-800">+91</span>
+              <input type="tel" value={form.phone ?? ''}
+                onChange={(e) => set('phone', e.target.value.replace(/\D/g, '').slice(0, 10))}
+                placeholder="10-digit mobile number" className={`${inputCls} flex-1`} />
+            </div>
+            <p className="text-xs text-gray-500 mt-1">If set, the user verifies an OTP on login (currently the default OTP).</p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>Role *</label>
+              <select value={form.role} onChange={(e) => set('role', e.target.value)} className={inputCls}>
+                {TENANT_ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className={labelCls}>Password *</label>
+              <input type="text" value={form.password} onChange={(e) => set('password', e.target.value)}
+                placeholder="Min 6 characters" className={inputCls} />
+            </div>
+          </div>
+
+          {error && <p className="text-sm text-red-400">{error}</p>}
+
+          <button onClick={submit} disabled={loading}
+            className="w-full py-3 rounded-xl font-bold text-white text-sm bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60">
+            {loading ? 'Creating...' : 'Create User'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Delete Tenant Modal ──────────────────────────────────────────────────────
 function DeleteTenantModal({
   subdomain, onClose, onConfirm, loading, error,
@@ -237,6 +341,10 @@ export default function TenantDetailPage() {
 
   const [tenant, setTenant] = useState<TenantDetail | null>(null);
   const [branches, setBranches] = useState<Branch[]>([]);
+  const [users, setUsers] = useState<TenantUserRecord[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [usersLoaded, setUsersLoaded] = useState(false);
+  const [showAddUser, setShowAddUser] = useState(false);
   const [tab, setTab] = useState<Tab>('details');
   const [loading, setLoading] = useState(true);
   const [branchesLoading, setBranchesLoading] = useState(false);
@@ -264,6 +372,18 @@ export default function TenantDetailPage() {
 
   function refreshBranches() {
     tenantsApi.listBranches(id).then(setBranches);
+  }
+
+  useEffect(() => {
+    if (tab !== 'users' || usersLoaded) return;
+    setUsersLoading(true);
+    tenantsApi.listTenantUsers(id)
+      .then((u) => { setUsers(u); setUsersLoaded(true); })
+      .finally(() => setUsersLoading(false));
+  }, [tab, id, usersLoaded]);
+
+  function refreshUsers() {
+    tenantsApi.listTenantUsers(id).then(setUsers);
   }
 
   async function handleSuspend() {
@@ -397,7 +517,7 @@ export default function TenantDetailPage() {
               className={`px-4 py-3 text-sm font-medium capitalize border-b-2 transition-colors ${
                 tab === t ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-gray-400 hover:text-gray-200'
               }`}>
-              {t === 'branches' ? `Branches (${branches.length || '…'})` : t === 'users' ? `Users (${tenant._count?.users ?? 0})` : 'Details'}
+              {t === 'branches' ? `Branches (${branches.length || '…'})` : t === 'users' ? `Users (${usersLoaded ? users.length : (tenant._count?.users ?? 0)})` : 'Details'}
             </button>
           ))}
         </div>
@@ -504,44 +624,70 @@ export default function TenantDetailPage() {
 
         {/* ── Users Tab ── */}
         {tab === 'users' && (
-          <section className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-800">
-              <h2 className="font-semibold">Users</h2>
-              <p className="text-sm text-gray-400 mt-0.5">{tenant._count?.users ?? 0} total</p>
+          <>
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-gray-400">
+                {usersLoaded ? `${users.length} ${users.length === 1 ? 'user' : 'users'}` : 'Loading users…'}
+              </p>
+              <button onClick={() => setShowAddUser(true)}
+                className="px-4 py-2 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors">
+                + Add User
+              </button>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-800 text-gray-400 text-left">
-                    <th className="px-6 py-3 font-medium">Name</th>
-                    <th className="px-6 py-3 font-medium">Email</th>
-                    <th className="px-6 py-3 font-medium">Role</th>
-                    <th className="px-6 py-3 font-medium">Joined</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {tenant.users.length === 0 ? (
-                    <tr>
-                      <td colSpan={4} className="px-6 py-8 text-center text-gray-500 text-sm">No users yet</td>
-                    </tr>
-                  ) : (
-                    tenant.users.map((u) => (
-                      <tr key={u.id} className="border-b border-gray-800 last:border-0">
-                        <td className="px-6 py-3 text-white">
-                          {u.firstName || u.lastName ? `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim() : '—'}
-                        </td>
-                        <td className="px-6 py-3 text-gray-400">{u.email}</td>
-                        <td className="px-6 py-3">
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-gray-800 text-gray-300 font-medium">{u.role}</span>
-                        </td>
-                        <td className="px-6 py-3 text-gray-400 text-xs">{new Date(u.createdAt).toLocaleDateString('en-IN')}</td>
+
+            <section className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+              {usersLoading ? (
+                <div className="flex justify-center py-12">
+                  <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : users.length === 0 ? (
+                <div className="p-12 text-center">
+                  <p className="text-3xl mb-3">👥</p>
+                  <p className="text-gray-300 font-medium">No users yet</p>
+                  <p className="text-gray-500 text-sm mt-1 mb-4">Add the first user so this tenant can log in</p>
+                  <button onClick={() => setShowAddUser(true)}
+                    className="px-4 py-2 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium">
+                    + Add User
+                  </button>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-800 text-gray-400 text-left">
+                        <th className="px-6 py-3 font-medium">Name</th>
+                        <th className="px-6 py-3 font-medium">Email</th>
+                        <th className="px-6 py-3 font-medium">Mobile</th>
+                        <th className="px-6 py-3 font-medium">Role</th>
+                        <th className="px-6 py-3 font-medium">Status</th>
+                        <th className="px-6 py-3 font-medium">Joined</th>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </section>
+                    </thead>
+                    <tbody>
+                      {users.map((u) => (
+                        <tr key={u.id} className="border-b border-gray-800 last:border-0">
+                          <td className="px-6 py-3 text-white">
+                            {u.firstName || u.lastName ? `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim() : '—'}
+                          </td>
+                          <td className="px-6 py-3 text-gray-400">{u.email}</td>
+                          <td className="px-6 py-3 text-gray-400">{u.phone ?? '—'}</td>
+                          <td className="px-6 py-3">
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-gray-800 text-gray-300 font-medium">{u.role}</span>
+                          </td>
+                          <td className="px-6 py-3">
+                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${u.isActive ? 'bg-emerald-900 text-emerald-300' : 'bg-red-900 text-red-300'}`}>
+                              {u.isActive ? 'Active' : 'Inactive'}
+                            </span>
+                          </td>
+                          <td className="px-6 py-3 text-gray-400 text-xs">{new Date(u.createdAt).toLocaleDateString('en-IN')}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          </>
         )}
       </main>
 
@@ -550,6 +696,14 @@ export default function TenantDetailPage() {
           tenantId={id}
           onClose={() => setShowAddBranch(false)}
           onSuccess={() => { setShowAddBranch(false); refreshBranches(); setTab('branches'); }}
+        />
+      )}
+
+      {showAddUser && (
+        <AddTenantUserModal
+          tenantId={id}
+          onClose={() => setShowAddUser(false)}
+          onSuccess={() => { setShowAddUser(false); refreshUsers(); }}
         />
       )}
 

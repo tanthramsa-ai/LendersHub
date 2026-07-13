@@ -4,9 +4,10 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
-  getWeeklyLoan, recordPayment, WeeklyLoanDetail, WeeklyInstallment,
+  getWeeklyLoan, recordPayment, closeLoan, reopenLoan, WeeklyLoanDetail, WeeklyInstallment,
   getTenantSession, COLLECTION_ROLES, MANAGER_ROLES,
 } from '@/services/tenant-api';
+import { CloseLoanModal, CloseCommentBanner, ReopenLoanModal } from '@/components/CloseLoanModal';
 
 function fmt(n: number) {
   return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
@@ -21,7 +22,7 @@ const LOAN_STATUS_COLORS: Record<string, string> = {
   DISBURSED: 'bg-green-100 text-green-700',
   PENDING:   'bg-yellow-100 text-yellow-700',
   APPROVED:  'bg-blue-100 text-blue-700',
-  CLOSED:    'bg-gray-100 text-gray-500',
+  CLOSED:    'bg-slate-200 text-slate-800',
   DEFAULTED: 'bg-red-100 text-red-700',
 };
 
@@ -36,7 +37,7 @@ function tileClasses(inst: WeeklyInstallment): string {
     case 'OVERDUE':
       return 'bg-red-100 border-red-400 text-red-800';
     case 'WAIVED':
-      return 'bg-gray-100 border-gray-200 text-gray-400';
+      return 'bg-slate-200 border-slate-400 text-slate-600';
     case 'PENDING':
       return due < today
         ? 'bg-red-50 border-red-200 text-red-700'
@@ -111,6 +112,12 @@ export default function WeeklyLoanDetailPage() {
   const [paying, setPaying] = useState(false);
   const [payError, setPayError] = useState('');
   const [paySuccess, setPaySuccess] = useState('');
+  const [showCloseConfirm, setShowCloseConfirm] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const [closeError, setCloseError] = useState('');
+  const [showReopenConfirm, setShowReopenConfirm] = useState(false);
+  const [reopening, setReopening] = useState(false);
+  const [reopenError, setReopenError] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true); setError('');
@@ -148,6 +155,28 @@ export default function WeeklyLoanDetailPage() {
     } finally { setPaying(false); }
   }
 
+  async function handleClose(comment: string) {
+    setClosing(true); setCloseError('');
+    try {
+      await closeLoan(id, { comment });
+      setShowCloseConfirm(false);
+      await load();
+    } catch (e: unknown) {
+      setCloseError((e as Error).message);
+    } finally { setClosing(false); }
+  }
+
+  async function handleReopen(comment: string) {
+    setReopening(true); setReopenError('');
+    try {
+      await reopenLoan(id, { comment });
+      setShowReopenConfirm(false);
+      await load();
+    } catch (e: unknown) {
+      setReopenError((e as Error).message);
+    } finally { setReopening(false); }
+  }
+
   if (loading) return <div className="p-6 text-gray-400 text-sm">Loading…</div>;
   if (error) return <div className="p-6 text-red-600 text-sm">{error}</div>;
   if (!loan) return null;
@@ -166,6 +195,14 @@ export default function WeeklyLoanDetailPage() {
         <span className={`px-2 py-0.5 rounded text-xs font-semibold ${LOAN_STATUS_COLORS[loan.status] ?? 'bg-gray-100 text-gray-500'}`}>{loan.status}</span>
         {isNpa && <span className="px-2 py-0.5 bg-red-200 text-red-800 rounded text-xs font-bold">NPA</span>}
       </div>
+
+      {loan.status === 'CLOSED' && (
+        <CloseCommentBanner
+          comment={loan.closeComment}
+          closedAt={loan.closedAt}
+          hasWaivedInstallments={loan.installments.some((i) => i.status === 'WAIVED')}
+        />
+      )}
 
       {paySuccess && (
         <div className="flex items-center justify-between bg-green-50 border border-green-200 text-green-700 text-sm px-4 py-2 rounded-lg">
@@ -253,6 +290,7 @@ export default function WeeklyLoanDetailPage() {
             <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-amber-200 border border-amber-300 inline-block"/>Partial</span>
             <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-200 border border-red-300 inline-block"/>Overdue</span>
             <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-white border border-gray-300 inline-block"/>Upcoming</span>
+            <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-slate-200 border border-slate-400 inline-block"/>Waived</span>
           </div>
         </div>
 
@@ -354,25 +392,49 @@ export default function WeeklyLoanDetailPage() {
         </div>
       )}
 
-      {/* Close loan action */}
+      {/* Close / Reopen loan action */}
       {canClose && loan.status === 'DISBURSED' && (
         <div className="flex justify-end">
           <button
-            onClick={async () => {
-              if (!confirm('Close this loan? Remaining unpaid installments will be waived.')) return;
-              try {
-                const { closeLoan } = await import('@/services/tenant-api');
-                await closeLoan(id);
-                await load();
-              } catch (e: unknown) {
-                alert((e as Error).message);
-              }
-            }}
+            onClick={() => { setCloseError(''); setShowCloseConfirm(true); }}
             className="px-4 py-2 bg-gray-700 hover:bg-gray-800 text-white text-sm font-medium rounded-lg transition-colors"
           >
             Close Loan
           </button>
         </div>
+      )}
+      {canClose && loan.status === 'CLOSED' && (
+        <div className="flex justify-end">
+          <button
+            onClick={() => { setReopenError(''); setShowReopenConfirm(true); }}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
+          >
+            Reopen Loan
+          </button>
+        </div>
+      )}
+
+      {showCloseConfirm && (
+        <CloseLoanModal
+          loanNumber={loan.loanNumber}
+          outstanding={fin.principalOutstanding + fin.interestOutstanding}
+          closing={closing}
+          error={closeError}
+          onCancel={() => { setShowCloseConfirm(false); setCloseError(''); }}
+          onConfirm={handleClose}
+        />
+      )}
+
+      {showReopenConfirm && (
+        <ReopenLoanModal
+          loanNumber={loan.loanNumber}
+          previousCloseComment={loan.closeComment}
+          waivedCount={loan.installments.filter((i) => i.status === 'WAIVED').length}
+          reopening={reopening}
+          error={reopenError}
+          onCancel={() => { setShowReopenConfirm(false); setReopenError(''); }}
+          onConfirm={handleReopen}
+        />
       )}
 
       {/* Payment modal */}

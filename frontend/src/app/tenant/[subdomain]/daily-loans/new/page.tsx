@@ -4,11 +4,15 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
-  getCustomers, createCustomer, getBranches, getLoanTypes,
+  getCustomers, createCustomer, updateCustomer, getCustomer, getBranches, getLoanTypes,
   previewDailySchedule, createDailyLoan,
   Customer, TenantBranch, LoanType, DailySchedulePreview,
   getTenantSession, LOAN_CREATE_ROLES,
 } from '@/services/tenant-api';
+import {
+  getQuickAddCustomerError, sanitizeNameInput, sanitizeLocalityInput, sanitizePanInput, sanitizeLoanPurposeInput,
+  EMPTY_QUICK_ADD_CUSTOMER, customerToQuickAddForm,
+} from '@/lib/quick-add-customer';
 
 const inputCls = 'w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-gray-900';
 
@@ -48,7 +52,8 @@ export default function NewDailyLoanPage() {
   const [searching, setSearching] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [showAddCustomer, setShowAddCustomer] = useState(false);
-  const [newCust, setNewCust] = useState({ firstName: '', lastName: '', phone: '', address: '', locality: '', altContact: '', panNumber: '', aadhaarLast4: '' });
+  const [editingCustomerId, setEditingCustomerId] = useState<string | null>(null);
+  const [newCust, setNewCust] = useState({ ...EMPTY_QUICK_ADD_CUSTOMER });
   const [addingCustomer, setAddingCustomer] = useState(false);
   const [addCustError, setAddCustError] = useState('');
 
@@ -108,27 +113,53 @@ export default function NewDailyLoanPage() {
     return () => clearTimeout(t);
   }, [customerSearch, searchCustomers]);
 
-  async function handleAddCustomer() {
-    if (!newCust.firstName || !newCust.phone || !newCust.address || !newCust.locality || !newCust.altContact) {
-      setAddCustError('First name, phone, address, locality and alternate contact are required');
-      return;
+  async function handleChangeCustomer() {
+    if (!selectedCustomer) return;
+    setAddCustError('');
+    try {
+      const detail = await getCustomer(selectedCustomer.id);
+      setNewCust(customerToQuickAddForm(detail));
+      setEditingCustomerId(detail.id);
+    } catch {
+      setNewCust(customerToQuickAddForm(selectedCustomer));
+      setEditingCustomerId(selectedCustomer.id);
     }
-    if (!newCust.panNumber && !newCust.aadhaarLast4) {
-      setAddCustError('At least PAN or Aadhaar number is required');
+    setSelectedCustomer(null);
+    setShowAddCustomer(true);
+    setCustomerSearch('');
+    setCustomerResults([]);
+  }
+
+  async function handleAddCustomer() {
+    const validationError = getQuickAddCustomerError({ ...newCust, requireAltContact: true });
+    if (validationError) {
+      setAddCustError(validationError);
       return;
     }
     setAddCustError('');
     setAddingCustomer(true);
     try {
-      const result = await createCustomer({
-        firstName: newCust.firstName, lastName: newCust.lastName || '-',
-        phone: newCust.phone, address: newCust.address, locality: newCust.locality,
+      const payload = {
+        firstName: newCust.firstName,
+        lastName: newCust.lastName || '-',
+        phone: newCust.phone,
+        address: newCust.address,
+        locality: newCust.locality,
         altContact: newCust.altContact,
         ...(newCust.panNumber && { panNumber: newCust.panNumber }),
         ...(newCust.aadhaarLast4 && { aadhaarLast4: newCust.aadhaarLast4 }),
-      }) as Customer;
-      setSelectedCustomer(result);
+      };
+      if (editingCustomerId) {
+        await updateCustomer(editingCustomerId, payload);
+        const updated = await getCustomer(editingCustomerId);
+        setSelectedCustomer(updated);
+        setEditingCustomerId(null);
+      } else {
+        const result = await createCustomer(payload) as Customer;
+        setSelectedCustomer(result);
+      }
       setShowAddCustomer(false);
+      setNewCust({ ...EMPTY_QUICK_ADD_CUSTOMER });
     } catch (e) {
       setAddCustError((e as Error).message);
     } finally { setAddingCustomer(false); }
@@ -225,7 +256,7 @@ export default function NewDailyLoanPage() {
                   <p className="font-semibold text-gray-900">{selectedCustomer.firstName} {selectedCustomer.lastName}</p>
                   <p className="text-sm text-gray-500">{selectedCustomer.phone} · {selectedCustomer.customerCode}</p>
                 </div>
-                <button onClick={() => setSelectedCustomer(null)} className="text-xs text-red-500 hover:underline">Change</button>
+                <button onClick={handleChangeCustomer} className="text-xs text-red-500 hover:underline">Change</button>
               </div>
             ) : (
               <>
@@ -247,28 +278,45 @@ export default function NewDailyLoanPage() {
                   </div>
                 )}
                 {customerSearch.length > 2 && customerResults.length === 0 && !searching && (
-                  <p className="text-sm text-gray-500 mt-2">No customers found. <button onClick={() => setShowAddCustomer(true)} className="text-blue-600 hover:underline">Add new</button></p>
+                  <p className="text-sm text-gray-500 mt-2">No customers found. <button onClick={() => { setEditingCustomerId(null); setNewCust({ ...EMPTY_QUICK_ADD_CUSTOMER }); setAddCustError(''); setShowAddCustomer(true); }} className="text-blue-600 hover:underline">Add new</button></p>
                 )}
               </>
             )}
 
             {!selectedCustomer && (
-              <button onClick={() => setShowAddCustomer(!showAddCustomer)} className="mt-3 text-sm text-blue-600 hover:underline">
+              <button
+                onClick={() => {
+                  if (showAddCustomer) {
+                    setShowAddCustomer(false);
+                    setEditingCustomerId(null);
+                    setNewCust({ ...EMPTY_QUICK_ADD_CUSTOMER });
+                    setAddCustError('');
+                  } else {
+                    setEditingCustomerId(null);
+                    setNewCust({ ...EMPTY_QUICK_ADD_CUSTOMER });
+                    setAddCustError('');
+                    setShowAddCustomer(true);
+                  }
+                }}
+                className="mt-3 text-sm text-blue-600 hover:underline"
+              >
                 {showAddCustomer ? '▲ Hide' : '+ Add new customer'}
               </button>
             )}
 
             {showAddCustomer && !selectedCustomer && (
               <div className="mt-4 border-t pt-4 space-y-3">
-                <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Quick Add Customer</p>
+                <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                  {editingCustomerId ? 'Edit Customer' : 'Quick Add Customer'}
+                </p>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">First Name <span className="text-red-500">*</span></label>
-                    <input value={newCust.firstName} onChange={(e) => setNewCust({ ...newCust, firstName: e.target.value })} className={inputCls} placeholder="Ravi" />
+                    <input value={newCust.firstName} onChange={(e) => setNewCust({ ...newCust, firstName: sanitizeNameInput(e.target.value) })} className={inputCls} placeholder="Ravi" />
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">Last Name</label>
-                    <input value={newCust.lastName} onChange={(e) => setNewCust({ ...newCust, lastName: e.target.value })} className={inputCls} placeholder="Kumar" />
+                    <input value={newCust.lastName} onChange={(e) => setNewCust({ ...newCust, lastName: sanitizeNameInput(e.target.value) })} className={inputCls} placeholder="Kumar" />
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">Phone <span className="text-red-500">*</span></label>
@@ -284,11 +332,11 @@ export default function NewDailyLoanPage() {
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">Locality <span className="text-red-500">*</span></label>
-                    <input value={newCust.locality} onChange={(e) => setNewCust({ ...newCust, locality: e.target.value })} className={inputCls} placeholder="Anna Nagar" />
+                    <input value={newCust.locality} onChange={(e) => setNewCust({ ...newCust, locality: sanitizeLocalityInput(e.target.value) })} className={inputCls} placeholder="Anna Nagar" />
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">PAN <span className="text-xs text-gray-400">(or Aadhaar)</span></label>
-                    <input value={newCust.panNumber} onChange={(e) => setNewCust({ ...newCust, panNumber: e.target.value.toUpperCase() })} className={inputCls} placeholder="ABCDE1234F" maxLength={10} />
+                    <input value={newCust.panNumber} onChange={(e) => setNewCust({ ...newCust, panNumber: sanitizePanInput(e.target.value) })} className={inputCls} placeholder="ABCDE1234F" maxLength={10} />
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">Aadhaar Last 4</label>
@@ -298,7 +346,7 @@ export default function NewDailyLoanPage() {
                 {addCustError && <p className="text-xs text-red-600">{addCustError}</p>}
                 <button onClick={handleAddCustomer} disabled={addingCustomer}
                   className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white text-sm font-medium rounded-lg">
-                  {addingCustomer ? 'Adding…' : 'Add & Select Customer'}
+                  {addingCustomer ? 'Saving…' : editingCustomerId ? 'Save Customer' : 'Add & Select Customer'}
                 </button>
               </div>
             )}
@@ -397,7 +445,7 @@ export default function NewDailyLoanPage() {
               )}
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Loan Purpose</label>
-                <input value={form.purpose} onChange={(e) => setF('purpose', e.target.value)} className={inputCls} placeholder="Agriculture, Business…" />
+                <input value={form.purpose} onChange={(e) => setF('purpose', sanitizeLoanPurposeInput(e.target.value))} className={inputCls} placeholder="Agriculture, Business…" />
               </div>
             </div>
 

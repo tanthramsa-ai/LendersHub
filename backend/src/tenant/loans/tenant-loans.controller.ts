@@ -159,8 +159,21 @@ export class TenantLoansController {
   }
 
   @Patch(':id/close')
-  closeLoan(@Request() req: { user: TenantJwtPayload }, @Param('id') id: string) {
-    return this.svc.closeLoan(req.user, id);
+  closeLoan(
+    @Request() req: { user: TenantJwtPayload },
+    @Param('id') id: string,
+    @Body() dto: { comment?: string },
+  ) {
+    return this.svc.closeLoan(req.user, id, dto ?? {});
+  }
+
+  @Patch(':id/reopen')
+  reopenLoan(
+    @Request() req: { user: TenantJwtPayload },
+    @Param('id') id: string,
+    @Body() dto: { comment?: string },
+  ) {
+    return this.svc.reopenLoan(req.user, id, dto ?? {});
   }
 
   @Delete(':id')

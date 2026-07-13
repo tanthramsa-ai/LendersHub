@@ -13,7 +13,7 @@ const STATUS_BADGE: Record<string, string> = {
   PENDING:   'bg-yellow-100 text-yellow-700',
   APPROVED:  'bg-blue-100 text-blue-700',
   DISBURSED: 'bg-indigo-100 text-indigo-700',
-  CLOSED:    'bg-gray-100 text-gray-500',
+  CLOSED:    'bg-slate-200 text-slate-800',
   DEFAULTED: 'bg-red-100 text-red-700',
   REJECTED:  'bg-red-50 text-red-400',
 };
@@ -23,7 +23,7 @@ type LoanStatusFilter = '' | 'APPROVED' | 'DISBURSED' | 'CLOSED' | 'DEFAULTED';
 const LOAN_FILTERS: { label: string; value: LoanStatusFilter; color: string }[] = [
   { label: 'All', value: '', color: 'text-gray-700' },
   { label: 'Active', value: 'DISBURSED', color: 'text-green-700' },
-  { label: 'Closed', value: 'CLOSED', color: 'text-gray-500' },
+  { label: 'Closed', value: 'CLOSED', color: 'text-slate-700' },
   { label: 'NPA / Defaulted', value: 'DEFAULTED', color: 'text-red-600' },
 ];
 
@@ -192,7 +192,7 @@ export default function UserDetailPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {loans.map((l) => (
-                    <tr key={l.id} className="hover:bg-gray-50 transition-colors">
+                    <tr key={l.id} className={`hover:bg-gray-50 transition-colors ${l.status === 'CLOSED' ? 'bg-slate-50' : l.status === 'DEFAULTED' ? 'bg-red-50' : ''}`}>
                       <td className="px-4 py-3">
                         <Link href={`/${subdomain}/loans/${l.id}`} className="font-mono text-blue-600 hover:underline text-xs">
                           {l.loanNumber}

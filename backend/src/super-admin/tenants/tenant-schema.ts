@@ -85,7 +85,7 @@ export function tenantSchemaDDL(s: string): string[] {
        customer_id      UUID         NOT NULL REFERENCES ${q}."customers" (id) ON DELETE RESTRICT,
        loan_officer_id  UUID         REFERENCES ${q}."users" (id) ON DELETE SET NULL,
        principal        NUMERIC(14,2) NOT NULL,
-       interest_rate    NUMERIC(6,4)  NOT NULL,
+       interest_rate    NUMERIC(7,4)  NOT NULL,
        term_months      SMALLINT      NOT NULL,
        status           ${q}.loan_status NOT NULL DEFAULT 'PENDING',
        purpose          TEXT,
@@ -164,8 +164,8 @@ export function tenantSchemaDDL(s: string): string[] {
        description       TEXT,
        min_amount        NUMERIC(14,2),
        max_amount        NUMERIC(14,2),
-       min_interest_rate NUMERIC(6,4),
-       max_interest_rate NUMERIC(6,4),
+       min_interest_rate NUMERIC(7,4),
+       max_interest_rate NUMERIC(7,4),
        min_term_months   SMALLINT,
        max_term_months   SMALLINT,
        is_active         BOOLEAN      NOT NULL DEFAULT TRUE,
@@ -241,6 +241,14 @@ export function tenantSchemaDDL(s: string): string[] {
     `ALTER TABLE ${q}."loans" ADD COLUMN IF NOT EXISTS emi_amount          NUMERIC(14,2)`,
     `ALTER TABLE ${q}."loans" ADD COLUMN IF NOT EXISTS security_doc_url    TEXT`,
     `ALTER TABLE ${q}."loans" ADD COLUMN IF NOT EXISTS promissory_note_url TEXT`,
+    `ALTER TABLE ${q}."loans" ADD COLUMN IF NOT EXISTS close_comment       TEXT`,
+    `ALTER TABLE ${q}."loans" ADD COLUMN IF NOT EXISTS reopen_comment      TEXT`,
+
+    // Widen interest_rate so values up to 200% p.a. (and loan-type bounds) fit.
+    // NUMERIC(6,4) only allowed ≤ 99.9999 and caused "Numeric value out of range".
+    `ALTER TABLE ${q}."loans" ALTER COLUMN interest_rate TYPE NUMERIC(7,4)`,
+    `ALTER TABLE ${q}."loan_types" ALTER COLUMN min_interest_rate TYPE NUMERIC(7,4)`,
+    `ALTER TABLE ${q}."loan_types" ALTER COLUMN max_interest_rate TYPE NUMERIC(7,4)`,
 
     // ── customer extended fields (idempotent) ─────────────────────────────────
     `ALTER TABLE ${q}."customers" ADD COLUMN IF NOT EXISTS locality       TEXT`,

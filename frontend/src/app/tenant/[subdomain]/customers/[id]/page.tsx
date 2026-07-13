@@ -8,6 +8,7 @@ import {
   CustomerDetail, TenantBranch, UpdateCustomerPayload,
   getTenantSession, CUSTOMER_ROLES, USER_ADMIN_ROLES,
 } from '@/services/tenant-api';
+import { sanitizeLocalityInput, sanitizePanInput, sanitizeLoanPurposeInput } from '@/lib/quick-add-customer';
 
 const STATES = [
   'Andhra Pradesh','Arunachal Pradesh','Assam','Bihar','Chhattisgarh','Goa','Gujarat',
@@ -196,7 +197,7 @@ export default function CustomerDetailPage() {
               <Field label="Email"><input type="email" value={form.email} onChange={(e) => set('email', e.target.value)} className={inputCls} /></Field>
               <Field label="Date of Birth"><input type="date" value={form.dateOfBirth} onChange={(e) => set('dateOfBirth', e.target.value)} className={inputCls} /></Field>
               <Field label="Occupation"><input value={form.occupation} onChange={(e) => set('occupation', e.target.value)} className={inputCls} /></Field>
-              <Field label="Reason for Loan"><input value={form.loanPurpose} onChange={(e) => set('loanPurpose', e.target.value)} className={inputCls} /></Field>
+              <Field label="Reason for Loan"><input value={form.loanPurpose} onChange={(e) => set('loanPurpose', sanitizeLoanPurposeInput(e.target.value))} className={inputCls} /></Field>
               <Field label="Credit Score"><input type="number" value={form.creditScore} onChange={(e) => set('creditScore', e.target.value)} className={inputCls} min={300} max={900} /></Field>
             </div>
           </div>
@@ -204,7 +205,7 @@ export default function CustomerDetailPage() {
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
             <h2 className="text-sm font-semibold text-gray-700 mb-4">KYC Details</h2>
             <div className="grid grid-cols-2 gap-4">
-              <Field label="PAN Number"><input value={form.panNumber} onChange={(e) => set('panNumber', e.target.value.toUpperCase())} className={inputCls} maxLength={10} /></Field>
+              <Field label="PAN Number"><input value={form.panNumber} onChange={(e) => set('panNumber', sanitizePanInput(e.target.value))} className={inputCls} maxLength={10} /></Field>
               <Field label="Aadhaar Last 4"><input value={form.aadhaarLast4} onChange={(e) => set('aadhaarLast4', e.target.value.replace(/\D/g, '').slice(0, 4))} className={inputCls} maxLength={4} /></Field>
             </div>
             <div className="mt-4">
@@ -221,7 +222,7 @@ export default function CustomerDetailPage() {
             <h2 className="text-sm font-semibold text-gray-700 mb-4">Address</h2>
             <div className="space-y-4">
               <Field label="Street Address *"><input value={form.address} onChange={(e) => set('address', e.target.value)} required className={inputCls} /></Field>
-              <Field label="Locality *"><input value={form.locality} onChange={(e) => set('locality', e.target.value)} required className={inputCls} /></Field>
+              <Field label="Locality *"><input value={form.locality} onChange={(e) => set('locality', sanitizeLocalityInput(e.target.value))} required className={inputCls} /></Field>
               <div className="grid grid-cols-3 gap-4">
                 <Field label="City"><input value={form.city} onChange={(e) => set('city', e.target.value)} className={inputCls} /></Field>
                 <Field label="State">

@@ -34,7 +34,7 @@ const STATUS_COLORS: Record<string, string> = {
   DISBURSED: 'bg-green-100 text-green-700',
   PENDING: 'bg-yellow-100 text-yellow-700',
   APPROVED: 'bg-blue-100 text-blue-700',
-  CLOSED: 'bg-gray-100 text-gray-500',
+  CLOSED: 'bg-slate-200 text-slate-800',
   DEFAULTED: 'bg-red-100 text-red-700',
   REJECTED: 'bg-red-100 text-red-600',
 };

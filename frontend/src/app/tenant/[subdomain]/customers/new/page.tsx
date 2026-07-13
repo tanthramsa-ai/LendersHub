@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { createCustomer, getBranches, TenantBranch, getTenantSession, CUSTOMER_ROLES } from '@/services/tenant-api';
+import { sanitizeLocalityInput, sanitizePanInput, sanitizeNameInput, sanitizeLoanPurposeInput, hasDisallowedSpecialChars } from '@/lib/quick-add-customer';
 
 const STATES = [
   'Andhra Pradesh','Arunachal Pradesh','Assam','Bihar','Chhattisgarh','Goa','Gujarat',
@@ -16,16 +17,86 @@ const STATES = [
 const RELATIONS = ['Spouse','Parent','Child','Sibling','Friend','Colleague','Other'];
 
 const inputCls = 'w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-gray-900';
+const inputErrCls = 'w-full px-3 py-2 border border-red-400 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-400 bg-white text-gray-900';
 
-function Field({ label, children, required }: { label: string; children: React.ReactNode; required?: boolean }) {
+type FormFields = {
+  firstName: string; lastName: string; phone: string; email: string;
+  dateOfBirth: string;
+  panNumber: string; aadhaarLast4: string;
+  address: string; locality: string; city: string; state: string; pincode: string;
+  occupation: string; loanPurpose: string;
+  altContact: string; altContactName: string; altContactRelation: string;
+  creditScore: string;
+  branchId: string;
+};
+
+type FieldKey = keyof FormFields;
+
+function Field({
+  label, children, required, error,
+}: {
+  label: string; children: React.ReactNode; required?: boolean; error?: string;
+}) {
   return (
     <div>
       <label className="block text-xs font-medium text-gray-600 mb-1">
         {label}{required && <span className="text-red-500 ml-0.5">*</span>}
       </label>
       {children}
+      {error && <p className="text-xs text-red-600 mt-1">{error}</p>}
     </div>
   );
+}
+
+function validateForm(form: FormFields): Partial<Record<FieldKey | 'kyc', string>> {
+  const errors: Partial<Record<FieldKey | 'kyc', string>> = {};
+
+  if (!form.firstName.trim()) errors.firstName = 'First name is required';
+  if (!form.lastName.trim()) errors.lastName = 'Last name is required';
+
+  if (!form.phone.trim()) errors.phone = 'Phone number is required';
+  else if (!/^\d{10}$/.test(form.phone)) errors.phone = 'Phone number must be exactly 10 digits';
+
+  if (form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
+    errors.email = 'Email address is invalid';
+  }
+
+  if (!form.address.trim()) errors.address = 'Address is required';
+  if (!form.locality.trim()) errors.locality = 'Locality is required';
+  else if (!/^[a-zA-Z0-9\s\-.,']+$/.test(form.locality.trim())) {
+    errors.locality = 'Locality cannot contain special characters';
+  }
+
+  if (!form.altContact.trim()) errors.altContact = 'Alternate contact number is required';
+  else if (!/^\d{10}$/.test(form.altContact)) errors.altContact = 'Alternate contact must be exactly 10 digits';
+
+  if (!form.panNumber.trim() && !form.aadhaarLast4.trim()) {
+    errors.kyc = 'At least one of PAN number or Aadhaar number is required';
+  }
+  if (form.panNumber.trim()) {
+    if (/[^A-Z0-9]/.test(form.panNumber.trim())) {
+      errors.panNumber = 'PAN cannot contain special characters';
+    } else if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(form.panNumber.trim())) {
+      errors.panNumber = 'PAN format is invalid (e.g. ABCDE1234F)';
+    }
+  }
+  if (form.aadhaarLast4.trim() && !/^\d{4}$/.test(form.aadhaarLast4)) {
+    errors.aadhaarLast4 = 'Aadhaar last 4 digits must be exactly 4 digits';
+  }
+  if (form.pincode.trim() && !/^\d{6}$/.test(form.pincode)) {
+    errors.pincode = 'Pincode must be exactly 6 digits';
+  }
+  if (form.loanPurpose.trim() && hasDisallowedSpecialChars(form.loanPurpose)) {
+    errors.loanPurpose = 'Loan purpose cannot contain special characters';
+  }
+  if (form.creditScore.trim()) {
+    const score = parseInt(form.creditScore, 10);
+    if (Number.isNaN(score) || score < 300 || score > 900) {
+      errors.creditScore = 'Credit score must be between 300 and 900';
+    }
+  }
+
+  return errors;
 }
 
 export default function NewCustomerPage() {
@@ -37,7 +108,7 @@ export default function NewCustomerPage() {
   const canAdd = CUSTOMER_ROLES.includes(session?.user.role ?? 'VIEWER');
 
   const [branches, setBranches] = useState<TenantBranch[]>([]);
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<FormFields>({
     firstName: '', lastName: '', phone: '', email: '',
     dateOfBirth: '',
     panNumber: '', aadhaarLast4: '',
@@ -49,6 +120,7 @@ export default function NewCustomerPage() {
   });
   const [aadhaarFile, setAadhaarFile] = useState<File | null>(null);
   const [aadhaarPreview, setAadhaarPreview] = useState<string>('');
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<FieldKey | 'kyc', string>>>({});
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -56,8 +128,19 @@ export default function NewCustomerPage() {
     getBranches().then((b) => setBranches(b.filter((br) => br.isActive)));
   }, []);
 
-  function set(field: keyof typeof form, value: string) {
+  function set(field: FieldKey, value: string) {
     setForm((f) => ({ ...f, [field]: value }));
+    setFieldErrors((prev) => {
+      if (!prev[field] && !(field === 'panNumber' || field === 'aadhaarLast4' ? prev.kyc : false)) return prev;
+      const next = { ...prev };
+      delete next[field];
+      if (field === 'panNumber' || field === 'aadhaarLast4') delete next.kyc;
+      return next;
+    });
+  }
+
+  function cls(field: FieldKey) {
+    return fieldErrors[field] ? inputErrCls : inputCls;
   }
 
   function handleAadhaarFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -74,10 +157,14 @@ export default function NewCustomerPage() {
     e.preventDefault();
     setError('');
 
-    if (!form.panNumber.trim() && !form.aadhaarLast4.trim()) {
-      setError('At least one of PAN number or Aadhaar number is required');
+    const errors = validateForm(form);
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
+      const first = Object.values(errors)[0];
+      setError(first ?? 'Please fix the highlighted fields');
       return;
     }
+    setFieldErrors({});
 
     setLoading(true);
     try {
@@ -103,7 +190,7 @@ export default function NewCustomerPage() {
         ...(form.creditScore && { creditScore: parseInt(form.creditScore) }),
         ...(form.branchId && { branchId: form.branchId }),
       });
-      router.push(`/${subdomain}/customers`);
+      router.push(`/tenant/${subdomain}/customers`);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -112,46 +199,46 @@ export default function NewCustomerPage() {
   }
 
   if (!canAdd) {
-    router.replace(`/${subdomain}/customers`);
+    router.replace(`/tenant/${subdomain}/customers`);
     return null;
   }
 
   return (
     <div className="p-6 max-w-3xl mx-auto">
       <div className="mb-6">
-        <Link href={`/${subdomain}/customers`} className="text-sm text-blue-600 hover:underline">
+        <Link href={`/tenant/${subdomain}/customers`} className="text-sm text-blue-600 hover:underline">
           ← Back to Customers
         </Link>
         <h1 className="text-xl font-bold text-gray-900 mt-2">Add New Customer</h1>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-6">
+      <form onSubmit={handleSubmit} className="space-y-6" noValidate>
 
         {/* Personal Information */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
           <h2 className="text-sm font-semibold text-gray-700 mb-4">Personal Information</h2>
           <div className="grid grid-cols-2 gap-4">
-            <Field label="First Name" required>
-              <input value={form.firstName} onChange={(e) => set('firstName', e.target.value)} required className={inputCls} placeholder="Ravi" />
+            <Field label="First Name" required error={fieldErrors.firstName}>
+              <input value={form.firstName} onChange={(e) => set('firstName', sanitizeNameInput(e.target.value))} className={cls('firstName')} placeholder="Ravi" />
             </Field>
-            <Field label="Last Name" required>
-              <input value={form.lastName} onChange={(e) => set('lastName', e.target.value)} required className={inputCls} placeholder="Kumar" />
+            <Field label="Last Name" required error={fieldErrors.lastName}>
+              <input value={form.lastName} onChange={(e) => set('lastName', sanitizeNameInput(e.target.value))} className={cls('lastName')} placeholder="Kumar" />
             </Field>
-            <Field label="Mobile Number" required>
+            <Field label="Mobile Number" required error={fieldErrors.phone}>
               <div className="flex">
                 <span className="inline-flex items-center px-3 border border-r-0 border-gray-300 rounded-l-lg bg-gray-50 text-gray-500 text-sm">+91</span>
                 <input
                   value={form.phone}
                   onChange={(e) => set('phone', e.target.value.replace(/\D/g, '').slice(0, 10))}
-                  required
-                  className="flex-1 px-3 py-2 border border-gray-300 rounded-r-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-gray-900"
+                  className={`flex-1 px-3 py-2 border rounded-r-lg text-sm focus:outline-none focus:ring-2 bg-white text-gray-900 ${fieldErrors.phone ? 'border-red-400 focus:ring-red-400' : 'border-gray-300 focus:ring-blue-500'}`}
                   placeholder="9876543210"
                   maxLength={10}
+                  inputMode="numeric"
                 />
               </div>
             </Field>
-            <Field label="Email Address">
-              <input type="email" value={form.email} onChange={(e) => set('email', e.target.value)} className={inputCls} placeholder="ravi@example.com" />
+            <Field label="Email Address" error={fieldErrors.email}>
+              <input type="email" value={form.email} onChange={(e) => set('email', e.target.value)} className={cls('email')} placeholder="ravi@example.com" />
             </Field>
             <Field label="Date of Birth">
               <input type="date" value={form.dateOfBirth} onChange={(e) => set('dateOfBirth', e.target.value)} className={inputCls} />
@@ -159,11 +246,11 @@ export default function NewCustomerPage() {
             <Field label="Occupation">
               <input value={form.occupation} onChange={(e) => set('occupation', e.target.value)} className={inputCls} placeholder="Farmer, Business, Salaried…" />
             </Field>
-            <Field label="Reason for Loan">
-              <input value={form.loanPurpose} onChange={(e) => set('loanPurpose', e.target.value)} className={inputCls} placeholder="Agriculture, Medical, Education…" />
+            <Field label="Reason for Loan" error={fieldErrors.loanPurpose}>
+              <input value={form.loanPurpose} onChange={(e) => set('loanPurpose', sanitizeLoanPurposeInput(e.target.value))} className={cls('loanPurpose')} placeholder="Agriculture, Medical, Education…" />
             </Field>
-            <Field label="Credit Score">
-              <input type="number" value={form.creditScore} onChange={(e) => set('creditScore', e.target.value)} className={inputCls} placeholder="750" min={300} max={900} />
+            <Field label="Credit Score" error={fieldErrors.creditScore}>
+              <input type="number" value={form.creditScore} onChange={(e) => set('creditScore', e.target.value)} className={cls('creditScore')} placeholder="750" min={300} max={900} />
             </Field>
           </div>
         </div>
@@ -172,12 +259,13 @@ export default function NewCustomerPage() {
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
           <h2 className="text-sm font-semibold text-gray-700 mb-1">KYC Details</h2>
           <p className="text-xs text-gray-400 mb-4">At least one of PAN or Aadhaar is required</p>
+          {(fieldErrors.kyc) && <p className="text-xs text-red-600 mb-3">{fieldErrors.kyc}</p>}
           <div className="grid grid-cols-2 gap-4">
-            <Field label="PAN Number">
-              <input value={form.panNumber} onChange={(e) => set('panNumber', e.target.value.toUpperCase())} className={inputCls} placeholder="ABCDE1234F" maxLength={10} />
+            <Field label="PAN Number" error={fieldErrors.panNumber}>
+              <input value={form.panNumber} onChange={(e) => set('panNumber', sanitizePanInput(e.target.value))} className={cls('panNumber')} placeholder="ABCDE1234F" maxLength={10} />
             </Field>
-            <Field label="Aadhaar Last 4 Digits">
-              <input value={form.aadhaarLast4} onChange={(e) => set('aadhaarLast4', e.target.value.replace(/\D/g, '').slice(0, 4))} className={inputCls} placeholder="1234" maxLength={4} />
+            <Field label="Aadhaar Last 4 Digits" error={fieldErrors.aadhaarLast4}>
+              <input value={form.aadhaarLast4} onChange={(e) => set('aadhaarLast4', e.target.value.replace(/\D/g, '').slice(0, 4))} className={cls('aadhaarLast4')} placeholder="1234" maxLength={4} inputMode="numeric" />
             </Field>
           </div>
           <div className="mt-4">
@@ -196,11 +284,11 @@ export default function NewCustomerPage() {
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
           <h2 className="text-sm font-semibold text-gray-700 mb-4">Address</h2>
           <div className="space-y-4">
-            <Field label="Street Address" required>
-              <input value={form.address} onChange={(e) => set('address', e.target.value)} required className={inputCls} placeholder="Plot 12, Main Road" />
+            <Field label="Street Address" required error={fieldErrors.address}>
+              <input value={form.address} onChange={(e) => set('address', e.target.value)} className={cls('address')} placeholder="Plot 12, Main Road" />
             </Field>
-            <Field label="Locality / Area" required>
-              <input value={form.locality} onChange={(e) => set('locality', e.target.value)} required className={inputCls} placeholder="Anna Nagar, Velachery…" />
+            <Field label="Locality / Area" required error={fieldErrors.locality}>
+              <input value={form.locality} onChange={(e) => set('locality', sanitizeLocalityInput(e.target.value))} className={cls('locality')} placeholder="Anna Nagar, Velachery…" />
             </Field>
             <div className="grid grid-cols-3 gap-4">
               <Field label="City">
@@ -212,8 +300,8 @@ export default function NewCustomerPage() {
                   {STATES.map((s) => <option key={s} value={s}>{s}</option>)}
                 </select>
               </Field>
-              <Field label="Pincode">
-                <input value={form.pincode} onChange={(e) => set('pincode', e.target.value.replace(/\D/g, '').slice(0, 6))} className={inputCls} placeholder="600001" maxLength={6} />
+              <Field label="Pincode" error={fieldErrors.pincode}>
+                <input value={form.pincode} onChange={(e) => set('pincode', e.target.value.replace(/\D/g, '').slice(0, 6))} className={cls('pincode')} placeholder="600001" maxLength={6} inputMode="numeric" />
               </Field>
             </div>
           </div>
@@ -223,16 +311,16 @@ export default function NewCustomerPage() {
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
           <h2 className="text-sm font-semibold text-gray-700 mb-4">Alternate Contact</h2>
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Alternate Contact Number" required>
+            <Field label="Alternate Contact Number" required error={fieldErrors.altContact}>
               <div className="flex">
                 <span className="inline-flex items-center px-3 border border-r-0 border-gray-300 rounded-l-lg bg-gray-50 text-gray-500 text-sm">+91</span>
                 <input
                   value={form.altContact}
                   onChange={(e) => set('altContact', e.target.value.replace(/\D/g, '').slice(0, 10))}
-                  required
-                  className="flex-1 px-3 py-2 border border-gray-300 rounded-r-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-gray-900"
+                  className={`flex-1 px-3 py-2 border rounded-r-lg text-sm focus:outline-none focus:ring-2 bg-white text-gray-900 ${fieldErrors.altContact ? 'border-red-400 focus:ring-red-400' : 'border-gray-300 focus:ring-blue-500'}`}
                   placeholder="9876543210"
                   maxLength={10}
+                  inputMode="numeric"
                 />
               </div>
             </Field>
@@ -266,7 +354,7 @@ export default function NewCustomerPage() {
         )}
 
         <div className="flex justify-end gap-3">
-          <Link href={`/${subdomain}/customers`} className="px-5 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">
+          <Link href={`/tenant/${subdomain}/customers`} className="px-5 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">
             Cancel
           </Link>
           <button
