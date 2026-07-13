@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { sessionStore, saAuthFetch } from '@/services/super-admin-auth';
 
+const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4001';
+
 interface MeResponse {
   id: string;
   email: string;
