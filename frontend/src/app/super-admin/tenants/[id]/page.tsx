@@ -410,6 +410,7 @@ export default function TenantDetailPage() {
   const [users, setUsers] = useState<TenantUserRecord[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
   const [usersLoaded, setUsersLoaded] = useState(false);
+  const [usersError, setUsersError] = useState('');
   const [showAddUser, setShowAddUser] = useState(false);
   const [resetUser, setResetUser] = useState<TenantUserRecord | null>(null);
   const [tab, setTab] = useState<Tab>('details');
@@ -444,13 +445,21 @@ export default function TenantDetailPage() {
   useEffect(() => {
     if (tab !== 'users' || usersLoaded) return;
     setUsersLoading(true);
+    setUsersError('');
     tenantsApi.listTenantUsers(id)
       .then((u) => { setUsers(u); setUsersLoaded(true); })
+      .catch((e: unknown) => {
+        setUsersError(e instanceof Error ? e.message : 'Failed to load users');
+        setUsersLoaded(true);
+      })
       .finally(() => setUsersLoading(false));
   }, [tab, id, usersLoaded]);
 
   function refreshUsers() {
-    tenantsApi.listTenantUsers(id).then(setUsers);
+    setUsersError('');
+    tenantsApi.listTenantUsers(id)
+      .then(setUsers)
+      .catch((e: unknown) => setUsersError(e instanceof Error ? e.message : 'Failed to load users'));
   }
 
   async function handleSuspend() {
@@ -584,7 +593,7 @@ export default function TenantDetailPage() {
               className={`px-4 py-3 text-sm font-medium capitalize border-b-2 transition-colors ${
                 tab === t ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-gray-400 hover:text-gray-200'
               }`}>
-              {t === 'branches' ? `Branches (${branches.length || '…'})` : t === 'users' ? `Users (${usersLoaded ? users.length : (tenant._count?.users ?? 0)})` : 'Details'}
+              {t === 'branches' ? `Branches (${branches.length || '…'})` : t === 'users' ? `Users (${usersLoaded ? users.length : '…'})` : 'Details'}
             </button>
           ))}
         </div>
@@ -694,7 +703,13 @@ export default function TenantDetailPage() {
           <>
             <div className="flex items-center justify-between">
               <p className="text-sm text-gray-400">
-                {usersLoaded ? `${users.length} ${users.length === 1 ? 'user' : 'users'}` : 'Loading users…'}
+                {usersLoading
+                  ? 'Loading users…'
+                  : usersError
+                    ? 'Could not load users'
+                    : usersLoaded
+                      ? `${users.length} ${users.length === 1 ? 'user' : 'users'}`
+                      : 'Loading users…'}
               </p>
               <button onClick={() => setShowAddUser(true)}
                 className="px-4 py-2 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors">
@@ -702,10 +717,28 @@ export default function TenantDetailPage() {
               </button>
             </div>
 
+            {usersError && (
+              <div className="bg-red-950 border border-red-800 rounded-xl px-4 py-3 flex items-center justify-between gap-3">
+                <p className="text-sm text-red-300">{usersError}</p>
+                <button
+                  type="button"
+                  onClick={() => { setUsersLoaded(false); setUsersError(''); }}
+                  className="text-xs font-medium text-red-200 hover:text-white whitespace-nowrap"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+
             <section className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
               {usersLoading ? (
                 <div className="flex justify-center py-12">
                   <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : usersError ? (
+                <div className="p-12 text-center">
+                  <p className="text-gray-300 font-medium">Users could not be loaded</p>
+                  <p className="text-gray-500 text-sm mt-1">Check the error above and try again.</p>
                 </div>
               ) : users.length === 0 ? (
                 <div className="p-12 text-center">

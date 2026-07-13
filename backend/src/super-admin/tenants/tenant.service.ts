@@ -222,7 +222,10 @@ export class TenantService {
     const schemaName = tenant.schemaName;
     const client = await this.prisma.pool.connect();
     try {
-      await client.query(`SET search_path = "${schemaName}", public`);
+      // Transaction keeps search_path + bypass_rls on the same connection for the whole callback.
+      await client.query('BEGIN');
+      await client.query("SELECT set_config('app.bypass_rls', 'true', TRUE)");
+      await client.query(`SET LOCAL search_path TO "${schemaName}", public`);
       // Ensure branches/loan_types tables exist (idempotent for existing tenants)
       await client.query(`
         CREATE TABLE IF NOT EXISTS "${schemaName}"."branches" (
@@ -249,7 +252,12 @@ export class TenantService {
           CONSTRAINT uq_${schemaName}_loan_types_name UNIQUE (name)
         )
       `);
-      return await fn(client, schemaName);
+      const result = await fn(client, schemaName);
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw err;
     } finally {
       client.release();
     }
@@ -313,12 +321,13 @@ export class TenantService {
   // ── Tenant user management (super-admin bootstrap) ──────────────────────────
 
   async listTenantUsers(tenantId: string) {
-    return this.withTenantSchema(tenantId, async (client) => {
-      const res = await client.query(`
-        SELECT id, email, first_name, last_name, phone, role, is_active, created_at
-        FROM users
-        ORDER BY created_at ASC
-      `);
+    return this.withTenantSchema(tenantId, async (client, schemaName) => {
+      // Qualify schema so we never accidentally hit public.users (different columns / RLS).
+      const res = await client.query(
+        `SELECT id, email, first_name, last_name, phone, role, is_active, created_at
+         FROM "${schemaName}"."users"
+         ORDER BY created_at ASC`,
+      );
       return res.rows.map((u) => ({
         id: u.id, email: u.email,
         firstName: u.first_name, lastName: u.last_name,
@@ -343,12 +352,15 @@ export class TenantService {
     const hashed = await bcrypt.hash(dto.password, 10);
     const phone = dto.phone?.replace(/\s|-/g, '').trim() || null;
 
-    const user = await this.withTenantSchema(tenantId, async (client) => {
-      const existing = await client.query(`SELECT id FROM users WHERE LOWER(email) = LOWER($1)`, [dto.email.trim()]);
+    const user = await this.withTenantSchema(tenantId, async (client, schemaName) => {
+      const existing = await client.query(
+        `SELECT id FROM "${schemaName}"."users" WHERE LOWER(email) = LOWER($1)`,
+        [dto.email.trim()],
+      );
       if (existing.rows.length > 0) throw new ConflictException('A user with this email already exists in this tenant');
 
       const res = await client.query(
-        `INSERT INTO users (email, password, first_name, last_name, phone, role)
+        `INSERT INTO "${schemaName}"."users" (email, password, first_name, last_name, phone, role)
          VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING id, email, first_name, last_name, phone, role, is_active, created_at`,
         [dto.email.trim().toLowerCase(), hashed, dto.firstName.trim(), dto.lastName.trim(), phone, dto.role],
@@ -386,9 +398,9 @@ export class TenantService {
 
     const hashed = await bcrypt.hash(newPassword, 10);
 
-    const user = await this.withTenantSchema(tenantId, async (client) => {
+    const user = await this.withTenantSchema(tenantId, async (client, schemaName) => {
       const res = await client.query(
-        `UPDATE users SET password = $1, updated_at = NOW()
+        `UPDATE "${schemaName}"."users" SET password = $1, updated_at = NOW()
          WHERE id = $2
          RETURNING id, email, first_name, last_name, role`,
         [hashed, userId],

@@ -14,8 +14,11 @@ async function authFetch<T>(path: string, init?: RequestInit): Promise<T> {
     },
     cache: 'no-store',
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.message ?? 'Request failed');
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = data?.message;
+    throw new Error(Array.isArray(msg) ? msg.join(', ') : (msg ?? `Request failed (${res.status})`));
+  }
   return data as T;
 }
 
