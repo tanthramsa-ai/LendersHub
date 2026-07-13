@@ -3,9 +3,7 @@
 import { useEffect, useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { sessionStore } from '@/services/super-admin-auth';
-
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4001';
+import { sessionStore, saAuthFetch } from '@/services/super-admin-auth';
 
 interface MeResponse {
   id: string;
@@ -18,19 +16,7 @@ interface MeResponse {
 }
 
 async function authFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = sessionStore.getToken();
-  if (!token) throw new Error('Not authenticated');
-  const res = await fetch(`${API}${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      ...(init?.headers ?? {}),
-    },
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.message ?? 'Request failed');
-  return data as T;
+  return saAuthFetch<T>(path, init);
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {

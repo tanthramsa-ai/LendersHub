@@ -2,9 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { sessionStore } from '@/services/super-admin-auth';
-
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4001';
+import { sessionStore, saAuthFetch } from '@/services/super-admin-auth';
 
 interface SuperAdminUser {
   id: string;
@@ -27,15 +25,7 @@ interface AuditLog {
 }
 
 async function authFetch<T>(path: string): Promise<T> {
-  const token = sessionStore.getToken();
-  if (!token) throw new Error('Not authenticated');
-  const res = await fetch(`${API}${path}`, {
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    cache: 'no-store',
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.message ?? 'Request failed');
-  return data as T;
+  return saAuthFetch<T>(path);
 }
 
 type Tab = 'admins' | 'audit';

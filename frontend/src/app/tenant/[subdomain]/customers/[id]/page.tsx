@@ -121,7 +121,7 @@ export default function CustomerDetailPage() {
         pincode: form.pincode || undefined,
         occupation: form.occupation || undefined,
         loanPurpose: form.loanPurpose || undefined,
-        altContact: form.altContact,
+        altContact: form.altContact.trim() || undefined,
         altContactName: form.altContactName || undefined,
         altContactRelation: form.altContactRelation || undefined,
         creditScore: form.creditScore ? parseInt(form.creditScore) : undefined,
@@ -239,7 +239,7 @@ export default function CustomerDetailPage() {
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
             <h2 className="text-sm font-semibold text-gray-700 mb-4">Alternate Contact</h2>
             <div className="grid grid-cols-2 gap-4">
-              <Field label="Alt. Contact *"><input value={form.altContact} onChange={(e) => set('altContact', e.target.value)} required className={inputCls} /></Field>
+              <Field label="Alt. Contact"><input value={form.altContact} onChange={(e) => set('altContact', e.target.value.replace(/\D/g, '').slice(0, 10))} className={inputCls} placeholder="Optional" /></Field>
               <Field label="Contact Name"><input value={form.altContactName} onChange={(e) => set('altContactName', e.target.value)} className={inputCls} /></Field>
               <Field label="Relation">
                 <select value={form.altContactRelation} onChange={(e) => set('altContactRelation', e.target.value)} className={inputCls}>

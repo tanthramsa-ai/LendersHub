@@ -1,25 +1,7 @@
-import { sessionStore } from './super-admin-auth';
-
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4001';
+import { saAuthFetch } from './super-admin-auth';
 
 async function authFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = sessionStore.getToken();
-  if (!token) throw new Error('Not authenticated');
-  const res = await fetch(`${API}${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      ...(init?.headers ?? {}),
-    },
-    cache: 'no-store',
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const msg = data?.message;
-    throw new Error(Array.isArray(msg) ? msg.join(', ') : (msg ?? `Request failed (${res.status})`));
-  }
-  return data as T;
+  return saAuthFetch<T>(path, init);
 }
 
 export interface Branch {

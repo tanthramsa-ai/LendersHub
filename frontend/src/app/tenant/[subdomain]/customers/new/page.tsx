@@ -67,8 +67,9 @@ function validateForm(form: FormFields): Partial<Record<FieldKey | 'kyc', string
     errors.locality = 'Locality cannot contain special characters';
   }
 
-  if (!form.altContact.trim()) errors.altContact = 'Alternate contact number is required';
-  else if (!/^\d{10}$/.test(form.altContact)) errors.altContact = 'Alternate contact must be exactly 10 digits';
+  if (form.altContact.trim() && !/^\d{10}$/.test(form.altContact)) {
+    errors.altContact = 'Alternate contact must be exactly 10 digits';
+  }
 
   if (!form.panNumber.trim() && !form.aadhaarLast4.trim()) {
     errors.kyc = 'At least one of PAN number or Aadhaar number is required';
@@ -184,7 +185,7 @@ export default function NewCustomerPage() {
         ...(form.pincode && { pincode: form.pincode }),
         ...(form.occupation && { occupation: form.occupation }),
         ...(form.loanPurpose && { loanPurpose: form.loanPurpose }),
-        altContact: form.altContact,
+        ...(form.altContact && { altContact: form.altContact }),
         ...(form.altContactName && { altContactName: form.altContactName }),
         ...(form.altContactRelation && { altContactRelation: form.altContactRelation }),
         ...(form.creditScore && { creditScore: parseInt(form.creditScore) }),
@@ -311,7 +312,7 @@ export default function NewCustomerPage() {
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
           <h2 className="text-sm font-semibold text-gray-700 mb-4">Alternate Contact</h2>
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Alternate Contact Number" required error={fieldErrors.altContact}>
+            <Field label="Alternate Contact Number" error={fieldErrors.altContact}>
               <div className="flex">
                 <span className="inline-flex items-center px-3 border border-r-0 border-gray-300 rounded-l-lg bg-gray-50 text-gray-500 text-sm">+91</span>
                 <input

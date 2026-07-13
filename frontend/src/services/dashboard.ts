@@ -1,17 +1,7 @@
-import { sessionStore } from './super-admin-auth';
-
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4001';
+import { saAuthFetch } from './super-admin-auth';
 
 async function authGet<T>(path: string): Promise<T> {
-  const token = sessionStore.getToken();
-  if (!token) throw new Error('Not authenticated');
-  const res = await fetch(`${API}${path}`, {
-    headers: { Authorization: `Bearer ${token}` },
-    cache: 'no-store',
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.message ?? 'Request failed');
-  return data as T;
+  return saAuthFetch<T>(path);
 }
 
 export interface KpiMetric {

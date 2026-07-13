@@ -2,9 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { sessionStore } from '@/services/super-admin-auth';
-
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4001';
+import { sessionStore, saAuthFetch } from '@/services/super-admin-auth';
 
 interface HealthData {
   checkedAt: string;
@@ -16,14 +14,7 @@ interface HealthData {
 }
 
 async function fetchHealth(): Promise<HealthData> {
-  const token = sessionStore.getToken();
-  if (!token) throw new Error('Not authenticated');
-  const res = await fetch(`${API}/api/v1/super-admin/system-health`, {
-    headers: { Authorization: `Bearer ${token}` },
-    cache: 'no-store',
-  });
-  if (!res.ok) throw new Error('Failed to fetch');
-  return res.json();
+  return saAuthFetch<HealthData>('/api/v1/super-admin/system-health');
 }
 
 function StatusDot({ ok, pulse }: { ok: boolean; pulse?: boolean }) {

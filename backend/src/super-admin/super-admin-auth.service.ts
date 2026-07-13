@@ -168,7 +168,8 @@ export class SuperAdminAuthService {
   private signFullToken(userId: string, email: string, totpEnabled: boolean) {
     return this.jwt.sign(
       { sub: userId, email, role: 'SUPER_ADMIN', type: 'super_admin', totpEnabled },
-      { expiresIn: '30m' },
+      // Longer than the 30m idle timeout so active sessions aren't killed by JWT expiry.
+      { expiresIn: '8h' },
     );
   }
 

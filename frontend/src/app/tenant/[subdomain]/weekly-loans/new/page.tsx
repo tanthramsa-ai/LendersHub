@@ -326,7 +326,7 @@ export default function NewWeeklyLoanPage() {
                     <input value={newCust.phone} onChange={(e) => setNewCust({ ...newCust, phone: e.target.value.replace(/\D/g,'').slice(0,10) })} className={inputCls} placeholder="9876543210" />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Alt. Contact</label>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Alt. Contact <span className="text-xs text-gray-400 font-normal">(optional)</span></label>
                     <input value={newCust.altContact} onChange={(e) => setNewCust({ ...newCust, altContact: e.target.value.replace(/\D/g,'').slice(0,10) })} className={inputCls} placeholder="9876543210" />
                   </div>
                   <div className="col-span-2">

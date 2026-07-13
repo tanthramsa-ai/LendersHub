@@ -1,5 +1,13 @@
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4001';
 
+function redirectToLogin() {
+  if (typeof window === 'undefined') return;
+  sessionStore.clear();
+  if (!window.location.pathname.startsWith('/super-admin/login')) {
+    window.location.href = '/super-admin/login';
+  }
+}
+
 async function post<T>(path: string, body: unknown, token?: string): Promise<T> {
   const res = await fetch(`${API}${path}`, {
     method: 'POST',
@@ -9,8 +17,15 @@ async function post<T>(path: string, body: unknown, token?: string): Promise<T> 
     },
     body: JSON.stringify(body),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.message ?? 'Request failed');
+  if (res.status === 401 && token) {
+    redirectToLogin();
+    throw new Error('Session expired. Please log in again.');
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = (data as { message?: string | string[] }).message;
+    throw new Error(Array.isArray(msg) ? msg.join(', ') : (msg ?? 'Request failed'));
+  }
   return data as T;
 }
 
@@ -18,8 +33,43 @@ async function get<T>(path: string, token: string): Promise<T> {
   const res = await fetch(`${API}${path}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.message ?? 'Request failed');
+  if (res.status === 401) {
+    redirectToLogin();
+    throw new Error('Session expired. Please log in again.');
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = (data as { message?: string | string[] }).message;
+    throw new Error(Array.isArray(msg) ? msg.join(', ') : (msg ?? 'Request failed'));
+  }
+  return data as T;
+}
+
+/** Authenticated fetch for super-admin APIs. Clears session and redirects on 401. */
+export async function saAuthFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = sessionStore.getToken();
+  if (!token) {
+    redirectToLogin();
+    throw new Error('Not authenticated');
+  }
+  const res = await fetch(`${API}${path}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      ...(init?.headers ?? {}),
+    },
+    cache: 'no-store',
+  });
+  if (res.status === 401) {
+    redirectToLogin();
+    throw new Error('Session expired. Please log in again.');
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = (data as { message?: string | string[] }).message;
+    throw new Error(Array.isArray(msg) ? msg.join(', ') : (msg ?? `Request failed (${res.status})`));
+  }
   return data as T;
 }
 
