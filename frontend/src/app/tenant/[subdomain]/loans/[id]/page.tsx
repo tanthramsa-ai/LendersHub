@@ -136,6 +136,7 @@ export default function TermLoanDetailPage() {
       setShowCloseConfirm(false);
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : 'Close failed');
+      await load(); // resync in case the failure means our view of the loan was stale
     } finally { setClosing(false); }
   }
 
@@ -149,6 +150,7 @@ export default function TermLoanDetailPage() {
       setShowReopenConfirm(false);
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : 'Reopen failed');
+      await load(); // resync in case the failure means our view of the loan was stale
     } finally { setReopening(false); }
   }
 

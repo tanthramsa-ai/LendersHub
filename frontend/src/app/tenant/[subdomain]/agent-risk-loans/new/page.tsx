@@ -318,6 +318,11 @@ export default function NewAgentRiskLoanPage() {
                       <option value="">No specific branch</option>
                       {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
                     </select>
+                    {branches.length === 0 && (
+                      <p className="text-xs text-gray-400 mt-1">
+                        No branches yet — <Link href={`/${subdomain}/settings`} target="_blank" className="text-blue-600 hover:underline">add one in Settings →</Link>
+                      </p>
+                    )}
                   </div>
                 </div>
                 {addCustError && (

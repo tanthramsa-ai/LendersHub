@@ -143,8 +143,8 @@ export class TenantCustomersService {
       const res = await client.query(`
         SELECT c.*,
           b.name AS branch_name, b.code AS branch_code,
-          (SELECT COUNT(*) FROM loans WHERE customer_id = c.id) AS total_loans,
-          (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND status = 'DISBURSED') AS active_loans,
+          (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL) AS total_loans,
+          (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status = 'DISBURSED') AS active_loans,
           (SELECT COALESCE(SUM(amount), 0) FROM payments p JOIN loans l ON l.id = p.loan_id WHERE l.customer_id = c.id) AS total_paid
         FROM customers c
         LEFT JOIN branches b ON b.id = c.branch_id
