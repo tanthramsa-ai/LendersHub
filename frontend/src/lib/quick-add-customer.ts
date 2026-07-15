@@ -46,8 +46,8 @@ export function customerToQuickAddForm(c: {
   };
 }
 
-/** Returns the first specific validation error for Quick Add Customer forms. */
-export function getQuickAddCustomerError(cust: {
+/** Returns every validation error for Quick Add Customer forms, so all missing/invalid fields surface at once. */
+export function getQuickAddCustomerErrors(cust: {
   firstName: string;
   lastName?: string;
   phone: string;
@@ -58,43 +58,48 @@ export function getQuickAddCustomerError(cust: {
   aadhaarLast4?: string;
   /** When true, alternate contact is required (default false). */
   requireAltContact?: boolean;
-}): string | null {
-  if (!cust.firstName.trim()) return 'First Name is missing';
-  if (NAME_HAS_DIGIT.test(cust.firstName)) return 'First Name cannot contain numbers';
+}): string[] {
+  const errors: string[] = [];
+
+  if (!cust.firstName.trim()) errors.push('First Name is missing');
+  else if (NAME_HAS_DIGIT.test(cust.firstName)) errors.push('First Name cannot contain numbers');
+
   if (cust.lastName?.trim() && NAME_HAS_DIGIT.test(cust.lastName)) {
-    return 'Last Name cannot contain numbers';
+    errors.push('Last Name cannot contain numbers');
   }
-  if (!cust.phone.trim()) return 'Phone number is missing';
-  if (!/^\d{10}$/.test(cust.phone)) return 'Phone number must be exactly 10 digits';
-  if (!cust.address.trim()) return 'Address is missing';
-  if (!cust.locality.trim()) return 'Locality is missing';
-  if (!PLAIN_TEXT_ALLOWED.test(cust.locality.trim())) {
-    return 'Locality cannot contain special characters';
+
+  if (!cust.phone.trim()) errors.push('Phone number is missing');
+  else if (!/^\d{10}$/.test(cust.phone)) errors.push('Phone number must be exactly 10 digits');
+
+  if (!cust.address.trim()) errors.push('Address is missing');
+
+  if (!cust.locality.trim()) errors.push('Locality is missing');
+  else if (!PLAIN_TEXT_ALLOWED.test(cust.locality.trim())) {
+    errors.push('Locality cannot contain special characters');
   }
 
   if (cust.requireAltContact && !cust.altContact?.trim()) {
-    return 'Alternate Contact is missing';
-  }
-  if (cust.altContact?.trim() && !/^\d{10}$/.test(cust.altContact)) {
-    return 'Alternate contact number must be exactly 10 digits';
+    errors.push('Alternate Contact is missing');
+  } else if (cust.altContact?.trim() && !/^\d{10}$/.test(cust.altContact)) {
+    errors.push('Alternate contact number must be exactly 10 digits');
   }
 
   if (!cust.panNumber?.trim() && !cust.aadhaarLast4?.trim()) {
-    return 'PAN or Aadhaar is missing';
-  }
-  if (cust.panNumber?.trim()) {
-    if (/[^A-Z0-9]/.test(cust.panNumber.trim())) {
-      return 'PAN cannot contain special characters';
+    errors.push('PAN or Aadhaar is missing');
+  } else {
+    if (cust.panNumber?.trim()) {
+      if (/[^A-Z0-9]/.test(cust.panNumber.trim())) {
+        errors.push('PAN cannot contain special characters');
+      } else if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(cust.panNumber.trim())) {
+        errors.push('PAN format is invalid (e.g. ABCDE1234F)');
+      }
     }
-    if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(cust.panNumber.trim())) {
-      return 'PAN format is invalid (e.g. ABCDE1234F)';
+    if (cust.aadhaarLast4?.trim() && !/^\d{4}$/.test(cust.aadhaarLast4)) {
+      errors.push('Aadhaar last 4 digits must be exactly 4 digits');
     }
-  }
-  if (cust.aadhaarLast4?.trim() && !/^\d{4}$/.test(cust.aadhaarLast4)) {
-    return 'Aadhaar last 4 digits must be exactly 4 digits';
   }
 
-  return null;
+  return errors;
 }
 
 /** Strip digits from a name field as the user types. */
