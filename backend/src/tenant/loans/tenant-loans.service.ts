@@ -443,7 +443,7 @@ export class TenantLoansService {
       // Sequential: a single pg connection cannot run queries concurrently.
       const dataRes = await client.query(`
           SELECT l.id, l.loan_number, l.principal, l.interest_rate, l.term_months,
-                 l.status, l.purpose, l.disbursed_at, l.first_due_date, l.created_at,
+                 l.status, l.purpose, l.disbursed_at, l.first_due_date, l.created_at, l.cycle_type,
                  c.first_name || ' ' || c.last_name AS customer_name, c.phone AS customer_phone,
                  COALESCE(SUM(CASE WHEN i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE') THEN i.total_amount - i.paid_amount ELSE 0 END), 0) AS outstanding
           FROM loans l
@@ -469,6 +469,7 @@ export class TenantLoansService {
           termMonths: r.term_months, status: r.status, purpose: r.purpose,
           outstanding: parseFloat(r.outstanding),
           disbursedAt: r.disbursed_at, firstDueDate: r.first_due_date, createdAt: r.created_at,
+          cycleType: r.cycle_type,
         })),
         total: parseInt(countRes.rows[0].total),
         page, limit,
