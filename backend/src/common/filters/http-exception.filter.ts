@@ -52,6 +52,7 @@ const PG_CODE_MAP: Record<string, { status: number; message: string }> = {
   '22008': { status: 400, message: 'Date/time field value out of range' },
   '22P01': { status: 400, message: 'Floating point exception' },
   '21000': { status: 400, message: 'Invalid enum value' },
+  '42P01': { status: 500, message: 'A required database table is missing for this workspace. Please contact support.' },
 };
 
 function messageForPgError(
