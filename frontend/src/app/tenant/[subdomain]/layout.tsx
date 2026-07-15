@@ -9,6 +9,7 @@ import {
   TenantNotification, UserRole,
   USER_ADMIN_ROLES, MANAGER_ROLES,
 } from '@/services/tenant-api';
+import { onNotificationBellRefresh } from '@/lib/notifications-bus';
 
 // Routes each role can access. Omitting `roles` means all authenticated users.
 const ALL_ROLES: UserRole[] = ['OWNER', 'MANAGER', 'ADMIN', 'LOAN_OFFICER', 'COLLECTOR', 'VIEWER'];
@@ -221,7 +222,8 @@ export default function TenantLayout({ children }: { children: React.ReactNode }
 
     fetchUnreadCount();
     const interval = setInterval(fetchUnreadCount, 60000);
-    return () => clearInterval(interval);
+    const unsubscribe = onNotificationBellRefresh(fetchUnreadCount);
+    return () => { clearInterval(interval); unsubscribe(); };
   }, [subdomain, router, isLoginPage, fetchUnreadCount]);
 
   // Auto-expand the Loans group when navigating into one of its routes.

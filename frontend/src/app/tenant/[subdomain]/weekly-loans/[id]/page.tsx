@@ -8,6 +8,7 @@ import {
   getTenantSession, COLLECTION_ROLES, MANAGER_ROLES,
 } from '@/services/tenant-api';
 import { CloseLoanModal, CloseCommentBanner, ReopenLoanModal } from '@/components/CloseLoanModal';
+import { refreshNotificationBell } from '@/lib/notifications-bus';
 
 function fmt(n: number) {
   return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
@@ -152,6 +153,7 @@ export default function WeeklyLoanDetailPage() {
       });
       setPayInst(null);
       setPaySuccess(`Payment of ${fmt(amount)} recorded for Week #${payInst.number}`);
+      refreshNotificationBell();
       await load();
     } catch (e: unknown) {
       setPayError((e as Error).message);
@@ -164,6 +166,7 @@ export default function WeeklyLoanDetailPage() {
     try {
       await undoInstallmentPayment(id, undoTarget.id);
       setUndoTarget(null);
+      refreshNotificationBell();
       await load();
     } catch (e: unknown) {
       setUndoError((e as Error).message);
@@ -175,6 +178,7 @@ export default function WeeklyLoanDetailPage() {
     try {
       await closeLoan(id, { comment });
       setShowCloseConfirm(false);
+      refreshNotificationBell();
       await load();
     } catch (e: unknown) {
       setCloseError((e as Error).message);
@@ -186,6 +190,7 @@ export default function WeeklyLoanDetailPage() {
     try {
       await reopenLoan(id, { comment });
       setShowReopenConfirm(false);
+      refreshNotificationBell();
       await load();
     } catch (e: unknown) {
       setReopenError((e as Error).message);
@@ -521,7 +526,7 @@ export default function WeeklyLoanDetailPage() {
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
             <h3 className="text-base font-bold text-gray-900 mb-1">Undo Payment</h3>
             <p className="text-sm text-gray-600">
-              This reverts the most recent payment on Week #{undoTarget.number} (₹{fmt(undoTarget.paid)} paid) back to its previous status.
+              This reverts the most recent payment on Week #{undoTarget.number} ({fmt(undoTarget.paid)} paid) back to its previous status.
             </p>
             {undoError && <p className="mt-3 text-xs text-red-600">{undoError}</p>}
             <div className="mt-5 flex gap-3">

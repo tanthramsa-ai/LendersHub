@@ -8,6 +8,7 @@ import {
   Customer, TenantBranch, LoanType, TermSchedulePreview,
   getTenantSession, LOAN_CREATE_ROLES,
 } from '@/services/tenant-api';
+import { sanitizeLoanPurposeInput } from '@/lib/quick-add-customer';
 
 const BRAND = '#0F4C81';
 
@@ -276,7 +277,7 @@ export default function NewTermLoanPage() {
             )}
             <div className="sm:col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-1">Purpose</label>
-              <input value={purpose} onChange={(e) => setPurpose(e.target.value)}
+              <input value={purpose} onChange={(e) => setPurpose(sanitizeLoanPurposeInput(e.target.value))}
                 placeholder="e.g. Business expansion, Home renovation…"
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>

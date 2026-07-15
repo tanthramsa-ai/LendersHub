@@ -1896,8 +1896,6 @@ export class TenantLoansService {
       if (!lastPaymentRes.rows[0]) throw new BadRequestException('No payment recorded on this installment to undo');
       const lastPayment = lastPaymentRes.rows[0];
 
-      await client.query(`DELETE FROM payments WHERE id = $1`, [lastPayment.id]);
-
       const remainingPaid = Math.max(0, parseFloat(inst.paid_amount) - parseFloat(lastPayment.amount));
       const totalAmount = parseFloat(inst.total_amount);
       const today = new Date().toISOString().slice(0, 10);
@@ -1905,17 +1903,23 @@ export class TenantLoansService {
         : remainingPaid > 0 ? 'PARTIALLY_PAID'
         : (inst.due_date && inst.due_date < today ? 'OVERDUE' : 'PENDING');
 
-      await client.query(
-        `UPDATE installments
-         SET paid_amount = $1, status = $2, paid_at = CASE WHEN $2 = 'PAID' THEN paid_at ELSE NULL END, updated_at = NOW()
-         WHERE id = $3`,
-        [remainingPaid, newStatus, installmentId],
-      ).catch(() => client.query(
-        `UPDATE installments
-         SET paid_amount = $1, status = $2, paid_at = CASE WHEN $2 = 'PAID' THEN paid_at ELSE NULL END
-         WHERE id = $3`,
-        [remainingPaid, newStatus, installmentId],
-      ));
+      // Transactional: a failed status recompute must not leave the payment deleted
+      // but the installment still showing it as paid. installments has no updated_at
+      // column, unlike most other tenant tables.
+      await client.query('BEGIN');
+      try {
+        await client.query(`DELETE FROM payments WHERE id = $1`, [lastPayment.id]);
+        await client.query(
+          `UPDATE installments
+           SET paid_amount = $1, status = $2::installment_status, paid_at = CASE WHEN $2::installment_status = 'PAID' THEN paid_at ELSE NULL END
+           WHERE id = $3`,
+          [remainingPaid, newStatus, installmentId],
+        );
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      }
 
       const loanRes = await client.query<{ loan_number: string }>(`SELECT loan_number FROM loans WHERE id = $1`, [loanId]);
 
