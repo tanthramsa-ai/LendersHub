@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { getTermLoan, closeLoan, reopenLoan, recordPayment, undoInstallmentPayment, getTenantSession, MANAGER_ROLES, COLLECTION_ROLES, TermLoanDetail, TermInstallment } from '@/services/tenant-api';
 import { CloseLoanModal, CloseCommentBanner, ReopenLoanModal } from '@/components/CloseLoanModal';
+import { refreshNotificationBell } from '@/lib/notifications-bus';
 
 const STATUS_COLORS: Record<string, string> = {
   PAID: 'bg-green-100 text-green-700',
@@ -105,6 +106,7 @@ export default function TermLoanDetailPage() {
         paymentDate: payDate,
       });
       setShowPayModal(false);
+      refreshNotificationBell();
       await load();
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : 'Payment failed');
@@ -117,6 +119,7 @@ export default function TermLoanDetailPage() {
     try {
       await undoInstallmentPayment(id, undoTarget.id);
       setUndoTarget(null);
+      refreshNotificationBell();
       await load();
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : 'Undo failed');
@@ -128,6 +131,7 @@ export default function TermLoanDetailPage() {
     try {
       await closeLoan(id, { comment });
       router.refresh();
+      refreshNotificationBell();
       await load();
       setShowCloseConfirm(false);
     } catch (e: unknown) {
@@ -140,6 +144,7 @@ export default function TermLoanDetailPage() {
     try {
       await reopenLoan(id, { comment });
       router.refresh();
+      refreshNotificationBell();
       await load();
       setShowReopenConfirm(false);
     } catch (e: unknown) {
@@ -421,7 +426,7 @@ export default function TermLoanDetailPage() {
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4">
             <h2 className="text-lg font-bold text-gray-900">Undo Payment</h2>
             <p className="text-sm text-gray-600">
-              This reverts the most recent payment on installment #{undoTarget.number} (₹{fmt(undoTarget.paid)} paid) back to its previous status. This cannot be redone automatically.
+              This reverts the most recent payment on installment #{undoTarget.number} ({fmt(undoTarget.paid)} paid) back to its previous status. This cannot be redone automatically.
             </p>
             {err && <p className="text-sm text-red-600">{err}</p>}
             <div className="flex gap-3 pt-2">

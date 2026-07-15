@@ -8,6 +8,7 @@ import {
   getTenantSession, COLLECTION_ROLES, MANAGER_ROLES,
 } from '@/services/tenant-api';
 import { CloseLoanModal, CloseCommentBanner, ReopenLoanModal } from '@/components/CloseLoanModal';
+import { refreshNotificationBell } from '@/lib/notifications-bus';
 
 function fmt(n: number) {
   return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
@@ -135,6 +136,7 @@ export default function MonthlyLoanDetailPage() {
       });
       setPayInst(null);
       setPaySuccess(`Payment of ${fmt(amount)} recorded for Month #${payInst.number}`);
+      refreshNotificationBell();
       await load();
     } catch (e: unknown) {
       setPayError((e as Error).message);
@@ -146,6 +148,7 @@ export default function MonthlyLoanDetailPage() {
     try {
       await closeLoan(id, { comment });
       setShowCloseConfirm(false);
+      refreshNotificationBell();
       await load();
     } catch (e: unknown) {
       setCloseError((e as Error).message);
@@ -157,6 +160,7 @@ export default function MonthlyLoanDetailPage() {
     try {
       await reopenLoan(id, { comment });
       setShowReopenConfirm(false);
+      refreshNotificationBell();
       await load();
     } catch (e: unknown) {
       setReopenError((e as Error).message);
