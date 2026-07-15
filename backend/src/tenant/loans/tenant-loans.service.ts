@@ -62,7 +62,7 @@ export interface CreateMonthlyLoanDto {
   termMonths: number;        // number of monthly interest installments
   firstDueDate: string;      // YYYY-MM-DD
   purpose?: string;
-  branchId: string;          // mandatory
+  branchId?: string;
   loanTypeId?: string;
   securityDocUrl?: string;
   promissoryNoteUrl?: string;
@@ -75,7 +75,7 @@ export interface CreateAgentRiskLoanDto {
   termMonths: number;
   firstDueDate: string;
   purpose?: string;
-  branchId: string;
+  branchId?: string;
   loanTypeId?: string;
   securityDocUrl?: string;
   promissoryNoteUrl?: string;
@@ -90,7 +90,7 @@ export interface CreateTermLoanDto {
   calculationType: 'REDUCING' | 'FLAT';
   emiRounding: 0 | 10 | 50 | 100;
   purpose?: string;
-  branchId: string;          // mandatory
+  branchId?: string;
   loanTypeId?: string;
   securityDocUrl?: string;
   promissoryNoteUrl?: string;
@@ -1330,7 +1330,7 @@ export class TenantLoansService {
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'MONTHLY','DISBURSED',$10,$11,$12,$13,NOW())
         RETURNING *
       `, [
-        loanNumber, dto.customerId, user.sub, dto.branchId ?? null, dto.loanTypeId ?? null,
+        loanNumber, dto.customerId, user.sub, dto.branchId || null, dto.loanTypeId ?? null,
         dto.principal, dto.interestRate, dto.termMonths, monthlyInterest,
         dto.purpose ?? null, dto.firstDueDate,
         dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null,
@@ -1499,7 +1499,7 @@ export class TenantLoansService {
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'AGENT_RISK','DISBURSED',$10,$11,$12,$13,NOW())
         RETURNING *
       `, [
-        loanNumber, dto.customerId, user.sub, dto.branchId ?? null, dto.loanTypeId ?? null,
+        loanNumber, dto.customerId, user.sub, dto.branchId || null, dto.loanTypeId ?? null,
         dto.principal, dto.interestRate, dto.termMonths, monthlyInterest,
         dto.purpose ?? null, dto.firstDueDate,
         dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null,
@@ -1657,7 +1657,7 @@ export class TenantLoansService {
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'DISBURSED',$10,$11,NOW(),'TERM_LOAN',$12,$13,$14)
         RETURNING id, loan_number
       `, [
-        loanNumber, dto.customerId, user.sub, dto.branchId ?? null, dto.loanTypeId ?? null,
+        loanNumber, dto.customerId, user.sub, dto.branchId || null, dto.loanTypeId ?? null,
         dto.principal, dto.interestRate, dto.termMonths, emi,
         dto.purpose ?? null, dto.firstDueDate, dto.calculationType,
         dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null,

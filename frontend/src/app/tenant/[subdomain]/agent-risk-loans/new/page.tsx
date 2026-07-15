@@ -186,7 +186,7 @@ export default function NewAgentRiskLoanPage() {
         interestRate: parseFloat(form.interestRate),
         termMonths: parseInt(form.termMonths),
         firstDueDate: form.firstDueDate,
-        branchId: form.branchId,
+        ...(form.branchId && { branchId: form.branchId }),
         ...(form.purpose && { purpose: form.purpose }),
         ...(securityB64 && { securityDocUrl: securityB64 }),
         ...(promissoryB64 && { promissoryNoteUrl: promissoryB64 }),

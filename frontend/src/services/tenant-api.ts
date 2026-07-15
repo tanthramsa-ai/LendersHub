@@ -682,7 +682,7 @@ export function previewMonthlySchedule(dto: {
 
 export function createMonthlyLoan(dto: {
   customerId: string; principal: number; interestRate: number; termMonths: number;
-  firstDueDate: string; branchId: string;
+  firstDueDate: string; branchId?: string;
   purpose?: string; loanTypeId?: string;
   securityDocUrl?: string; promissoryNoteUrl?: string;
 }) {
@@ -731,7 +731,7 @@ export function previewAgentRiskSchedule(dto: { principal: number; interestRate:
 
 export function createAgentRiskLoan(dto: {
   customerId: string; principal: number; interestRate: number; termMonths: number;
-  firstDueDate: string; branchId: string; purpose?: string; loanTypeId?: string;
+  firstDueDate: string; branchId?: string; purpose?: string; loanTypeId?: string;
   securityDocUrl?: string; promissoryNoteUrl?: string;
 }) {
   return tenantFetch<{ id: string; loanNumber: string; monthlyInterest: number; termMonths: number }>(
@@ -795,7 +795,7 @@ export function previewTermLoanSchedule(dto: {
 export function createTermLoan(dto: {
   customerId: string; principal: number; interestRate: number; termMonths: number;
   firstDueDate: string; calculationType: 'REDUCING' | 'FLAT'; emiRounding: number;
-  branchId: string; purpose?: string; loanTypeId?: string;
+  branchId?: string; purpose?: string; loanTypeId?: string;
   securityDocUrl?: string; promissoryNoteUrl?: string;
 }) {
   return tenantFetch<{ id: string; loanNumber: string; emi: number }>('/api/v1/tenant/loans/term-loan', {
