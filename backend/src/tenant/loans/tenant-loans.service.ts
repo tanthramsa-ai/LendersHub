@@ -403,7 +403,7 @@ export class TenantLoansService {
   }
 
   async list(user: TenantJwtPayload, page: number, limit: number, opts: {
-    status?: string; search?: string; branchId?: string; loanTypeId?: string; officerId?: string;
+    status?: string; search?: string; branchId?: string; loanTypeId?: string; officerId?: string; customerId?: string;
   } = {}) {
     ({ page, limit } = safePagination(page, limit));
     return this.withSchema(user.schemaName, async (client) => {
@@ -420,6 +420,7 @@ export class TenantLoansService {
       }
 
       if (opts.status) { conditions.push(`l.status = $${idx++}`); filterParams.push(opts.status); }
+      if (opts.customerId) { conditions.push(`l.customer_id = $${idx++}`); filterParams.push(opts.customerId); }
       if (opts.branchId) { conditions.push(`l.branch_id = $${idx++}`); filterParams.push(opts.branchId); }
       if (opts.loanTypeId) { conditions.push(`l.loan_type_id = $${idx++}`); filterParams.push(opts.loanTypeId); }
       // Only OWNER/ADMIN/MANAGER can filter by officer; for LOAN_OFFICER it's always self
@@ -742,13 +743,34 @@ export class TenantLoansService {
     }
 
     return this.withSchema(user.schemaName, async (client) => {
-      const res = await client.query(
-        `SELECT id, status, loan_number, close_comment FROM loans WHERE id = $1 AND deleted_at IS NULL`,
+      const res = await client.query<{
+        id: string;
+        status: string;
+        loan_number: string;
+        close_comment: string | null;
+        loan_officer_id: string | null;
+        cycle_type: string | null;
+        first_name: string | null;
+        last_name: string | null;
+      }>(
+        `SELECT l.id, l.status, l.loan_number, l.close_comment, l.loan_officer_id, l.cycle_type,
+                c.first_name, c.last_name
+         FROM loans l
+         LEFT JOIN customers c ON c.id = l.customer_id
+         WHERE l.id = $1 AND l.deleted_at IS NULL`,
         [loanId],
       );
       if (!res.rows[0]) throw new NotFoundException('Loan not found');
 
-      const { status, loan_number: loanNumber, close_comment: previousCloseComment } = res.rows[0];
+      const {
+        status,
+        loan_number: loanNumber,
+        close_comment: previousCloseComment,
+        loan_officer_id: loanOfficerId,
+        cycle_type: cycleType,
+        first_name: firstName,
+        last_name: lastName,
+      } = res.rows[0];
       if (status !== 'CLOSED') {
         throw new BadRequestException('Only closed loans can be reopened');
       }
@@ -793,6 +815,31 @@ export class TenantLoansService {
           previousCloseComment: previousCloseComment ?? null,
         },
       });
+
+      // Notify loan officer + managers (except the person who reopened it)
+      const notifyIds = new Set<string>();
+      if (loanOfficerId) notifyIds.add(loanOfficerId);
+      const mgrsRes = await client.query<{ id: string }>(
+        `SELECT id FROM users WHERE role IN ('OWNER','MANAGER','ADMIN') AND is_active = TRUE`,
+      );
+      for (const m of mgrsRes.rows) notifyIds.add(m.id);
+      notifyIds.delete(user.sub);
+
+      const reopenerName = `${user.firstName} ${user.lastName}`.trim() || user.email;
+      const customerName = [firstName, lastName].filter(Boolean).join(' ') || 'customer';
+      const body = `Reopened by ${reopenerName} for ${customerName}. ${restoredCount} installment${restoredCount === 1 ? '' : 's'} restored.`;
+
+      for (const uid of notifyIds) {
+        await TenantNotificationsService.insertNotification(client, {
+          userId: uid,
+          title: `Loan reopened — ${loanNumber}`,
+          body,
+          type: 'loan',
+          entityType: 'loan',
+          entityId: loanId,
+          link: loanDetailLink(cycleType, loanId),
+        });
+      }
 
       return {
         id: loanId,
@@ -907,7 +954,7 @@ export class TenantLoansService {
     if (!['ADMIN', 'LOAN_OFFICER'].includes(user.role)) throw new ForbiddenException('Only Admins and Loan Officers can create loans');
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.interestRate < 0 || dto.interestRate > 200) throw new BadRequestException('Invalid interest rate');
-    if (dto.termWeeks < 1 || dto.termWeeks > 520) throw new BadRequestException('Term must be 1–520 weeks');
+    if (dto.termWeeks < 1 || dto.termWeeks > 99) throw new BadRequestException('Term must be 1–99 weeks');
     if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
     if (!['FLAT', 'REDUCING'].includes(dto.calculationType)) throw new BadRequestException('calculationType must be FLAT or REDUCING');
     assertNoSpecialChars(dto.purpose, 'Loan purpose');
@@ -1255,13 +1302,16 @@ export class TenantLoansService {
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
     if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
-    if (!dto.branchId) throw new BadRequestException('Branch is required for monthly loans');
     if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
     assertNoSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
       const custRes = await client.query(`SELECT id FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
       if (!custRes.rows[0]) throw new NotFoundException('Customer not found');
+      if (dto.branchId) {
+        const brRes = await client.query(`SELECT id FROM branches WHERE id = $1 AND is_active = TRUE`, [dto.branchId]);
+        if (!brRes.rows[0]) throw new NotFoundException('Branch not found');
+      }
 
       const countRes = await client.query<{ n: string }>(`SELECT COUNT(*) AS n FROM loans WHERE cycle_type = 'MONTHLY'`);
       const seq = parseInt(countRes.rows[0].n) + 1;
@@ -1280,11 +1330,11 @@ export class TenantLoansService {
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'MONTHLY','DISBURSED',$10,$11,$12,$13,NOW())
         RETURNING *
       `, [
-        loanNumber, dto.customerId, user.sub, dto.branchId, dto.loanTypeId ?? null,
+        loanNumber, dto.customerId, user.sub, dto.branchId ?? null, dto.loanTypeId ?? null,
         dto.principal, dto.interestRate, dto.termMonths, monthlyInterest,
         dto.purpose ?? null, dto.firstDueDate,
         dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null,
-      ]);
+]);
 
       const loan = loanRes.rows[0];
 
@@ -1422,12 +1472,15 @@ export class TenantLoansService {
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
     if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
-    if (!dto.branchId) throw new BadRequestException('Branch is required for agent risk loans');
     assertNoSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
       const custRes = await client.query(`SELECT id FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
       if (!custRes.rows[0]) throw new NotFoundException('Customer not found');
+      if (dto.branchId) {
+        const brRes = await client.query(`SELECT id FROM branches WHERE id = $1 AND is_active = TRUE`, [dto.branchId]);
+        if (!brRes.rows[0]) throw new NotFoundException('Branch not found');
+      }
 
       const countRes = await client.query<{ n: string }>(`SELECT COUNT(*) AS n FROM loans WHERE cycle_type = 'AGENT_RISK'`);
       const seq = parseInt(countRes.rows[0].n) + 1;
@@ -1446,11 +1499,11 @@ export class TenantLoansService {
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'AGENT_RISK','DISBURSED',$10,$11,$12,$13,NOW())
         RETURNING *
       `, [
-        loanNumber, dto.customerId, user.sub, dto.branchId, dto.loanTypeId ?? null,
+        loanNumber, dto.customerId, user.sub, dto.branchId ?? null, dto.loanTypeId ?? null,
         dto.principal, dto.interestRate, dto.termMonths, monthlyInterest,
         dto.purpose ?? null, dto.firstDueDate,
         dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null,
-      ]);
+]);
 
       const loan = loanRes.rows[0];
 
@@ -1576,7 +1629,6 @@ export class TenantLoansService {
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.interestRate < 0 || dto.interestRate > 100) throw new BadRequestException('Invalid interest rate');
     if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
-    if (!dto.branchId) throw new BadRequestException('Branch is required');
     assertNoSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
@@ -1605,7 +1657,7 @@ export class TenantLoansService {
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'DISBURSED',$10,$11,NOW(),'TERM_LOAN',$12,$13,$14)
         RETURNING id, loan_number
       `, [
-        loanNumber, dto.customerId, user.sub, dto.branchId, dto.loanTypeId ?? null,
+        loanNumber, dto.customerId, user.sub, dto.branchId ?? null, dto.loanTypeId ?? null,
         dto.principal, dto.interestRate, dto.termMonths, emi,
         dto.purpose ?? null, dto.firstDueDate, dto.calculationType,
         dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null,
@@ -1703,44 +1755,71 @@ export class TenantLoansService {
         throw new BadRequestException('Payment can only be recorded on active loans');
       }
 
-      // Validate installment exists, is not already paid, and amount doesn't exceed outstanding
+      const paymentDate = dto.paymentDate ?? today;
+
+      // Allocate the payment across installments: the target installment first, then — if the
+      // amount exceeds its outstanding balance — the excess cascades onto subsequent unpaid
+      // installments on the same loan (lets a customer clear more than one EMI in one payment).
+      const allocations: { installmentId: string; amount: number }[] = [];
+
       if (dto.installmentId) {
         const instRes = await client.query(
-          `SELECT id, status, total_amount, paid_amount FROM installments WHERE id = $1`,
-          [dto.installmentId],
+          `SELECT id, installment_number, status, total_amount, paid_amount FROM installments WHERE id = $1 AND loan_id = $2`,
+          [dto.installmentId, loanId],
         );
         if (!instRes.rows[0]) throw new BadRequestException('Installment not found');
         const inst = instRes.rows[0];
         if (inst.status === 'PAID') throw new BadRequestException('This installment has already been fully paid');
-        const outstanding = parseFloat(inst.total_amount) - parseFloat(inst.paid_amount);
-        if (dto.amount > outstanding + 0.01) {
-          throw new BadRequestException(`Amount exceeds outstanding balance of ₹${outstanding.toFixed(2)}`);
+
+        let remaining = dto.amount;
+        const targetOutstanding = parseFloat(inst.total_amount) - parseFloat(inst.paid_amount);
+        const applyToTarget = Math.min(remaining, targetOutstanding);
+        allocations.push({ installmentId: inst.id, amount: applyToTarget });
+        remaining = Math.round((remaining - applyToTarget) * 100) / 100;
+
+        if (remaining > 0.01) {
+          const nextRes = await client.query<{ id: string; total_amount: string; paid_amount: string }>(
+            `SELECT id, total_amount, paid_amount FROM installments
+             WHERE loan_id = $1 AND installment_number > $2 AND status IN ('PENDING','PARTIALLY_PAID','OVERDUE')
+             ORDER BY installment_number ASC`,
+            [loanId, inst.installment_number],
+          );
+          for (const next of nextRes.rows) {
+            if (remaining <= 0.01) break;
+            const outstanding = parseFloat(next.total_amount) - parseFloat(next.paid_amount);
+            const apply = Math.min(remaining, outstanding);
+            if (apply <= 0) continue;
+            allocations.push({ installmentId: next.id, amount: apply });
+            remaining = Math.round((remaining - apply) * 100) / 100;
+          }
+          if (remaining > 0.01) {
+            throw new BadRequestException(`Amount exceeds total outstanding on this loan by ₹${remaining.toFixed(2)}`);
+          }
         }
       }
 
-      const paymentDate = dto.paymentDate ?? today;
+      let paymentId = '';
+      if (allocations.length > 0) {
+        for (const a of allocations) {
+          const payRes = await client.query(`
+            INSERT INTO payments (loan_id, installment_id, amount, payment_method, reference_number, collected_by, payment_date)
+            VALUES ($1,$2,$3,$4,$5,$6,$7)
+            RETURNING id
+          `, [loanId, a.installmentId, a.amount, dto.paymentMethod, dto.referenceNumber ?? null, user.sub, paymentDate]);
+          paymentId = payRes.rows[0].id;
 
-      const payRes = await client.query(`
-        INSERT INTO payments (loan_id, installment_id, amount, payment_method, reference_number, collected_by, payment_date)
-        VALUES ($1,$2,$3,$4,$5,$6,$7)
-        RETURNING *
-      `, [loanId, dto.installmentId ?? null, dto.amount, dto.paymentMethod, dto.referenceNumber ?? null, user.sub, paymentDate]);
-
-      // Update installment if linked
-      if (dto.installmentId) {
-        await client.query(`
-          UPDATE installments
-          SET paid_amount = paid_amount + $1,
-              status = CASE
-                WHEN paid_amount + $1 >= total_amount THEN 'PAID'
-                WHEN paid_amount + $1 > 0 THEN 'PARTIALLY_PAID'
-                ELSE status
-              END,
-              paid_at = CASE WHEN paid_amount + $1 >= total_amount THEN NOW() ELSE paid_at END,
-              updated_at = NOW()
-          WHERE id = $2
-        `, [dto.amount, dto.installmentId]).catch(() => {
-          return client.query(`
+          await client.query(`
+            UPDATE installments
+            SET paid_amount = paid_amount + $1,
+                status = CASE
+                  WHEN paid_amount + $1 >= total_amount THEN 'PAID'
+                  WHEN paid_amount + $1 > 0 THEN 'PARTIALLY_PAID'
+                  ELSE status
+                END,
+                paid_at = CASE WHEN paid_amount + $1 >= total_amount THEN NOW() ELSE paid_at END,
+                updated_at = NOW()
+            WHERE id = $2
+          `, [a.amount, a.installmentId]).catch(() => client.query(`
             UPDATE installments
             SET paid_amount = paid_amount + $1,
                 status = CASE
@@ -1750,8 +1829,15 @@ export class TenantLoansService {
                 END,
                 paid_at = CASE WHEN paid_amount + $1 >= total_amount THEN NOW() ELSE paid_at END
             WHERE id = $2
-          `, [dto.amount, dto.installmentId]);
-        });
+          `, [a.amount, a.installmentId]));
+        }
+      } else {
+        const payRes = await client.query(`
+          INSERT INTO payments (loan_id, installment_id, amount, payment_method, reference_number, collected_by, payment_date)
+          VALUES ($1,$2,$3,$4,$5,$6,$7)
+          RETURNING id
+        `, [loanId, null, dto.amount, dto.paymentMethod, dto.referenceNumber ?? null, user.sub, paymentDate]);
+        paymentId = payRes.rows[0].id;
       }
 
       // Notify loan officer + managers about payment
@@ -1786,7 +1872,64 @@ export class TenantLoansService {
         metadata: { amount: dto.amount, paymentMethod: dto.paymentMethod, installmentId: dto.installmentId ?? null },
       });
 
-      return { id: payRes.rows[0].id, amount: dto.amount, paymentDate };
+      return { id: paymentId, amount: dto.amount, paymentDate, installmentsPaid: allocations.length };
+    });
+  }
+
+  async undoInstallmentPayment(user: TenantJwtPayload, loanId: string, installmentId: string) {
+    if (!['OWNER', 'MANAGER', 'ADMIN'].includes(user.role)) {
+      throw new ForbiddenException('Only Owner, Manager or Admin can undo a payment');
+    }
+
+    return this.withSchema(user.schemaName, async (client) => {
+      const instRes = await client.query<{
+        id: string; status: string; total_amount: string; paid_amount: string; due_date: string;
+      }>(
+        `SELECT id, status, total_amount, paid_amount, due_date FROM installments WHERE id = $1 AND loan_id = $2`,
+        [installmentId, loanId],
+      );
+      if (!instRes.rows[0]) throw new NotFoundException('Installment not found');
+      const inst = instRes.rows[0];
+
+      const lastPaymentRes = await client.query<{ id: string; amount: string }>(
+        `SELECT id, amount FROM payments WHERE installment_id = $1 ORDER BY created_at DESC LIMIT 1`,
+        [installmentId],
+      );
+      if (!lastPaymentRes.rows[0]) throw new BadRequestException('No payment recorded on this installment to undo');
+      const lastPayment = lastPaymentRes.rows[0];
+
+      await client.query(`DELETE FROM payments WHERE id = $1`, [lastPayment.id]);
+
+      const remainingPaid = Math.max(0, parseFloat(inst.paid_amount) - parseFloat(lastPayment.amount));
+      const totalAmount = parseFloat(inst.total_amount);
+      const today = new Date().toISOString().slice(0, 10);
+      const newStatus = remainingPaid >= totalAmount ? 'PAID'
+        : remainingPaid > 0 ? 'PARTIALLY_PAID'
+        : (inst.due_date && inst.due_date < today ? 'OVERDUE' : 'PENDING');
+
+      await client.query(
+        `UPDATE installments
+         SET paid_amount = $1, status = $2, paid_at = CASE WHEN $2 = 'PAID' THEN paid_at ELSE NULL END, updated_at = NOW()
+         WHERE id = $3`,
+        [remainingPaid, newStatus, installmentId],
+      ).catch(() => client.query(
+        `UPDATE installments
+         SET paid_amount = $1, status = $2, paid_at = CASE WHEN $2 = 'PAID' THEN paid_at ELSE NULL END
+         WHERE id = $3`,
+        [remainingPaid, newStatus, installmentId],
+      ));
+
+      const loanRes = await client.query<{ loan_number: string }>(`SELECT loan_number FROM loans WHERE id = $1`, [loanId]);
+
+      await this.activity.record(client, user, {
+        action: 'payment.undone',
+        entityType: 'loan',
+        entityId: loanId,
+        entityLabel: loanRes.rows[0]?.loan_number ?? loanId,
+        metadata: { installmentId, undoneAmount: parseFloat(lastPayment.amount), newStatus },
+      });
+
+      return { installmentId, status: newStatus, paidAmount: remainingPaid };
     });
   }
 }

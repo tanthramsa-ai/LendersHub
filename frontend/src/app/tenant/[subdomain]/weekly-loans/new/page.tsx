@@ -136,6 +136,7 @@ export default function NewWeeklyLoanPage() {
         ...(newCust.altContact && { altContact: newCust.altContact }),
         ...(newCust.panNumber && { panNumber: newCust.panNumber }),
         ...(newCust.aadhaarLast4 && { aadhaarLast4: newCust.aadhaarLast4 }),
+        ...(newCust.branchId && { branchId: newCust.branchId }),
       };
       if (editingCustomerId) {
         await updateCustomer(editingCustomerId, payload);
@@ -345,6 +346,13 @@ export default function NewWeeklyLoanPage() {
                     <label className="block text-xs font-medium text-gray-600 mb-1">Aadhaar Last 4</label>
                     <input value={newCust.aadhaarLast4} onChange={(e) => setNewCust({ ...newCust, aadhaarLast4: e.target.value.replace(/\D/g,'').slice(0,4) })} className={inputCls} placeholder="1234" maxLength={4} />
                   </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Branch</label>
+                    <select value={newCust.branchId} onChange={(e) => setNewCust({ ...newCust, branchId: e.target.value })} className={inputCls}>
+                      <option value="">No specific branch</option>
+                      {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                    </select>
+                  </div>
                 </div>
                 {addCustError && <p className="text-xs text-red-600">{addCustError}</p>}
                 <button onClick={handleAddCustomer} disabled={addingCustomer}
@@ -391,7 +399,7 @@ export default function NewWeeklyLoanPage() {
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Tenure (weeks) <span className="text-red-500">*</span></label>
-                <input type="number" value={form.termWeeks} onChange={(e) => setF('termWeeks', e.target.value)} className={inputCls} placeholder="52" min={1} max={520} />
+                <input type="number" value={form.termWeeks} onChange={(e) => setF('termWeeks', e.target.value)} className={inputCls} placeholder="52" min={1} max={99} maxLength={2} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">First Installment Date <span className="text-red-500">*</span></label>

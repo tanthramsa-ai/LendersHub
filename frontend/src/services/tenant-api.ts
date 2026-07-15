@@ -463,9 +463,16 @@ export function recordPayment(loanId: string, dto: {
   paymentMethod: 'CASH' | 'UPI' | 'BANK_TRANSFER' | 'CHEQUE' | 'NEFT' | 'RTGS';
   referenceNumber?: string; paymentDate?: string;
 }) {
-  return tenantFetch<{ id: string }>(`/api/v1/tenant/loans/${loanId}/payments`, {
+  return tenantFetch<{ id: string; installmentsPaid: number }>(`/api/v1/tenant/loans/${loanId}/payments`, {
     method: 'POST', body: JSON.stringify(dto),
   });
+}
+
+export function undoInstallmentPayment(loanId: string, installmentId: string) {
+  return tenantFetch<{ installmentId: string; status: string; paidAmount: number }>(
+    `/api/v1/tenant/loans/${loanId}/installments/${installmentId}/undo-payment`,
+    { method: 'POST' },
+  );
 }
 
 export function createLoan(dto: {

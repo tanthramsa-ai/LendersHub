@@ -84,7 +84,7 @@ export default function NewTermLoanPage() {
     return () => clearTimeout(t);
   }, [customerSearch, searchCustomers]);
 
-  const canPreview = !!(principal && interestRate && termMonths && firstDueDate && branchId);
+  const canPreview = !!(principal && interestRate && termMonths && firstDueDate);
 
   async function loadPreview() {
     if (!canPreview) return;
@@ -215,9 +215,9 @@ export default function NewTermLoanPage() {
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 space-y-5">
           <h2 className="font-semibold text-gray-900">Loan Details</h2>
 
-          {/* Branch (mandatory) */}
+          {/* Branch (optional) */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Branch <span className="text-red-500">*</span></label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Branch</label>
             <select value={branchId} onChange={(e) => setBranchId(e.target.value)}
               className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
               <option value="">Select branch…</option>

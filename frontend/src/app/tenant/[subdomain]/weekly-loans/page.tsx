@@ -116,7 +116,7 @@ export default function WeeklyLoansPage() {
                         <Link href={`/${subdomain}/weekly-loans/${l.id}`} className="text-blue-600 hover:underline font-mono">{l.loanNumber}</Link>
                       </td>
                       <td className="px-3 py-3">
-                        <Link href={`/${subdomain}/customers/${l.customerId}`} className="font-medium text-gray-900 hover:text-blue-600 whitespace-nowrap">
+                        <Link href={`/${subdomain}/customers/${l.customerId}`} className="font-medium text-blue-600 hover:underline whitespace-nowrap">
                           {l.customerName}
                         </Link>
                         <div className="text-gray-400">{l.phone}</div>

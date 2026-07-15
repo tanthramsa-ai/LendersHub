@@ -423,8 +423,11 @@ export default function CustomerDetailPage() {
         </div>
       </div>
 
-      {/* Loans link */}
-      <div className="text-right">
+      {/* Back + Loans link */}
+      <div className="flex items-center justify-between">
+        <Link href={`/${subdomain}/customers`} className="text-sm text-blue-600 hover:underline">
+          ← Back to Customers
+        </Link>
         <Link href={`/${subdomain}/loans?search=${encodeURIComponent(customer.customerCode)}`}
           className="text-sm text-blue-600 hover:underline">
           View all loans for this customer →

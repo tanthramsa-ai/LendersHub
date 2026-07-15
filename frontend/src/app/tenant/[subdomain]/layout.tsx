@@ -39,7 +39,7 @@ const LOANS_GROUP_ICON = (
 
 const LOANS_GROUP_ITEMS: NavItem[] = [
   {
-    href: 'loans', label: 'All Loans', roles: ALL_ROLES,
+    href: 'loans', label: 'Term Loans', roles: ALL_ROLES,
     icon: LOANS_GROUP_ICON,
   },
   {
