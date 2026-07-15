@@ -698,7 +698,6 @@ export class TenantLoansService {
         `SELECT id FROM users WHERE role IN ('OWNER','MANAGER','ADMIN') AND is_active = TRUE`,
       );
       for (const m of mgrsRes.rows) notifyIds.add(m.id);
-      notifyIds.delete(user.sub);
 
       const closerName = `${user.firstName} ${user.lastName}`.trim() || user.email;
       const customerName = [firstName, lastName].filter(Boolean).join(' ') || 'customer';
@@ -823,7 +822,6 @@ export class TenantLoansService {
         `SELECT id FROM users WHERE role IN ('OWNER','MANAGER','ADMIN') AND is_active = TRUE`,
       );
       for (const m of mgrsRes.rows) notifyIds.add(m.id);
-      notifyIds.delete(user.sub);
 
       const reopenerName = `${user.firstName} ${user.lastName}`.trim() || user.email;
       const customerName = [firstName, lastName].filter(Boolean).join(' ') || 'customer';
