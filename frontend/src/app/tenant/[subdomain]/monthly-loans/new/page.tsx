@@ -10,7 +10,7 @@ import {
   getTenantSession, LOAN_CREATE_ROLES,
 } from '@/services/tenant-api';
 import {
-  getQuickAddCustomerError, sanitizeNameInput, sanitizeLocalityInput, sanitizePanInput, sanitizeLoanPurposeInput,
+  getQuickAddCustomerErrors, sanitizeNameInput, sanitizeLocalityInput, sanitizePanInput, sanitizeLoanPurposeInput,
   EMPTY_QUICK_ADD_CUSTOMER, customerToQuickAddForm,
 } from '@/lib/quick-add-customer';
 
@@ -120,9 +120,9 @@ export default function NewMonthlyLoanPage() {
   }
 
   async function handleAddCustomer() {
-    const validationError = getQuickAddCustomerError(newCust);
-    if (validationError) {
-      setAddCustError(validationError);
+    const validationErrors = getQuickAddCustomerErrors(newCust);
+    if (validationErrors.length) {
+      setAddCustError(validationErrors.join('\n'));
       return;
     }
     setAddCustError(''); setAddingCustomer(true);
@@ -328,7 +328,11 @@ export default function NewMonthlyLoanPage() {
                     </select>
                   </div>
                 </div>
-                {addCustError && <p className="text-xs text-red-600">{addCustError}</p>}
+                {addCustError && (
+                  <ul className="text-xs text-red-600 list-disc list-inside space-y-0.5">
+                    {addCustError.split('\n').map((line) => <li key={line}>{line}</li>)}
+                  </ul>
+                )}
                 <button onClick={handleAddCustomer} disabled={addingCustomer}
                   className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white text-sm font-medium rounded-lg">
                   {addingCustomer ? 'Saving…' : editingCustomerId ? 'Save Customer' : 'Add & Select Customer'}
