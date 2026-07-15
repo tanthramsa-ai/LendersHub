@@ -19,6 +19,37 @@ export interface CreateNotificationDto {
 export class TenantNotificationsService {
   constructor(private prisma: PrismaService) {}
 
+  // Older tenants were provisioned before the notifications table existed in the
+  // schema builder and never got it retroactively — insertNotification would throw
+  // "relation notifications does not exist" (42P01), surfaced to users as a bare
+  // 500. This heals the table on first use per tenant schema per process, same
+  // pattern as the other runtime schema patches in tenant-loans.service.ts.
+  private static ensuredSchemas = new Set<string>();
+
+  private static async ensureTable(client: PoolClient): Promise<void> {
+    const { rows } = await client.query<{ schema: string }>('SELECT current_schema() AS schema');
+    const schema = rows[0]?.schema;
+    if (!schema || TenantNotificationsService.ensuredSchemas.has(schema)) return;
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS notifications (
+        id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id     UUID        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+        title       TEXT        NOT NULL,
+        body        TEXT        NOT NULL,
+        type        TEXT        NOT NULL DEFAULT 'info',
+        entity_type TEXT,
+        entity_id   TEXT,
+        link        TEXT,
+        is_read     BOOLEAN     NOT NULL DEFAULT FALSE,
+        read_at     TIMESTAMPTZ,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications (user_id, is_read, created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_notifications_entity ON notifications (entity_type, entity_id)`);
+    TenantNotificationsService.ensuredSchemas.add(schema);
+  }
+
   private async withSchema<T>(schemaName: string, fn: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.prisma.pool.connect();
     try {
@@ -31,6 +62,7 @@ export class TenantNotificationsService {
 
   // Called internally (from loans service, scheduler, etc.) — takes a connected client
   static async insertNotification(client: PoolClient, dto: CreateNotificationDto): Promise<void> {
+    await TenantNotificationsService.ensureTable(client);
     await client.query(
       `INSERT INTO notifications (user_id, title, body, type, entity_type, entity_id, link)
        VALUES ($1,$2,$3,$4,$5,$6,$7)`,
