@@ -193,7 +193,7 @@ export default function NewMonthlyLoanPage() {
         interestRate: parseFloat(form.interestRate),
         termMonths: parseInt(form.termMonths),
         firstDueDate: form.firstDueDate,
-        branchId: form.branchId,
+        ...(form.branchId && { branchId: form.branchId }),
         ...(form.purpose && { purpose: form.purpose }),
         ...(monthlyTypeId && { loanTypeId: monthlyTypeId }),
         ...(securityB64 && { securityDocUrl: securityB64 }),

@@ -108,7 +108,7 @@ export default function NewTermLoanPage() {
     setSubmitting(true); setError('');
     try {
       const res = await createTermLoan({
-        customerId: selectedCustomer.id, branchId, loanTypeId: loanTypeId || undefined,
+        customerId: selectedCustomer.id, ...(branchId && { branchId }), loanTypeId: loanTypeId || undefined,
         principal: parseFloat(principal), interestRate: parseFloat(interestRate),
         termMonths: parseInt(termMonths), firstDueDate,
         calculationType, emiRounding,
