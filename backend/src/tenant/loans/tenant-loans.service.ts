@@ -793,12 +793,12 @@ export class TenantLoansService {
       // Restore previously waived installments based on payment + due date
       await client.query(
         `UPDATE installments
-         SET status = CASE
+         SET status = (CASE
            WHEN paid_amount >= total_amount THEN 'PAID'
            WHEN paid_amount > 0 THEN 'PARTIALLY_PAID'
            WHEN due_date < CURRENT_DATE THEN 'OVERDUE'
            ELSE 'PENDING'
-         END
+         END)::installment_status
          WHERE loan_id = $1 AND status = 'WAIVED'`,
         [loanId],
       );
