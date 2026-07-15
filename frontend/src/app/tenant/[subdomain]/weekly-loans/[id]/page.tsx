@@ -182,6 +182,7 @@ export default function WeeklyLoanDetailPage() {
       await load();
     } catch (e: unknown) {
       setCloseError((e as Error).message);
+      await load(); // resync in case the failure means our view of the loan was stale
     } finally { setClosing(false); }
   }
 
@@ -194,6 +195,7 @@ export default function WeeklyLoanDetailPage() {
       await load();
     } catch (e: unknown) {
       setReopenError((e as Error).message);
+      await load(); // resync in case the failure means our view of the loan was stale
     } finally { setReopening(false); }
   }
 
