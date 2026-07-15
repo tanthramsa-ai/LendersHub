@@ -5,7 +5,8 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   getCustomer, updateCustomer, getBranches, activateCustomer, deactivateCustomer, deleteCustomer,
-  CustomerDetail, TenantBranch, UpdateCustomerPayload,
+  getLoans, loanDetailPath,
+  CustomerDetail, TenantBranch, UpdateCustomerPayload, Loan,
   getTenantSession, CUSTOMER_ROLES, USER_ADMIN_ROLES,
 } from '@/services/tenant-api';
 import { sanitizeLocalityInput, sanitizePanInput, sanitizeLoanPurposeInput } from '@/lib/quick-add-customer';
@@ -24,6 +25,27 @@ function fmtDate(d: string | null) {
   if (!d) return '—';
   return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
+
+function fmt(n: number) {
+  return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
+}
+
+const CYCLE_TYPE_LABEL: Record<string, string> = {
+  WEEKLY: 'Weekly',
+  DAILY_NO_SUNDAY: 'Daily',
+  DAILY_WITH_SUNDAY: 'Daily',
+  MONTHLY: 'Monthly',
+  AGENT_RISK: 'Agent Risk',
+  TERM_LOAN: 'Term Loan',
+};
+
+const LOAN_STATUS_COLORS: Record<string, string> = {
+  DISBURSED: 'bg-green-100 text-green-700',
+  PENDING:   'bg-yellow-100 text-yellow-700',
+  APPROVED:  'bg-blue-100 text-blue-700',
+  CLOSED:    'bg-slate-200 text-slate-800',
+  DEFAULTED: 'bg-red-100 text-red-700',
+};
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -44,6 +66,7 @@ export default function CustomerDetailPage() {
   const canAdmin = USER_ADMIN_ROLES.includes(session?.user.role ?? 'VIEWER');
 
   const [customer, setCustomer] = useState<CustomerDetail | null>(null);
+  const [loans, setLoans] = useState<Loan[]>([]);
   const [branches, setBranches] = useState<TenantBranch[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -69,9 +92,11 @@ export default function CustomerDetailPage() {
     Promise.all([
       getCustomer(id),
       getBranches(),
-    ]).then(([c, b]) => {
+      getLoans(1, 50, { customerId: id }).catch(() => ({ data: [] as Loan[] })),
+    ]).then(([c, b, l]) => {
       setCustomer(c);
       setBranches(b.filter((br) => br.isActive));
+      setLoans(l.data);
       setForm({
         firstName: c.firstName, lastName: c.lastName,
         phone: c.phone, email: c.email ?? '',
@@ -423,14 +448,39 @@ export default function CustomerDetailPage() {
         </div>
       </div>
 
-      {/* Back + Loans link */}
+      {/* Loans — every loan type this customer has, not just one product */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 space-y-3">
+        <h2 className="text-sm font-semibold text-gray-700">Loans ({loans.length})</h2>
+        {loans.length === 0 ? (
+          <p className="text-sm text-gray-400">No loans yet.</p>
+        ) : (
+          <div className="divide-y divide-gray-100">
+            {loans.map((l) => (
+              <Link
+                key={l.id}
+                href={`/${subdomain}/${loanDetailPath(l.cycleType, l.id)}`}
+                className="flex items-center justify-between py-2.5 hover:bg-gray-50 -mx-2 px-2 rounded-lg"
+              >
+                <div>
+                  <span className="text-sm font-medium text-blue-600">{l.loanNumber}</span>
+                  <span className="ml-2 px-1.5 py-0.5 rounded text-[11px] font-medium bg-gray-100 text-gray-600">
+                    {CYCLE_TYPE_LABEL[l.cycleType ?? ''] ?? l.cycleType}
+                  </span>
+                </div>
+                <div className="flex items-center gap-3 text-sm">
+                  <span className="text-gray-500">{fmt(l.principal)}</span>
+                  <span className={`px-2 py-0.5 rounded text-xs font-medium ${LOAN_STATUS_COLORS[l.status] ?? 'bg-gray-100 text-gray-500'}`}>{l.status}</span>
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Back */}
       <div className="flex items-center justify-between">
         <Link href={`/${subdomain}/customers`} className="text-sm text-blue-600 hover:underline">
           ← Back to Customers
-        </Link>
-        <Link href={`/${subdomain}/loans?search=${encodeURIComponent(customer.customerCode)}`}
-          className="text-sm text-blue-600 hover:underline">
-          View all loans for this customer →
         </Link>
       </div>
     </div>

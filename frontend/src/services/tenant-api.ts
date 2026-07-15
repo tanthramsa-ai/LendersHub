@@ -329,10 +329,24 @@ export interface Loan {
   disbursedAt: string | null;
   firstDueDate: string | null;
   createdAt: string;
+  cycleType: string | null;
+}
+
+/** Route prefix for a loan's type-specific detail page, mirroring the backend's loanDetailLink(). */
+export function loanDetailPath(cycleType: string | null | undefined, loanId: string): string {
+  switch (cycleType) {
+    case 'WEEKLY': return `weekly-loans/${loanId}`;
+    case 'DAILY_NO_SUNDAY':
+    case 'DAILY_WITH_SUNDAY': return `daily-loans/${loanId}`;
+    case 'MONTHLY': return `monthly-loans/${loanId}`;
+    case 'AGENT_RISK': return `agent-risk-loans/${loanId}`;
+    case 'TERM_LOAN':
+    default: return `loans/${loanId}`;
+  }
 }
 
 export function getLoans(page = 1, limit = 20, filters: {
-  status?: string; search?: string; branchId?: string; loanTypeId?: string; officerId?: string;
+  status?: string; search?: string; branchId?: string; loanTypeId?: string; officerId?: string; customerId?: string;
 } = {}) {
   const params = new URLSearchParams({ page: String(page), limit: String(limit) });
   if (filters.status) params.set('status', filters.status);
@@ -340,6 +354,7 @@ export function getLoans(page = 1, limit = 20, filters: {
   if (filters.branchId) params.set('branchId', filters.branchId);
   if (filters.loanTypeId) params.set('loanTypeId', filters.loanTypeId);
   if (filters.officerId) params.set('officerId', filters.officerId);
+  if (filters.customerId) params.set('customerId', filters.customerId);
   return tenantFetch<{ data: Loan[]; total: number; page: number; limit: number }>(
     `/api/v1/tenant/loans?${params}`,
   );
