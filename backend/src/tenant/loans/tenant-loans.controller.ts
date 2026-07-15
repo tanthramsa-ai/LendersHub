@@ -18,8 +18,9 @@ export class TenantLoansController {
     @Query('branchId') branchId?: string,
     @Query('loanTypeId') loanTypeId?: string,
     @Query('officerId') officerId?: string,
+    @Query('customerId') customerId?: string,
   ) {
-    return this.svc.list(req.user, page, Math.min(limit, 100), { status, search, branchId, loanTypeId, officerId });
+    return this.svc.list(req.user, page, Math.min(limit, 100), { status, search, branchId, loanTypeId, officerId, customerId });
   }
 
   @Get('weekly')
@@ -188,5 +189,14 @@ export class TenantLoansController {
     @Body() dto: RecordPaymentDto,
   ) {
     return this.svc.recordPayment(req.user, id, dto);
+  }
+
+  @Post(':id/installments/:installmentId/undo-payment')
+  undoInstallmentPayment(
+    @Request() req: { user: TenantJwtPayload },
+    @Param('id') id: string,
+    @Param('installmentId') installmentId: string,
+  ) {
+    return this.svc.undoInstallmentPayment(req.user, id, installmentId);
   }
 }

@@ -129,6 +129,7 @@ export default function NewAgentRiskLoanPage() {
         ...(newCust.altContact && { altContact: newCust.altContact }),
         ...(newCust.panNumber && { panNumber: newCust.panNumber }),
         ...(newCust.aadhaarLast4 && { aadhaarLast4: newCust.aadhaarLast4 }),
+        ...(newCust.branchId && { branchId: newCust.branchId }),
       };
       if (editingCustomerId) {
         await updateCustomer(editingCustomerId, payload);
@@ -154,7 +155,6 @@ export default function NewAgentRiskLoanPage() {
     if (!form.principal || !form.interestRate || !form.termMonths || !form.firstDueDate) {
       setPreviewError('Fill principal, interest rate, tenure and first due date'); return;
     }
-    if (!form.branchId) { setPreviewError('Branch is required'); return; }
     setPreviewError(''); setPreviewing(true);
     try {
       const p = await previewAgentRiskSchedule({
@@ -177,7 +177,7 @@ export default function NewAgentRiskLoanPage() {
   }
 
   async function handleSubmit() {
-    if (!selectedCustomer || !preview || !form.branchId) return;
+    if (!selectedCustomer || !preview) return;
     setSubmitError(''); setSubmitting(true);
     try {
       const result = await createAgentRiskLoan({
@@ -312,6 +312,13 @@ export default function NewAgentRiskLoanPage() {
                     <label className="block text-xs font-medium text-gray-600 mb-1">Aadhaar Last 4</label>
                     <input value={newCust.aadhaarLast4} onChange={(e) => setNewCust({ ...newCust, aadhaarLast4: e.target.value.replace(/\D/g,'').slice(0,4) })} className={inputCls} placeholder="1234" maxLength={4} />
                   </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Branch</label>
+                    <select value={newCust.branchId} onChange={(e) => setNewCust({ ...newCust, branchId: e.target.value })} className={inputCls}>
+                      <option value="">No specific branch</option>
+                      {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                    </select>
+                  </div>
                 </div>
                 {addCustError && <p className="text-xs text-red-600">{addCustError}</p>}
                 <button onClick={handleAddCustomer} disabled={addingCustomer}
@@ -351,7 +358,7 @@ export default function NewAgentRiskLoanPage() {
 
             <div className="grid grid-cols-2 gap-4">
               <div className="col-span-2 sm:col-span-1">
-                <label className="block text-xs font-medium text-gray-600 mb-1">Branch <span className="text-red-500">*</span></label>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Branch</label>
                 <select value={form.branchId} onChange={(e) => setF('branchId', e.target.value)} className={inputCls}>
                   <option value="">Select branch…</option>
                   {branches.map((b) => <option key={b.id} value={b.id}>{b.name} ({b.code})</option>)}
@@ -498,7 +505,7 @@ export default function NewAgentRiskLoanPage() {
 
           <div className="flex justify-between">
             <button onClick={() => setStep(2)} className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">← Back</button>
-            <button onClick={handleSubmit} disabled={submitting || !form.branchId}
+            <button onClick={handleSubmit} disabled={submitting}
               className="px-6 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white text-sm font-semibold rounded-lg">
               {submitting ? 'Creating Loan…' : '✓ Create Agent Risk Loan'}
             </button>

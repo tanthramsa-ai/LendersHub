@@ -53,7 +53,7 @@ export default function TermLoansPage() {
     <div className="p-6 space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-gray-900">Loans</h1>
+          <h1 className="text-xl font-bold text-gray-900">Term Loans</h1>
           <p className="text-sm text-gray-500">{total} loan{total !== 1 ? 's' : ''} · EMI-based · Principal + Interest</p>
         </div>
         {canCreate && (

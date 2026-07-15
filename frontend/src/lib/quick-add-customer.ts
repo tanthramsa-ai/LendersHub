@@ -13,11 +13,12 @@ export type QuickAddCustomerForm = {
   altContact: string;
   panNumber: string;
   aadhaarLast4: string;
+  branchId: string;
 };
 
 export const EMPTY_QUICK_ADD_CUSTOMER: QuickAddCustomerForm = {
   firstName: '', lastName: '', phone: '', address: '', locality: '',
-  altContact: '', panNumber: '', aadhaarLast4: '',
+  altContact: '', panNumber: '', aadhaarLast4: '', branchId: '',
 };
 
 /** Map a customer (list or detail) into the Quick Add form. */
@@ -30,6 +31,7 @@ export function customerToQuickAddForm(c: {
   altContact?: string | null;
   panNumber?: string | null;
   aadhaarLast4?: string | null;
+  branchId?: string | null;
 }): QuickAddCustomerForm {
   return {
     firstName: c.firstName ?? '',
@@ -40,6 +42,7 @@ export function customerToQuickAddForm(c: {
     altContact: c.altContact ?? '',
     panNumber: c.panNumber ?? '',
     aadhaarLast4: c.aadhaarLast4 ?? '',
+    branchId: c.branchId ?? '',
   };
 }
 

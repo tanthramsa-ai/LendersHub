@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { getTermLoan, closeLoan, reopenLoan, recordPayment, getTenantSession, MANAGER_ROLES, COLLECTION_ROLES, TermLoanDetail, TermInstallment } from '@/services/tenant-api';
+import { getTermLoan, closeLoan, reopenLoan, recordPayment, undoInstallmentPayment, getTenantSession, MANAGER_ROLES, COLLECTION_ROLES, TermLoanDetail, TermInstallment } from '@/services/tenant-api';
 import { CloseLoanModal, CloseCommentBanner, ReopenLoanModal } from '@/components/CloseLoanModal';
 
 const STATUS_COLORS: Record<string, string> = {
@@ -74,6 +74,8 @@ export default function TermLoanDetailPage() {
   const [reopening, setReopening] = useState(false);
   const [err, setErr] = useState('');
   const [tooltip, setTooltip] = useState<{ num: number; x: number; y: number } | null>(null);
+  const [undoTarget, setUndoTarget] = useState<TermInstallment | null>(null);
+  const [undoing, setUndoing] = useState(false);
 
   async function load() {
     try {
@@ -107,6 +109,18 @@ export default function TermLoanDetailPage() {
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : 'Payment failed');
     } finally { setPaying(false); }
+  }
+
+  async function handleUndo() {
+    if (!undoTarget) return;
+    setUndoing(true); setErr('');
+    try {
+      await undoInstallmentPayment(id, undoTarget.id);
+      setUndoTarget(null);
+      await load();
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Undo failed');
+    } finally { setUndoing(false); }
   }
 
   async function handleClose(comment: string) {
@@ -226,10 +240,13 @@ export default function TermLoanDetailPage() {
           {loan.installments.map((inst) => (
             <div key={inst.id} className="relative group">
               <button
-                onClick={() => canPay && isActive && inst.status !== 'PAID' ? openPayModal(inst) : undefined}
+                onClick={() => {
+                  if (canPay && isActive && inst.status !== 'PAID') openPayModal(inst);
+                  else if (canClose && isActive && inst.status === 'PAID') setUndoTarget(inst);
+                }}
                 onMouseEnter={(e) => setTooltip({ num: inst.number, x: e.clientX, y: e.clientY })}
                 onMouseLeave={() => setTooltip(null)}
-                className={`w-full aspect-square rounded-lg border text-xs font-bold flex flex-col items-center justify-center transition-all hover:scale-105 ${tileColor(inst.status, isNpa)} ${canPay && isActive && inst.status !== 'PAID' ? 'cursor-pointer' : 'cursor-default'}`}
+                className={`w-full aspect-square rounded-lg border text-xs font-bold flex flex-col items-center justify-center transition-all hover:scale-105 ${tileColor(inst.status, isNpa)} ${(canPay && isActive && inst.status !== 'PAID') || (canClose && isActive && inst.status === 'PAID') ? 'cursor-pointer' : 'cursor-default'}`}
               >
                 <span>{inst.number}</span>
                 {inst.status === 'PARTIALLY_PAID' && <span className="text-[8px] leading-none opacity-80">P</span>}
@@ -283,6 +300,9 @@ export default function TermLoanDetailPage() {
                   <td className="px-3 py-2.5">
                     {canPay && isActive && inst.status !== 'PAID' && (
                       <button onClick={() => openPayModal(inst)} className="text-xs text-blue-600 hover:underline whitespace-nowrap">Pay</button>
+                    )}
+                    {canClose && isActive && inst.status === 'PAID' && (
+                      <button onClick={() => setUndoTarget(inst)} className="text-xs text-red-600 hover:underline whitespace-nowrap">Undo</button>
                     )}
                   </td>
                 </tr>
@@ -361,6 +381,9 @@ export default function TermLoanDetailPage() {
                 <label className="block text-xs font-medium text-gray-600 mb-1">Amount (₹)</label>
                 <input type="number" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} min="1"
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                {selectedInstallment && parseFloat(payAmount || '0') > (selectedInstallment.total - selectedInstallment.paid) && (
+                  <p className="text-xs text-gray-500 mt-1">Extra amount will apply to the next installment(s).</p>
+                )}
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Payment Method</label>
@@ -386,6 +409,26 @@ export default function TermLoanDetailPage() {
               <button disabled={paying} onClick={submitPayment}
                 className="flex-1 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg disabled:opacity-40">
                 {paying ? 'Saving…' : 'Save Payment'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Undo payment confirmation */}
+      {undoTarget && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4">
+            <h2 className="text-lg font-bold text-gray-900">Undo Payment</h2>
+            <p className="text-sm text-gray-600">
+              This reverts the most recent payment on installment #{undoTarget.number} (₹{fmt(undoTarget.paid)} paid) back to its previous status. This cannot be redone automatically.
+            </p>
+            {err && <p className="text-sm text-red-600">{err}</p>}
+            <div className="flex gap-3 pt-2">
+              <button onClick={() => { setUndoTarget(null); setErr(''); }} className="flex-1 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
+              <button disabled={undoing} onClick={handleUndo}
+                className="flex-1 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg disabled:opacity-40">
+                {undoing ? 'Undoing…' : 'Undo Payment'}
               </button>
             </div>
           </div>
