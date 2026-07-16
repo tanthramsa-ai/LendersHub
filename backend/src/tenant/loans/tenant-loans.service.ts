@@ -4,7 +4,7 @@ import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { TenantNotificationsService } from '../notifications/tenant-notifications.service';
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
 import { safePagination } from '../../common/utils/pagination';
-import { assertNoSpecialChars } from '../customers/customer-validation';
+import { assertNoDigitsOrSpecialChars } from '../customers/customer-validation';
 
 export interface CreateLoanDto {
   customerId: string;
@@ -535,7 +535,7 @@ export class TenantLoansService {
     if (dto.interestRate < 0 || dto.interestRate > 100) throw new BadRequestException('Invalid interest rate');
     if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
     if (dto.firstDueDate && !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
-    assertNoSpecialChars(dto.purpose, 'Loan purpose');
+    assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
       // Validate customer
@@ -956,7 +956,7 @@ export class TenantLoansService {
     if (dto.termWeeks < 1 || dto.termWeeks > 99) throw new BadRequestException('Term must be 1–99 weeks');
     if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
     if (!['FLAT', 'REDUCING'].includes(dto.calculationType)) throw new BadRequestException('calculationType must be FLAT or REDUCING');
-    assertNoSpecialChars(dto.purpose, 'Loan purpose');
+    assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
       const custRes = await client.query(`SELECT id, first_name, last_name FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
@@ -1136,7 +1136,7 @@ export class TenantLoansService {
     if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
     if (!['FLAT', 'REDUCING'].includes(dto.calculationType)) throw new BadRequestException('calculationType must be FLAT or REDUCING');
     if (!['DAILY_NO_SUNDAY', 'DAILY_WITH_SUNDAY'].includes(dto.cycleType)) throw new BadRequestException('cycleType must be DAILY_NO_SUNDAY or DAILY_WITH_SUNDAY');
-    assertNoSpecialChars(dto.purpose, 'Loan purpose');
+    assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
       const custRes = await client.query(`SELECT id, first_name, last_name FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
@@ -1302,7 +1302,7 @@ export class TenantLoansService {
     if (dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
     if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
     if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
-    assertNoSpecialChars(dto.purpose, 'Loan purpose');
+    assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
       const custRes = await client.query(`SELECT id FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
@@ -1471,7 +1471,7 @@ export class TenantLoansService {
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
     if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
-    assertNoSpecialChars(dto.purpose, 'Loan purpose');
+    assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
       const custRes = await client.query(`SELECT id FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
@@ -1628,7 +1628,7 @@ export class TenantLoansService {
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.interestRate < 0 || dto.interestRate > 100) throw new BadRequestException('Invalid interest rate');
     if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
-    assertNoSpecialChars(dto.purpose, 'Loan purpose');
+    assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
       const custRes = await client.query(`SELECT id FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);

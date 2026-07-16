@@ -2,6 +2,9 @@ const NAME_HAS_DIGIT = /\d/;
 /** Letters, numbers, spaces, and common punctuation only (no symbols like @#$%) */
 const PLAIN_TEXT_ALLOWED = /^[a-zA-Z0-9\s\-.,']+$/;
 const PLAIN_TEXT_SANITIZE = /[^a-zA-Z0-9\s\-.,']/g;
+/** Loan purpose is stricter: letters, spaces and basic punctuation only — no digits, no symbols. */
+const LOAN_PURPOSE_ALLOWED = /^[a-zA-Z\s\-.,']+$/;
+const LOAN_PURPOSE_SANITIZE = /[^a-zA-Z\s\-.,']/g;
 const PAN_SANITIZE = /[^A-Za-z0-9]/g;
 
 export type QuickAddCustomerForm = {
@@ -116,8 +119,9 @@ export function sanitizeLocalityInput(value: string): string {
   return sanitizePlainTextInput(value);
 }
 
+/** Strip digits and symbols from loan purpose as the user types (letters/spaces/punctuation only). */
 export function sanitizeLoanPurposeInput(value: string): string {
-  return sanitizePlainTextInput(value);
+  return value.replace(LOAN_PURPOSE_SANITIZE, '');
 }
 
 /** Allow only alphanumeric characters; uppercase for PAN. */
@@ -125,6 +129,7 @@ export function sanitizePanInput(value: string): string {
   return value.replace(PAN_SANITIZE, '').toUpperCase().slice(0, 10);
 }
 
-export function hasDisallowedSpecialChars(value: string): boolean {
-  return value.trim() !== '' && !PLAIN_TEXT_ALLOWED.test(value.trim());
+/** True if loan purpose contains anything other than letters, spaces and basic punctuation. */
+export function hasDisallowedLoanPurposeChars(value: string): boolean {
+  return value.trim() !== '' && !LOAN_PURPOSE_ALLOWED.test(value.trim());
 }

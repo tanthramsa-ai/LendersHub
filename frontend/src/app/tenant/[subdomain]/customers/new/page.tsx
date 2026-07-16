@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { createCustomer, getBranches, TenantBranch, getTenantSession, CUSTOMER_ROLES } from '@/services/tenant-api';
-import { sanitizeLocalityInput, sanitizePanInput, sanitizeNameInput, sanitizeLoanPurposeInput, hasDisallowedSpecialChars } from '@/lib/quick-add-customer';
+import { sanitizeLocalityInput, sanitizePanInput, sanitizeNameInput, sanitizeLoanPurposeInput, hasDisallowedLoanPurposeChars } from '@/lib/quick-add-customer';
 
 const STATES = [
   'Andhra Pradesh','Arunachal Pradesh','Assam','Bihar','Chhattisgarh','Goa','Gujarat',
@@ -87,8 +87,8 @@ function validateForm(form: FormFields): Partial<Record<FieldKey | 'kyc', string
   if (form.pincode.trim() && !/^\d{6}$/.test(form.pincode)) {
     errors.pincode = 'Pincode must be exactly 6 digits';
   }
-  if (form.loanPurpose.trim() && hasDisallowedSpecialChars(form.loanPurpose)) {
-    errors.loanPurpose = 'Loan purpose cannot contain special characters';
+  if (form.loanPurpose.trim() && hasDisallowedLoanPurposeChars(form.loanPurpose)) {
+    errors.loanPurpose = 'Loan purpose can only contain letters (no numbers or special characters)';
   }
   if (form.creditScore.trim()) {
     const score = parseInt(form.creditScore, 10);

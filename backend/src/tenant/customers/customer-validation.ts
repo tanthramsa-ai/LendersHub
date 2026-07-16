@@ -6,6 +6,8 @@ const AADHAAR4_RE = /^\d{4}$/;
 const PINCODE_RE = /^\d{6}$/;
 /** Letters, numbers, spaces, and common punctuation only */
 const PLAIN_TEXT_RE = /^[a-zA-Z0-9\s\-.,']+$/;
+/** Loan purpose is stricter: letters, spaces and basic punctuation only — no digits, no symbols. */
+const LOAN_PURPOSE_RE = /^[a-zA-Z\s\-.,']+$/;
 
 export function validateCustomerFields(dto: {
   firstName?: string;
@@ -81,8 +83,8 @@ export function validateCustomerFields(dto: {
   }
 
   if (dto.loanPurpose != null && dto.loanPurpose !== '') {
-    if (!PLAIN_TEXT_RE.test(dto.loanPurpose.trim())) {
-      throw new BadRequestException('Loan purpose cannot contain special characters');
+    if (!LOAN_PURPOSE_RE.test(dto.loanPurpose.trim())) {
+      throw new BadRequestException('Loan purpose can only contain letters (no numbers or special characters)');
     }
   }
 
@@ -100,9 +102,9 @@ export function validateCustomerFields(dto: {
   }
 }
 
-/** Shared check for loan purpose / similar free-text fields. */
-export function assertNoSpecialChars(value: string | undefined | null, fieldLabel: string): void {
-  if (value != null && value !== '' && !PLAIN_TEXT_RE.test(value.trim())) {
-    throw new BadRequestException(`${fieldLabel} cannot contain special characters`);
+/** Check for loan purpose / similar free-text fields: letters, spaces and basic punctuation only. */
+export function assertNoDigitsOrSpecialChars(value: string | undefined | null, fieldLabel: string): void {
+  if (value != null && value !== '' && !LOAN_PURPOSE_RE.test(value.trim())) {
+    throw new BadRequestException(`${fieldLabel} can only contain letters (no numbers or special characters)`);
   }
 }
