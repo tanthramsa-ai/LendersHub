@@ -1,17 +1,14 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { getCustomers, getBranches, Customer, TenantBranch, getTenantSession, CUSTOMER_ROLES } from '@/services/tenant-api';
-
-function fmtDate(d: string) {
-  return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-}
 
 export default function CustomersPage() {
   const params = useParams<{ subdomain: string }>();
   const subdomain = params.subdomain;
+  const router = useRouter();
   const session = getTenantSession();
   const canAddCustomer = CUSTOMER_ROLES.includes(session?.user.role ?? 'VIEWER');
 
@@ -74,7 +71,9 @@ export default function CustomersPage() {
       {/* Filters */}
       <div className="flex flex-wrap gap-3">
         <form onSubmit={handleSearch} className="flex gap-2 flex-1 min-w-0">
+          <label htmlFor="customer-search" className="sr-only">Search customers by name, phone, or code</label>
           <input
+            id="customer-search"
             type="text"
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
@@ -99,7 +98,10 @@ export default function CustomersPage() {
         </form>
 
         {branches.length > 0 && (
+          <>
+          <label htmlFor="customer-branch-filter" className="sr-only">Filter by branch</label>
           <select
+            id="customer-branch-filter"
             value={branchId}
             onChange={(e) => { setBranchId(e.target.value); setPage(1); }}
             className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
@@ -107,13 +109,14 @@ export default function CustomersPage() {
             <option value="">All Branches</option>
             {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
           </select>
+          </>
         )}
       </div>
 
       {/* Table */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
         {loading ? (
-          <div className="py-16 text-center text-gray-400 text-sm">Loading…</div>
+          <div role="status" aria-live="polite" className="py-16 text-center text-gray-400 text-sm">Loading…</div>
         ) : customers.length === 0 ? (
           <div className="py-16 text-center">
             <p className="text-gray-400 text-sm mb-3">No customers found</p>
@@ -129,8 +132,8 @@ export default function CustomersPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50">
                   <tr>
-                    {['Code', 'Name', 'Phone', 'Locality', 'PAN', 'Active Loans', 'Closed Loans', 'Branch', 'Status', 'Joined'].map((h) => (
-                      <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
+                    {['Name', 'Phone', 'Locality', 'Active Loans', 'Closed Loans', 'Branch', 'Status'].map((h) => (
+                      <th key={h} scope="col" className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
                         {h}
                       </th>
                     ))}
@@ -138,18 +141,22 @@ export default function CustomersPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {customers.map((c) => (
-                    <tr key={c.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-4 py-3">
-                        <Link href={`/${subdomain}/customers/${c.id}`} className="text-blue-600 hover:underline font-mono text-xs">
-                          {c.customerCode}
-                        </Link>
-                      </td>
-                      <td className="px-4 py-3 font-medium text-gray-900 whitespace-nowrap">
+                    <tr
+                      key={c.id}
+                      onDoubleClick={() => router.push(`/${subdomain}/customers/${c.id}`)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') router.push(`/${subdomain}/customers/${c.id}`);
+                      }}
+                      tabIndex={0}
+                      aria-label={`Open ${c.firstName} ${c.lastName}`.trim()}
+                      className="hover:bg-gray-50 focus:bg-blue-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 transition-colors cursor-pointer"
+                      title="Double-click, or press Enter, to open"
+                    >
+                      <td className="px-4 py-3 font-bold text-gray-900 whitespace-nowrap">
                         {c.firstName} {c.lastName}
                       </td>
                       <td className="px-4 py-3 text-gray-600">{c.phone}</td>
                       <td className="px-4 py-3 text-gray-500 text-xs">{c.locality || '—'}</td>
-                      <td className="px-4 py-3 text-gray-500 font-mono text-xs">{c.panNumber ?? '—'}</td>
                       <td className="px-4 py-3">
                         {c.activeLoans > 0 ? (
                           <span className="px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">
@@ -172,7 +179,6 @@ export default function CustomersPage() {
                           {c.isActive ? 'Active' : 'Inactive'}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">{fmtDate(c.createdAt)}</td>
                     </tr>
                   ))}
                 </tbody>
