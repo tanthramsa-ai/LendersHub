@@ -119,6 +119,10 @@ export function sanitizeLocalityInput(value: string): string {
   return sanitizePlainTextInput(value);
 }
 
+export function sanitizeOccupationInput(value: string): string {
+  return sanitizePlainTextInput(value);
+}
+
 /** Strip digits and symbols from loan purpose as the user types (letters/spaces/punctuation only). */
 export function sanitizeLoanPurposeInput(value: string): string {
   return value.replace(LOAN_PURPOSE_SANITIZE, '');
