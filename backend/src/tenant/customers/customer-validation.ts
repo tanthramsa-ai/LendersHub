@@ -50,10 +50,10 @@ export function validateCustomerFields(dto: {
       throw new BadRequestException('Locality cannot contain special characters');
     }
   }
-  // Occupation is optional; when provided it must not contain symbols
+  // Occupation is optional; when provided it must be letters/spaces/basic punctuation only — no digits.
   if (dto.occupation != null && dto.occupation !== '') {
-    if (!PLAIN_TEXT_RE.test(dto.occupation.trim())) {
-      throw new BadRequestException('Occupation cannot contain special characters');
+    if (!LOAN_PURPOSE_RE.test(dto.occupation.trim())) {
+      throw new BadRequestException('Occupation can only contain letters (no numbers or special characters)');
     }
   }
 
