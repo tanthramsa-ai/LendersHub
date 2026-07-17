@@ -9,7 +9,7 @@ import {
   CustomerDetail, TenantBranch, UpdateCustomerPayload, Loan,
   getTenantSession, CUSTOMER_ROLES, USER_ADMIN_ROLES,
 } from '@/services/tenant-api';
-import { sanitizeLocalityInput, sanitizePanInput, sanitizeLoanPurposeInput } from '@/lib/quick-add-customer';
+import { sanitizeLocalityInput, sanitizeOccupationInput, sanitizePanInput, sanitizeLoanPurposeInput } from '@/lib/quick-add-customer';
 
 const STATES = [
   'Andhra Pradesh','Arunachal Pradesh','Assam','Bihar','Chhattisgarh','Goa','Gujarat',
@@ -221,7 +221,7 @@ export default function CustomerDetailPage() {
               <Field label="Phone *"><input value={form.phone} onChange={(e) => set('phone', e.target.value)} required className={inputCls} /></Field>
               <Field label="Email"><input type="email" value={form.email} onChange={(e) => set('email', e.target.value)} className={inputCls} /></Field>
               <Field label="Date of Birth"><input type="date" value={form.dateOfBirth} onChange={(e) => set('dateOfBirth', e.target.value)} className={inputCls} /></Field>
-              <Field label="Occupation"><input value={form.occupation} onChange={(e) => set('occupation', e.target.value)} className={inputCls} /></Field>
+              <Field label="Occupation"><input value={form.occupation} onChange={(e) => set('occupation', sanitizeOccupationInput(e.target.value))} className={inputCls} /></Field>
               <Field label="Reason for Loan"><input value={form.loanPurpose} onChange={(e) => set('loanPurpose', sanitizeLoanPurposeInput(e.target.value))} className={inputCls} /></Field>
               <Field label="Credit Score"><input type="number" value={form.creditScore} onChange={(e) => set('creditScore', e.target.value)} className={inputCls} min={300} max={900} /></Field>
             </div>

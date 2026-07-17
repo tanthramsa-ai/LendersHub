@@ -19,6 +19,7 @@ export function validateCustomerFields(dto: {
   address?: string;
   locality?: string;
   pincode?: string;
+  occupation?: string;
   altContact?: string;
   loanPurpose?: string;
   creditScore?: number;
@@ -49,6 +50,13 @@ export function validateCustomerFields(dto: {
       throw new BadRequestException('Locality cannot contain special characters');
     }
   }
+  // Occupation is optional; when provided it must be letters/spaces/basic punctuation only — no digits.
+  if (dto.occupation != null && dto.occupation !== '') {
+    if (!LOAN_PURPOSE_RE.test(dto.occupation.trim())) {
+      throw new BadRequestException('Occupation can only contain letters (no numbers or special characters)');
+    }
+  }
+
   // Alternate contact is optional; when provided it must be a valid 10-digit number
   if (dto.altContact != null && dto.altContact !== '') {
     if (!PHONE_RE.test(dto.altContact.trim())) {

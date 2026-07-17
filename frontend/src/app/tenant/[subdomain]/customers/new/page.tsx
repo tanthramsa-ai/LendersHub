@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { createCustomer, getBranches, TenantBranch, getTenantSession, CUSTOMER_ROLES } from '@/services/tenant-api';
-import { sanitizeLocalityInput, sanitizePanInput, sanitizeNameInput, sanitizeLoanPurposeInput, hasDisallowedLoanPurposeChars } from '@/lib/quick-add-customer';
+import { sanitizeLocalityInput, sanitizeOccupationInput, sanitizePanInput, sanitizeNameInput, sanitizeLoanPurposeInput, hasDisallowedLoanPurposeChars } from '@/lib/quick-add-customer';
 
 const STATES = [
   'Andhra Pradesh','Arunachal Pradesh','Assam','Bihar','Chhattisgarh','Goa','Gujarat',
@@ -245,7 +245,7 @@ export default function NewCustomerPage() {
               <input type="date" value={form.dateOfBirth} onChange={(e) => set('dateOfBirth', e.target.value)} className={inputCls} />
             </Field>
             <Field label="Occupation">
-              <input value={form.occupation} onChange={(e) => set('occupation', e.target.value)} className={inputCls} placeholder="Farmer, Business, Salaried…" />
+              <input value={form.occupation} onChange={(e) => set('occupation', sanitizeOccupationInput(e.target.value))} className={inputCls} placeholder="Farmer, Business, Salaried…" />
             </Field>
             <Field label="Reason for Loan" error={fieldErrors.loanPurpose}>
               <input value={form.loanPurpose} onChange={(e) => set('loanPurpose', sanitizeLoanPurposeInput(e.target.value))} className={cls('loanPurpose')} placeholder="Agriculture, Medical, Education…" />
