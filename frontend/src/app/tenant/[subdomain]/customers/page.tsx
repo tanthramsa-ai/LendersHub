@@ -1,17 +1,14 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { getCustomers, getBranches, Customer, TenantBranch, getTenantSession, CUSTOMER_ROLES } from '@/services/tenant-api';
-
-function fmtDate(d: string) {
-  return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-}
 
 export default function CustomersPage() {
   const params = useParams<{ subdomain: string }>();
   const subdomain = params.subdomain;
+  const router = useRouter();
   const session = getTenantSession();
   const canAddCustomer = CUSTOMER_ROLES.includes(session?.user.role ?? 'VIEWER');
 
@@ -129,7 +126,7 @@ export default function CustomersPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50">
                   <tr>
-                    {['Code', 'Name', 'Phone', 'Locality', 'PAN', 'Active Loans', 'Closed Loans', 'Branch', 'Status', 'Joined'].map((h) => (
+                    {['Name', 'Phone', 'Locality', 'PAN', 'Active Loans', 'Closed Loans', 'Branch', 'Status'].map((h) => (
                       <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
                         {h}
                       </th>
@@ -138,12 +135,12 @@ export default function CustomersPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {customers.map((c) => (
-                    <tr key={c.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-4 py-3">
-                        <Link href={`/${subdomain}/customers/${c.id}`} className="text-blue-600 hover:underline font-mono text-xs">
-                          {c.customerCode}
-                        </Link>
-                      </td>
+                    <tr
+                      key={c.id}
+                      onDoubleClick={() => router.push(`/${subdomain}/customers/${c.id}`)}
+                      className="hover:bg-gray-50 transition-colors cursor-pointer"
+                      title="Double-click to open"
+                    >
                       <td className="px-4 py-3 font-medium text-gray-900 whitespace-nowrap">
                         {c.firstName} {c.lastName}
                       </td>
@@ -172,7 +169,6 @@ export default function CustomersPage() {
                           {c.isActive ? 'Active' : 'Inactive'}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">{fmtDate(c.createdAt)}</td>
                     </tr>
                   ))}
                 </tbody>

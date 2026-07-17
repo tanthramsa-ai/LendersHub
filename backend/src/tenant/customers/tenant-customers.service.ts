@@ -110,7 +110,7 @@ export class TenantCustomersService {
           FROM customers c
           LEFT JOIN branches b ON b.id = c.branch_id
           ${whereClause}
-          ORDER BY c.customer_code ASC
+          ORDER BY LOWER(c.first_name) ASC, LOWER(c.last_name) ASC
           LIMIT $${limitIdx} OFFSET $${offsetIdx}
         `, dataParams);
       const countRes = await client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM customers c ${countWhere}`, countParams);
