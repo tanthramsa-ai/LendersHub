@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
-  getDailyLoan, recordPayment, closeLoan, reopenLoan, DailyLoanDetail, DailyInstallment,
+  getDailyLoan, recordPayment, undoInstallmentPayment, closeLoan, reopenLoan, DailyLoanDetail, DailyInstallment,
   getTenantSession, COLLECTION_ROLES, MANAGER_ROLES,
 } from '@/services/tenant-api';
 import { CloseLoanModal, CloseCommentBanner, ReopenLoanModal } from '@/components/CloseLoanModal';
@@ -113,6 +113,9 @@ export default function DailyLoanDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  const [undoTarget, setUndoTarget] = useState<DailyInstallment | null>(null);
+  const [undoing, setUndoing] = useState(false);
+  const [undoError, setUndoError] = useState('');
   const [payInst, setPayInst] = useState<DailyInstallment | null>(null);
   const [payForm, setPayForm] = useState({ amount: '', method: 'CASH', ref: '', date: '' });
   const [paying, setPaying] = useState(false);
@@ -162,6 +165,19 @@ export default function DailyLoanDetailPage() {
     } finally { setPaying(false); }
   }
 
+  async function handleUndo() {
+    if (!undoTarget) return;
+    setUndoing(true); setUndoError('');
+    try {
+      await undoInstallmentPayment(id, undoTarget.id);
+      setUndoTarget(null);
+      refreshNotificationBell();
+      await load();
+    } catch (e: unknown) {
+      setUndoError((e as Error).message);
+    } finally { setUndoing(false); }
+  }
+
   async function handleClose(comment: string) {
     setClosing(true); setCloseError('');
     try {
@@ -200,7 +216,7 @@ export default function DailyLoanDetailPage() {
     <div className="p-6 space-y-6 max-w-5xl">
       {/* Breadcrumb + title */}
       <div className="flex items-center gap-3 flex-wrap">
-        <Link href={`/${subdomain}/daily-loans`} className="text-sm text-gray-500 hover:text-gray-700">← Daily Loans</Link>
+        <Link href={`/${subdomain}/daily-loans`} className="text-sm text-blue-600 hover:underline">← Daily Loans</Link>
         <span className="text-gray-300">|</span>
         <h1 className="text-lg font-bold text-gray-900 font-mono">{loan.loanNumber}</h1>
         <span className={`px-2 py-0.5 rounded text-xs font-semibold ${LOAN_STATUS_COLORS[loan.status] ?? 'bg-gray-100 text-gray-500'}`}>{loan.status}</span>
@@ -314,20 +330,21 @@ export default function DailyLoanDetailPage() {
             const due = new Date(inst.dueDate); due.setHours(0, 0, 0, 0);
             const isPastDue = inst.status === 'OVERDUE' || (inst.status === 'PENDING' && due < today);
             const canPay = canRecord && ['PENDING', 'OVERDUE', 'PARTIALLY_PAID'].includes(inst.status) && loan.status !== 'CLOSED';
+            const canUndo = canClose && inst.status === 'PAID' && loan.status !== 'CLOSED';
             const tooltip = buildTooltip(inst);
 
             return (
               <div
                 key={inst.id}
-                role={canPay ? 'button' : undefined}
-                tabIndex={canPay ? 0 : undefined}
-                onClick={() => canPay && openPay(inst)}
-                onKeyDown={(e) => e.key === 'Enter' && canPay && openPay(inst)}
+                role={canPay || canUndo ? 'button' : undefined}
+                tabIndex={canPay || canUndo ? 0 : undefined}
+                onClick={() => { if (canPay) openPay(inst); else if (canUndo) setUndoTarget(inst); }}
+                onKeyDown={(e) => { if (e.key !== 'Enter') return; if (canPay) openPay(inst); else if (canUndo) setUndoTarget(inst); }}
                 title={tooltip}
                 className={[
                   'relative group rounded border-2 p-1 text-center select-none transition-all',
                   tileClasses(inst),
-                  canPay ? 'cursor-pointer hover:scale-110 hover:shadow-md hover:z-10' : 'cursor-default',
+                  canPay || canUndo ? 'cursor-pointer hover:scale-110 hover:shadow-md hover:z-10' : 'cursor-default',
                 ].join(' ')}
               >
                 <p className="text-[9px] font-bold leading-tight">#{inst.number}</p>
@@ -353,7 +370,10 @@ export default function DailyLoanDetailPage() {
         </div>
 
         {canRecord && loan.status !== 'CLOSED' && (
-          <p className="mt-3 text-xs text-gray-400">Click an overdue or pending installment to record a payment.</p>
+          <p className="mt-3 text-xs text-gray-400">
+            Click an overdue or pending installment to record a payment.
+            {canClose && ' Click a paid installment to undo it.'}
+          </p>
         )}
       </div>
 
@@ -508,6 +528,35 @@ export default function DailyLoanDetailPage() {
           </div>
         </div>
       )}
+
+      {undoTarget && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+            <h3 className="text-base font-bold text-gray-900 mb-1">Undo Payment</h3>
+            <p className="text-sm text-gray-600">
+              This reverts the most recent payment on Day #{undoTarget.number} ({fmt(undoTarget.paid)} paid) back to its previous status.
+            </p>
+            {undoError && <p className="mt-3 text-xs text-red-600">{undoError}</p>}
+            <div className="mt-5 flex gap-3">
+              <button onClick={() => { setUndoTarget(null); setUndoError(''); }}
+                className="flex-1 px-4 py-2 border border-gray-300 text-gray-600 text-sm rounded-lg hover:bg-gray-50 transition-colors">
+                Cancel
+              </button>
+              <button onClick={handleUndo} disabled={undoing}
+                className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded-lg disabled:opacity-60 transition-colors">
+                {undoing ? 'Undoing…' : 'Undo Payment'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Back — repeated at the foot so it is reachable after scrolling the schedule */}
+      <div className="flex items-center justify-between">
+        <Link href={`/${subdomain}/daily-loans`} className="text-sm text-blue-600 hover:underline">
+          ← Back to Daily Loans
+        </Link>
+      </div>
     </div>
   );
 }

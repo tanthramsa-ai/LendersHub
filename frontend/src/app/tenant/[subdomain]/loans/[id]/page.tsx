@@ -166,11 +166,7 @@ export default function TermLoanDetailPage() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <Link href={`/${subdomain}/loans`} className="text-gray-400 hover:text-gray-600">
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-          </Link>
+          <Link href={`/${subdomain}/loans`} className="text-sm text-blue-600 hover:underline whitespace-nowrap">← All Loans</Link>
           <div>
             <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-xl font-bold text-gray-900 font-mono">{loan.loanNumber}</h1>
@@ -465,6 +461,13 @@ export default function TermLoanDetailPage() {
           onConfirm={handleReopen}
         />
       )}
+
+      {/* Back — repeated at the foot so it is reachable after scrolling the schedule */}
+      <div className="flex items-center justify-between">
+        <Link href={`/${subdomain}/loans`} className="text-sm text-blue-600 hover:underline">
+          ← Back to All Loans
+        </Link>
+      </div>
     </div>
   );
 }

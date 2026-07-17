@@ -544,6 +544,13 @@ export default function WeeklyLoanDetailPage() {
           </div>
         </div>
       )}
+
+      {/* Back — repeated at the foot so it is reachable after scrolling the schedule */}
+      <div className="flex items-center justify-between">
+        <Link href={`/${subdomain}/weekly-loans`} className="text-sm text-blue-600 hover:underline">
+          ← Back to Weekly Loans
+        </Link>
+      </div>
     </div>
   );
 }
