@@ -129,7 +129,7 @@ export default function CustomersPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50">
                   <tr>
-                    {['Code', 'Name', 'Phone', 'Locality', 'PAN', 'Credit Score', 'Branch', 'Status', 'Joined'].map((h) => (
+                    {['Code', 'Name', 'Phone', 'Locality', 'PAN', 'Active Loans', 'Closed Loans', 'Branch', 'Status', 'Joined'].map((h) => (
                       <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
                         {h}
                       </th>
@@ -151,15 +151,18 @@ export default function CustomersPage() {
                       <td className="px-4 py-3 text-gray-500 text-xs">{c.locality || '—'}</td>
                       <td className="px-4 py-3 text-gray-500 font-mono text-xs">{c.panNumber ?? '—'}</td>
                       <td className="px-4 py-3">
-                        {c.creditScore ? (
-                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                            c.creditScore >= 750 ? 'bg-green-100 text-green-700' :
-                            c.creditScore >= 650 ? 'bg-yellow-100 text-yellow-700' :
-                            'bg-red-100 text-red-700'
-                          }`}>
-                            {c.creditScore}
+                        {c.activeLoans > 0 ? (
+                          <span className="px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">
+                            {c.activeLoans}
                           </span>
-                        ) : '—'}
+                        ) : <span className="text-gray-400 text-xs">0</span>}
+                      </td>
+                      <td className="px-4 py-3">
+                        {c.closedLoans > 0 ? (
+                          <span className="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">
+                            {c.closedLoans}
+                          </span>
+                        ) : <span className="text-gray-400 text-xs">0</span>}
                       </td>
                       <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">
                         {c.branchName || '—'}

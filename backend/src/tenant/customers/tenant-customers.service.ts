@@ -104,7 +104,9 @@ export class TenantCustomersService {
           SELECT c.id, c.customer_code, c.first_name, c.last_name, c.email, c.phone,
                  c.pan_number, c.credit_score, c.city, c.state, c.locality, c.branch_id,
                  c.is_active, c.created_at,
-                 b.name AS branch_name
+                 b.name AS branch_name,
+                 (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status = 'DISBURSED') AS active_loans,
+                 (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status = 'CLOSED') AS closed_loans
           FROM customers c
           LEFT JOIN branches b ON b.id = c.branch_id
           ${whereClause}
@@ -129,6 +131,8 @@ export class TenantCustomersService {
           branchId: r.branch_id,
           branchName: r.branch_name,
           isActive: r.is_active,
+          activeLoans: parseInt(r.active_loans),
+          closedLoans: parseInt(r.closed_loans),
           createdAt: r.created_at,
         })),
         total: parseInt(countRes.rows[0].total),
@@ -145,6 +149,7 @@ export class TenantCustomersService {
           b.name AS branch_name, b.code AS branch_code,
           (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL) AS total_loans,
           (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status = 'DISBURSED') AS active_loans,
+          (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status = 'CLOSED') AS closed_loans,
           (SELECT COALESCE(SUM(amount), 0) FROM payments p JOIN loans l ON l.id = p.loan_id WHERE l.customer_id = c.id) AS total_paid
         FROM customers c
         LEFT JOIN branches b ON b.id = c.branch_id
@@ -169,6 +174,7 @@ export class TenantCustomersService {
         createdAt: r.created_at, updatedAt: r.updated_at,
         totalLoans: parseInt(r.total_loans),
         activeLoans: parseInt(r.active_loans),
+        closedLoans: parseInt(r.closed_loans),
         totalPaid: parseFloat(r.total_paid),
       };
     });
