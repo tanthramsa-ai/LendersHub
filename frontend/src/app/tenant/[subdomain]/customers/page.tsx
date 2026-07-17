@@ -132,7 +132,7 @@ export default function CustomersPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50">
                   <tr>
-                    {['Name', 'Phone', 'Locality', 'Active Loans', 'Closed Loans', 'Branch', 'Status'].map((h) => (
+                    {['Code', 'Name', 'Phone', 'Locality', 'Active Loans', 'Closed Loans', 'Branch', 'Status'].map((h) => (
                       <th key={h} scope="col" className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
                         {h}
                       </th>
@@ -152,6 +152,15 @@ export default function CustomersPage() {
                       className="hover:bg-gray-50 focus:bg-blue-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 transition-colors cursor-pointer"
                       title="Double-click, or press Enter, to open"
                     >
+                      <td className="px-4 py-3">
+                        <Link
+                          href={`/${subdomain}/customers/${c.id}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="text-blue-600 hover:underline font-mono text-xs"
+                        >
+                          {c.customerCode}
+                        </Link>
+                      </td>
                       <td className="px-4 py-3 font-bold text-gray-900 whitespace-nowrap">
                         {c.firstName} {c.lastName}
                       </td>
