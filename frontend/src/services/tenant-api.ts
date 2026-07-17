@@ -222,6 +222,8 @@ export interface Customer {
   branchId: string | null;
   branchName: string | null;
   isActive: boolean;
+  activeLoans: number;
+  closedLoans: number;
   createdAt: string;
 }
 
