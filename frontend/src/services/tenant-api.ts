@@ -408,6 +408,9 @@ export interface WeeklyInstallment {
   paidAt: string | null;
 }
 
+/** REDUCING/FLAT use interestRate (% p.a.); PER_1000_PER_DAY uses interestPerDay (₹ per ₹1,000 per day). */
+export type WeeklyCalculationType = 'REDUCING' | 'FLAT' | 'PER_1000_PER_DAY';
+
 export interface WeeklySchedulePreview {
   emi: number;
   weeklyRate: number;
@@ -416,6 +419,7 @@ export interface WeeklySchedulePreview {
   schedule: Array<{
     number: number; dueDate: string;
     principalAmount: number; interestAmount: number; totalAmount: number;
+    principalOutstanding: number;
   }>;
 }
 
@@ -433,7 +437,8 @@ export function getWeeklyLoans(page = 1, limit = 20, filters: {
 
 export function previewWeeklySchedule(dto: {
   principal: number; interestRate: number; termWeeks: number;
-  firstDueDate: string; calculationType: 'REDUCING' | 'FLAT'; emiRounding: number;
+  firstDueDate: string; calculationType: WeeklyCalculationType; emiRounding: number;
+  interestPerDay?: number;
 }) {
   return tenantFetch<WeeklySchedulePreview>('/api/v1/tenant/loans/weekly/preview', {
     method: 'POST', body: JSON.stringify(dto),
@@ -442,7 +447,8 @@ export function previewWeeklySchedule(dto: {
 
 export function createWeeklyLoan(dto: {
   customerId: string; principal: number; interestRate: number; termWeeks: number;
-  firstDueDate: string; calculationType: 'REDUCING' | 'FLAT'; emiRounding: number;
+  firstDueDate: string; calculationType: WeeklyCalculationType; emiRounding: number;
+  interestPerDay?: number;
   purpose?: string; branchId?: string; loanTypeId?: string;
   securityDocUrl?: string; promissoryNoteUrl?: string;
 }) {
@@ -451,10 +457,41 @@ export function createWeeklyLoan(dto: {
   );
 }
 
+export type ProjectedStatus = 'PAID' | 'PARTIAL' | 'MISSED' | 'DUE' | 'PROJECTED';
+
+export interface ProjectedRow {
+  number: number;
+  dueDate: string;
+  principalAmount: number;
+  interestAmount: number;
+  totalAmount: number;
+  principalOutstanding: number;
+  amountPaid: number;
+  status: ProjectedStatus;
+  /** Period came and went without covering what was due — render the row red. */
+  isMissed: boolean;
+}
+
+/**
+ * Live re-projection of a PER_1000_PER_DAY schedule against payments actually collected.
+ * Null for every other calculation type, whose term is fixed.
+ */
+export interface LoanProjection {
+  rows: ProjectedRow[];
+  emi: number;
+  totalInterest: number;
+  totalPayable: number;
+  /** Periods beyond the contracted term, caused by uncollected periods still accruing interest. */
+  extraPeriods: number;
+}
+
 export interface WeeklyLoanDetail extends WeeklyLoan {
   purpose?: string | null;
   cycleType: string;
   calculationType: string;
+  /** ₹ per ₹1,000 per day — set only when calculationType is PER_1000_PER_DAY. */
+  interestPerDay?: number | null;
+  projection?: LoanProjection | null;
   emiAmount: number | null;
   termWeeks: number;
   securityDocUrl?: string | null;
@@ -549,6 +586,7 @@ export interface DailySchedulePreview {
   schedule: Array<{
     number: number; dueDate: string;
     principalAmount: number; interestAmount: number; totalAmount: number;
+    principalOutstanding: number;
   }>;
 }
 
@@ -587,8 +625,9 @@ export function getDailyLoans(page = 1, limit = 20, filters: {
 
 export function previewDailySchedule(dto: {
   principal: number; interestRate: number; termDays: number;
-  firstDueDate: string; calculationType: 'REDUCING' | 'FLAT'; emiRounding: number;
+  firstDueDate: string; calculationType: WeeklyCalculationType; emiRounding: number;
   cycleType: 'DAILY_NO_SUNDAY' | 'DAILY_WITH_SUNDAY';
+  interestPerDay?: number;
 }) {
   return tenantFetch<DailySchedulePreview>('/api/v1/tenant/loans/daily/preview', {
     method: 'POST', body: JSON.stringify(dto),
@@ -597,8 +636,9 @@ export function previewDailySchedule(dto: {
 
 export function createDailyLoan(dto: {
   customerId: string; principal: number; interestRate: number; termDays: number;
-  firstDueDate: string; calculationType: 'REDUCING' | 'FLAT'; emiRounding: number;
+  firstDueDate: string; calculationType: WeeklyCalculationType; emiRounding: number;
   cycleType: 'DAILY_NO_SUNDAY' | 'DAILY_WITH_SUNDAY';
+  interestPerDay?: number;
   purpose?: string; branchId?: string; loanTypeId?: string;
   securityDocUrl?: string; promissoryNoteUrl?: string;
 }) {

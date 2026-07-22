@@ -6,7 +6,7 @@ import Link from 'next/link';
 import {
   getCustomers, createCustomer, updateCustomer, getCustomer, getBranches, getLoanTypes,
   previewWeeklySchedule, createWeeklyLoan,
-  Customer, TenantBranch, LoanType, WeeklySchedulePreview,
+  Customer, TenantBranch, LoanType, WeeklySchedulePreview, WeeklyCalculationType,
   getTenantSession, LOAN_CREATE_ROLES,
 } from '@/services/tenant-api';
 import {
@@ -57,9 +57,11 @@ export default function NewWeeklyLoanPage() {
   const [form, setForm] = useState({
     branchId: '', purpose: '',
     principal: '', interestRate: '', termWeeks: '',
-    firstDueDate: '', calculationType: 'REDUCING' as 'REDUCING' | 'FLAT',
+    firstDueDate: '', calculationType: 'REDUCING' as WeeklyCalculationType,
+    interestPerDay: '3.19',
     emiRounding: '10',
   });
+  const isPerDay = form.calculationType === 'PER_1000_PER_DAY';
   const [preview, setPreview] = useState<WeeklySchedulePreview | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [previewError, setPreviewError] = useState('');
@@ -73,12 +75,18 @@ export default function NewWeeklyLoanPage() {
   const [submitError, setSubmitError] = useState('');
 
   useEffect(() => {
-    getBranches().then((b) => setBranches(b.filter((br) => br.isActive)));
-    getLoanTypes().then((lt) => {
-      setLoanTypes(lt.filter((t) => t.isActive));
-      const weekly = lt.find((t) => t.name.toLowerCase() === 'weekly');
-      if (weekly) setWeeklyTypeId(weekly.id);
-    });
+    // Both lists are optional context — if the API is unreachable the form still works,
+    // so swallow the failure rather than leaving an unhandled rejection.
+    getBranches()
+      .then((b) => setBranches(b.filter((br) => br.isActive)))
+      .catch(() => setBranches([]));
+    getLoanTypes()
+      .then((lt) => {
+        setLoanTypes(lt.filter((t) => t.isActive));
+        const weekly = lt.find((t) => t.name.toLowerCase() === 'weekly');
+        if (weekly) setWeeklyTypeId(weekly.id);
+      })
+      .catch(() => setLoanTypes([]));
     // Default first due date to next Monday
     const nextMon = new Date();
     nextMon.setDate(nextMon.getDate() + ((8 - nextMon.getDay()) % 7 || 7));
@@ -162,8 +170,11 @@ export default function NewWeeklyLoanPage() {
   }
 
   async function handlePreview() {
-    if (!form.principal || !form.interestRate || !form.termWeeks || !form.firstDueDate) {
-      setPreviewError('Fill principal, interest rate, weeks and first due date');
+    const rateFilled = isPerDay ? form.interestPerDay : form.interestRate;
+    if (!form.principal || !rateFilled || !form.termWeeks || !form.firstDueDate) {
+      setPreviewError(isPerDay
+        ? 'Fill principal, interest per ₹1,000/day, weeks and first due date'
+        : 'Fill principal, interest rate, weeks and first due date');
       return;
     }
     setPreviewError('');
@@ -171,11 +182,12 @@ export default function NewWeeklyLoanPage() {
     try {
       const p = await previewWeeklySchedule({
         principal: parseFloat(form.principal),
-        interestRate: parseFloat(form.interestRate),
+        interestRate: isPerDay ? 0 : parseFloat(form.interestRate),
         termWeeks: parseInt(form.termWeeks),
         firstDueDate: form.firstDueDate,
         calculationType: form.calculationType,
         emiRounding: parseInt(form.emiRounding),
+        ...(isPerDay && { interestPerDay: parseFloat(form.interestPerDay) }),
       });
       setPreview(p);
     } catch (e) {
@@ -201,11 +213,12 @@ export default function NewWeeklyLoanPage() {
       const result = await createWeeklyLoan({
         customerId: selectedCustomer.id,
         principal: parseFloat(form.principal),
-        interestRate: parseFloat(form.interestRate),
+        interestRate: isPerDay ? 0 : parseFloat(form.interestRate),
         termWeeks: parseInt(form.termWeeks),
         firstDueDate: form.firstDueDate,
         calculationType: form.calculationType,
         emiRounding: parseInt(form.emiRounding),
+        ...(isPerDay && { interestPerDay: parseFloat(form.interestPerDay) }),
         ...(form.purpose && { purpose: form.purpose }),
         ...(form.branchId && { branchId: form.branchId }),
         ...(weeklyTypeId && { loanTypeId: weeklyTypeId }),
@@ -403,8 +416,20 @@ export default function NewWeeklyLoanPage() {
                 <input type="number" value={form.principal} onChange={(e) => setF('principal', e.target.value)} className={inputCls} placeholder="10000" min={1} />
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Interest Rate (% per annum) <span className="text-red-500">*</span></label>
-                <input type="number" step="0.01" value={form.interestRate} onChange={(e) => setF('interestRate', e.target.value)} className={inputCls} placeholder="24" min={0} max={200} />
+                {isPerDay ? (
+                  <>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Interest per ₹1,000 per day (₹) <span className="text-red-500">*</span></label>
+                    <input type="number" step="0.01" value={form.interestPerDay} onChange={(e) => setF('interestPerDay', e.target.value)} className={inputCls} placeholder="3.19" min={0.01} max={10} />
+                    <p className="text-xs text-gray-400 mt-1">
+                      ≈ {(parseFloat(form.interestPerDay || '0') * 36.4).toFixed(2)}% p.a. flat
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Interest Rate (% per annum) <span className="text-red-500">*</span></label>
+                    <input type="number" step="0.01" value={form.interestRate} onChange={(e) => setF('interestRate', e.target.value)} className={inputCls} placeholder="24" min={0} max={200} />
+                  </>
+                )}
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Tenure (weeks) <span className="text-red-500">*</span></label>
@@ -419,16 +444,18 @@ export default function NewWeeklyLoanPage() {
                 <select value={form.calculationType} onChange={(e) => setF('calculationType', e.target.value)} className={inputCls}>
                   <option value="REDUCING">Reducing Balance</option>
                   <option value="FLAT">Flat Rate</option>
+                  <option value="PER_1000_PER_DAY">₹ per ₹1,000 per day</option>
                 </select>
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">EMI Rounding</label>
-                <select value={form.emiRounding} onChange={(e) => setF('emiRounding', e.target.value)} className={inputCls}>
+                <select value={form.emiRounding} onChange={(e) => setF('emiRounding', e.target.value)} className={`${inputCls} disabled:bg-gray-50 disabled:text-gray-400`} disabled={isPerDay}>
                   <option value="0">No rounding</option>
                   <option value="10">Round to nearest ₹10</option>
                   <option value="50">Round to nearest ₹50</option>
                   <option value="100">Round to nearest ₹100</option>
                 </select>
+                {isPerDay && <p className="text-xs text-gray-400 mt-1">EMI is rounded to the nearest ₹1 for this type</p>}
               </div>
               {branches.length > 0 && (
                 <div>
@@ -480,7 +507,7 @@ export default function NewWeeklyLoanPage() {
                     <table className="w-full text-xs">
                       <thead className="bg-gray-50 sticky top-0">
                         <tr>
-                          {['#', 'Due Date', 'Principal', 'Interest', 'EMI'].map((h) => (
+                          {['#', 'Due Date', 'Principal', 'Interest', 'EMI', 'Outstanding'].map((h) => (
                             <th key={h} className="px-3 py-2 text-left font-semibold text-gray-500">{h}</th>
                           ))}
                         </tr>
@@ -493,6 +520,7 @@ export default function NewWeeklyLoanPage() {
                             <td className="px-3 py-1.5 text-gray-700">{fmt(s.principalAmount)}</td>
                             <td className="px-3 py-1.5 text-gray-500">{fmt(s.interestAmount)}</td>
                             <td className="px-3 py-1.5 font-medium text-gray-900">{fmt(s.totalAmount)}</td>
+                            <td className="px-3 py-1.5 text-gray-500">{fmt(s.principalOutstanding)}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -528,7 +556,12 @@ export default function NewWeeklyLoanPage() {
                 { label: 'Principal', value: fmt(parseFloat(form.principal || '0')) },
                 { label: 'Weekly EMI', value: preview ? fmt(preview.emi) : '—' },
                 { label: 'Tenure', value: `${form.termWeeks} weeks` },
-                { label: 'Interest Rate', value: `${form.interestRate}% p.a. (${form.calculationType})` },
+                {
+                  label: 'Interest Rate',
+                  value: isPerDay
+                    ? `₹${form.interestPerDay} per ₹1,000/day (${(parseFloat(form.interestPerDay || '0') * 36.4).toFixed(2)}% p.a. flat)`
+                    : `${form.interestRate}% p.a. (${form.calculationType})`,
+                },
                 { label: 'Total Payable', value: preview ? fmt(preview.totalPayable) : '—' },
                 { label: 'First Installment', value: fmtDate(form.firstDueDate) },
                 { label: 'Branch', value: branches.find((b) => b.id === form.branchId)?.name || 'Not specified' },

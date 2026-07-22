@@ -38,7 +38,7 @@ export class TenantLoansController {
   @Post('weekly/preview')
   previewWeekly(
     @Request() _req: { user: TenantJwtPayload },
-    @Body() dto: Pick<CreateWeeklyLoanDto, 'principal' | 'interestRate' | 'termWeeks' | 'firstDueDate' | 'calculationType' | 'emiRounding'>,
+    @Body() dto: Pick<CreateWeeklyLoanDto, 'principal' | 'interestRate' | 'termWeeks' | 'firstDueDate' | 'calculationType' | 'emiRounding' | 'interestPerDay'>,
   ) {
     return this.svc.previewWeeklySchedule(dto);
   }
@@ -64,7 +64,7 @@ export class TenantLoansController {
   @Post('daily/preview')
   previewDaily(
     @Request() _req: { user: TenantJwtPayload },
-    @Body() dto: Pick<CreateDailyLoanDto, 'principal' | 'interestRate' | 'termDays' | 'firstDueDate' | 'calculationType' | 'emiRounding' | 'cycleType'>,
+    @Body() dto: Pick<CreateDailyLoanDto, 'principal' | 'interestRate' | 'termDays' | 'firstDueDate' | 'calculationType' | 'emiRounding' | 'cycleType' | 'interestPerDay'>,
   ) {
     return this.svc.previewDailySchedule(dto);
   }

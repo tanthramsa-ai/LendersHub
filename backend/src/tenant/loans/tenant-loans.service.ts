@@ -16,14 +16,17 @@ export interface CreateLoanDto {
   branchId?: string;
 }
 
+export type WeeklyCalculationType = 'REDUCING' | 'FLAT' | 'PER_1000_PER_DAY';
+
 export interface CreateWeeklyLoanDto {
   customerId: string;
   principal: number;
-  interestRate: number;      // % per annum
+  interestRate: number;      // % per annum — ignored when calculationType = PER_1000_PER_DAY
   termWeeks: number;         // number of weekly installments
   firstDueDate: string;      // YYYY-MM-DD
-  calculationType: 'REDUCING' | 'FLAT';
-  emiRounding: 0 | 10 | 50 | 100;  // round EMI up to nearest X
+  calculationType: WeeklyCalculationType;
+  interestPerDay?: number;   // ₹ per ₹1,000 per day — required for PER_1000_PER_DAY
+  emiRounding: 0 | 10 | 50 | 100;  // round EMI up to nearest X (unused for PER_1000_PER_DAY)
   purpose?: string;
   branchId?: string;
   loanTypeId?: string;
@@ -42,11 +45,12 @@ export interface RecordPaymentDto {
 export interface CreateDailyLoanDto {
   customerId: string;
   principal: number;
-  interestRate: number;      // % per annum
+  interestRate: number;      // % per annum — ignored when calculationType = PER_1000_PER_DAY
   termDays: number;          // number of daily installments
   firstDueDate: string;      // YYYY-MM-DD
   cycleType: 'DAILY_NO_SUNDAY' | 'DAILY_WITH_SUNDAY';
-  calculationType: 'REDUCING' | 'FLAT';
+  calculationType: WeeklyCalculationType;
+  interestPerDay?: number;   // ₹ per ₹1,000 per day — required for PER_1000_PER_DAY
   emiRounding: 0 | 10 | 50 | 100;
   purpose?: string;
   branchId?: string;
@@ -101,17 +105,84 @@ function roundUp(amount: number, nearest: number): number {
   return Math.ceil(amount / nearest) * nearest;
 }
 
+function round2(amount: number): number {
+  return Math.round(amount * 100) / 100;
+}
+
+/**
+ * Calendar date as YYYY-MM-DD. node-pg hands back DATE columns as a Date at *local*
+ * midnight, so toISOString() would roll back a day west of UTC — read the local parts.
+ */
+function toYmd(value: unknown): string {
+  if (value instanceof Date) {
+    const m = String(value.getMonth() + 1).padStart(2, '0');
+    const d = String(value.getDate()).padStart(2, '0');
+    return `${value.getFullYear()}-${m}-${d}`;
+  }
+  return String(value ?? '').slice(0, 10);
+}
+
+const DAYS_PER_WEEK = 7;
+const WEEKS_PER_YEAR = 52;
+
+/**
+ * Equivalent flat % p.a. for a "₹ X per ₹1,000 per day" rate: X / 1000 * 7 * 52 * 100 = X * 36.4.
+ * Stored in loans.interest_rate so lists and reports that render a percentage stay meaningful.
+ * Note the 7 * 52 = 364-day basis — using 365 would not reproduce the weekly figures, because
+ * computeWeeklySchedule divides the annual rate by 52.
+ */
+export function perDayRateToAnnualPct(interestPerDay: number): number {
+  return Math.round(interestPerDay * DAYS_PER_WEEK * WEEKS_PER_YEAR * 0.1 * 10000) / 10000;
+}
+
+/** Whichever rate field the calculation type actually uses must be present and in range. */
+function assertWeeklyRateInput(
+  calculationType: WeeklyCalculationType,
+  interestRate: number,
+  interestPerDay?: number,
+): void {
+  if (!['FLAT', 'REDUCING', 'PER_1000_PER_DAY'].includes(calculationType)) {
+    throw new BadRequestException('calculationType must be FLAT, REDUCING or PER_1000_PER_DAY');
+  }
+  if (calculationType === 'PER_1000_PER_DAY') {
+    if (typeof interestPerDay !== 'number' || !Number.isFinite(interestPerDay) || interestPerDay <= 0 || interestPerDay > 10) {
+      throw new BadRequestException('interestPerDay must be between 0 and 10 (₹ per ₹1,000 per day)');
+    }
+  } else if (interestRate < 0 || interestRate > 200) {
+    throw new BadRequestException('Invalid interest rate');
+  }
+}
+
 export function computeDailySchedule(
   principal: number,
   annualRate: number,
   termDays: number,
   firstDueDateStr: string,
-  calculationType: 'REDUCING' | 'FLAT',
+  calculationType: WeeklyCalculationType,
   emiRounding: number,
   cycleType: 'DAILY_NO_SUNDAY' | 'DAILY_WITH_SUNDAY',
+  interestPerDay?: number,
 ) {
-  const dailyRate = annualRate / 100 / 365;
   const skipSundays = cycleType === 'DAILY_NO_SUNDAY';
+
+  if (calculationType === 'PER_1000_PER_DAY') {
+    // Interest is charged per installment-day, so a Sunday-skipping cycle stretches the
+    // calendar span without adding interest — termDays collections, termDays of interest.
+    const [fy, fm, fd] = firstDueDateStr.split('-').map(Number);
+    const first = new Date(Date.UTC(fy, fm - 1, fd));
+    if (skipSundays) { while (first.getUTCDay() === 0) first.setUTCDate(first.getUTCDate() + 1); }
+
+    const { schedule, emi, periodRate } = computePer1000Schedule(
+      principal, interestPerDay ?? 0, termDays, 1, first.toISOString().slice(0, 10),
+      (c) => {
+        c.setUTCDate(c.getUTCDate() + 1);
+        if (skipSundays) { while (c.getUTCDay() === 0) c.setUTCDate(c.getUTCDate() + 1); }
+      },
+    );
+    return { schedule, emi, dailyRate: periodRate };
+  }
+
+  const dailyRate = annualRate / 100 / 365;
 
   let emi: number;
   if (calculationType === 'FLAT' || dailyRate === 0) {
@@ -125,7 +196,7 @@ export function computeDailySchedule(
   }
   if (emiRounding > 0) emi = Math.ceil(emi / emiRounding) * emiRounding;
 
-  const schedule: Array<{ number: number; dueDate: string; principalAmount: number; interestAmount: number; totalAmount: number }> = [];
+  const schedule: WeeklyScheduleRow[] = [];
   let balance = principal;
 
   // Parse first due date using UTC to avoid timezone shifts
@@ -160,6 +231,7 @@ export function computeDailySchedule(
       principalAmount,
       interestAmount,
       totalAmount: Math.round((principalAmount + interestAmount) * 100) / 100,
+      principalOutstanding: balance,
     });
 
     // Advance to next collection day
@@ -172,14 +244,245 @@ export function computeDailySchedule(
   return { schedule, emi, dailyRate };
 }
 
+export interface WeeklyScheduleRow {
+  number: number; dueDate: string;
+  principalAmount: number; interestAmount: number; totalAmount: number;
+  principalOutstanding: number;
+}
+
+/**
+ * Shared engine for the "₹ X per ₹1,000 per day" flat product (e.g. ₹3.19/₹1,000/day).
+ * Weekly passes daysPerPeriod = 7, daily passes 1 — the only difference between them.
+ *
+ *   interest/period = principal / 1000 * interestPerDay * daysPerPeriod  — flat, on the
+ *                     original principal (never on the reducing balance)
+ *   emi             = ROUND((principal + interest/period * periods) / periods)  — whole rupees
+ *   principal/period = ROUND(principal / periods, 2)
+ *   interest/period shown = emi - principal/period  — derived, so the columns always add up
+ *
+ * The final installment is a plug: it absorbs both the ROUND drift on the EMI and any remainder
+ * from principal / periods, so outstanding lands exactly on 0 and the borrower pays exactly
+ * principal + total interest. Periods 1..n-1 are the constant EMI.
+ */
+function computePer1000Schedule(
+  principal: number,
+  interestPerDay: number,
+  periods: number,
+  daysPerPeriod: number,
+  firstDueDateStr: string,
+  advance: (cursor: Date) => void,
+) {
+  const periodRate = (interestPerDay * daysPerPeriod) / 1000;
+  const totalInterest = round2(principal * periodRate * periods);
+
+  const emi = Math.round((principal + totalInterest) / periods);
+  const principalPerPeriod = round2(principal / periods);
+  const interestPerPeriod = round2(emi - principalPerPeriod);
+
+  const schedule: WeeklyScheduleRow[] = [];
+  let principalCharged = 0;
+  let interestCharged = 0;
+
+  // Parse as UTC so the emitted dates never shift under a negative-offset timezone.
+  const [yr, mo, dy] = firstDueDateStr.split('-').map(Number);
+  const cursor = new Date(Date.UTC(yr, mo - 1, dy));
+
+  for (let i = 1; i <= periods; i++) {
+    const isLast = i === periods;
+    const principalAmount = isLast ? round2(principal - principalCharged) : principalPerPeriod;
+    const interestAmount = isLast ? round2(totalInterest - interestCharged) : interestPerPeriod;
+    principalCharged = round2(principalCharged + principalAmount);
+    interestCharged = round2(interestCharged + interestAmount);
+
+    schedule.push({
+      number: i,
+      dueDate: cursor.toISOString().slice(0, 10),
+      principalAmount,
+      interestAmount,
+      totalAmount: round2(principalAmount + interestAmount),
+      principalOutstanding: round2(principal - principalCharged),
+    });
+
+    advance(cursor);
+  }
+
+  // With a single installment there is no "periods 1..n-1" run — the one row is the whole loan.
+  return { schedule, emi: periods === 1 ? schedule[0].totalAmount : emi, periodRate };
+}
+
+export type ProjectedStatus = 'PAID' | 'PARTIAL' | 'MISSED' | 'DUE' | 'PROJECTED';
+
+export interface ProjectedRow extends WeeklyScheduleRow {
+  amountPaid: number;
+  status: ProjectedStatus;
+  /** True when the period came and went without covering what was due — render this row red. */
+  isMissed: boolean;
+}
+
+/**
+ * Live projection of a PER_1000_PER_DAY schedule against payments actually collected.
+ *
+ * The contract stored in `installments` never changes. This recomputes what the grid looks
+ * like *now*: interest keeps accruing at the same flat per-period charge for as long as any
+ * principal is outstanding, so uncollected periods push the payoff date out.
+ *
+ * No installment ever exceeds the EMI — the borrower keeps paying the same amount and the
+ * schedule simply runs longer. Note this means a missed period costs slightly MORE than one
+ * extra period: the added period accrues its own interest, which at an EMI-capped rate takes
+ * roughly two extra collections to absorb rather than one.
+ *
+ * Payment application order is interest-then-principal, which makes a full on-time EMI
+ * reproduce the contract grid exactly (interest = EMI - principal/period, by construction).
+ * Only the very last row falls below the EMI, as a remainder.
+ */
+export function projectPer1000Schedule(opts: {
+  principal: number;
+  interestPerDay: number;
+  periods: number;
+  daysPerPeriod: number;
+  firstDueDate: string;
+  /** Amount collected against period i (0-based). Missing/short entries count as a shortfall. */
+  collected: number[];
+  /** YYYY-MM-DD; periods due on or before this date are actuals, later ones are projections. */
+  today: string;
+  skipSundays?: boolean;
+  maxPeriods?: number;
+}): { rows: ProjectedRow[]; emi: number; totalInterest: number; totalPayable: number; extraPeriods: number } {
+  const { principal, interestPerDay, periods, daysPerPeriod, firstDueDate, collected, today } = opts;
+  const cap = opts.maxPeriods ?? periods * 10 + 100;
+
+  const contractInterest = round2(principal * ((interestPerDay * daysPerPeriod) / 1000) * periods);
+  const emi = periods === 1
+    ? round2(principal + contractInterest)
+    : Math.round((principal + contractInterest) / periods);
+  const principalPerPeriod = round2(principal / periods);
+  // The per-period interest the borrower is actually charged, derived from the rounded EMI so
+  // the columns add up. Matches the contract grid's constant interest cell.
+  const interestPerPeriod = periods === 1 ? round2(emi - principal) : round2(emi - principalPerPeriod);
+
+  const [yr, mo, dy] = firstDueDate.split('-').map(Number);
+  const cursor = new Date(Date.UTC(yr, mo - 1, dy));
+  if (opts.skipSundays) { while (cursor.getUTCDay() === 0) cursor.setUTCDate(cursor.getUTCDate() + 1); }
+
+  const rows: ProjectedRow[] = [];
+  let principalRemaining = principal;
+  let unpaidInterest = 0;
+  let interestCharged = 0;
+
+  for (let i = 1; i <= cap; i++) {
+    if (principalRemaining <= 0.005 && unpaidInterest <= 0.005) break;
+
+    // Interest accrues for this period because principal is still outstanding.
+    unpaidInterest = round2(unpaidInterest + interestPerPeriod);
+    interestCharged = round2(interestCharged + interestPerPeriod);
+
+    const outstandingTotal = round2(principalRemaining + unpaidInterest);
+    // Never more than the EMI — arrears roll into additional periods instead of a balloon.
+    const due = Math.min(emi, outstandingTotal);
+    const dueDate = cursor.toISOString().slice(0, 10);
+    const isPast = dueDate <= today;
+    const paid = isPast ? round2(Math.min(collected[i - 1] ?? 0, outstandingTotal)) : due;
+
+    // Today's collection round may still complete, so the balance is carried forward as if it
+    // does. Otherwise a loan would appear to extend mid-morning, before anyone is actually
+    // late — and it would do so with no red row on screen to account for the extra periods.
+    const openToday = dueDate === today && paid < due - 0.005;
+    const applied = openToday ? due : paid;
+
+    // Interest first, remainder to principal.
+    const toInterest = round2(Math.min(applied, unpaidInterest));
+    const toPrincipal = round2(applied - toInterest);
+    unpaidInterest = round2(unpaidInterest - toInterest);
+    principalRemaining = round2(principalRemaining - toPrincipal);
+
+    // The split shown on the row describes what was *due*, not what arrived.
+    const dueInterest = round2(Math.min(due, round2(unpaidInterest + toInterest)));
+    // A period still open today is never judged short — the collector may yet call round.
+    const settled = paid >= due - 0.005;
+    const status: ProjectedStatus =
+      !isPast ? 'PROJECTED'
+      : settled ? 'PAID'
+      : dueDate === today ? 'DUE'
+      : paid > 0.005 ? 'PARTIAL'
+      : 'MISSED';
+
+    const isMissed = status === 'MISSED' || status === 'PARTIAL';
+
+    rows.push({
+      number: i,
+      dueDate,
+      principalAmount: round2(due - dueInterest),
+      interestAmount: dueInterest,
+      totalAmount: due,
+      principalOutstanding: Math.max(0, principalRemaining),
+      amountPaid: paid,
+      status,
+      isMissed,
+    });
+
+    cursor.setUTCDate(cursor.getUTCDate() + daysPerPeriod);
+    if (opts.skipSundays) { while (cursor.getUTCDay() === 0) cursor.setUTCDate(cursor.getUTCDate() + 1); }
+  }
+
+  return {
+    rows,
+    emi,
+    totalInterest: interestCharged,
+    totalPayable: round2(principal + interestCharged),
+    extraPeriods: Math.max(0, rows.length - periods),
+  };
+}
+
+/**
+ * Projection for a loan row + its stored installments, or null when the loan isn't on the
+ * per-₹1,000 product (the other calculation types have a fixed term that never extends).
+ */
+export function buildPer1000Projection(
+  loan: Record<string, any>,
+  installments: Array<Record<string, any>>,
+) {
+  if (loan.calculation_type !== 'PER_1000_PER_DAY' || !loan.interest_per_1000_per_day) return null;
+
+  const isDaily = loan.cycle_type === 'DAILY_NO_SUNDAY' || loan.cycle_type === 'DAILY_WITH_SUNDAY';
+  const periods = Number(loan.term_months);
+  if (!periods || periods < 1) return null;
+
+  // paid_amount indexed by installment_number; gaps stay 0 so an uncollected period reads as a miss.
+  const collected: number[] = new Array(installments.length).fill(0);
+  for (const inst of installments) {
+    const idx = Number(inst.installment_number) - 1;
+    if (idx >= 0) collected[idx] = parseFloat(inst.paid_amount ?? 0) || 0;
+  }
+
+  return projectPer1000Schedule({
+    principal: parseFloat(loan.principal),
+    interestPerDay: parseFloat(loan.interest_per_1000_per_day),
+    periods,
+    daysPerPeriod: isDaily ? 1 : DAYS_PER_WEEK,
+    firstDueDate: toYmd(loan.first_due_date),
+    collected,
+    today: toYmd(new Date()),
+    skipSundays: loan.cycle_type === 'DAILY_NO_SUNDAY',
+  });
+}
+
 export function computeWeeklySchedule(
   principal: number,
   annualRate: number,
   termWeeks: number,
   firstDueDateStr: string,
-  calculationType: 'REDUCING' | 'FLAT',
+  calculationType: WeeklyCalculationType,
   emiRounding: number,
+  interestPerDay?: number,
 ) {
+  if (calculationType === 'PER_1000_PER_DAY') {
+    const { schedule, emi, periodRate } = computePer1000Schedule(
+      principal, interestPerDay ?? 0, termWeeks, DAYS_PER_WEEK, firstDueDateStr,
+      (c) => c.setUTCDate(c.getUTCDate() + DAYS_PER_WEEK),
+    );
+    return { schedule, emi, weeklyRate: periodRate };
+  }
+
   const weeklyRate = annualRate / 100 / 52;
   let emi: number;
 
@@ -194,10 +497,7 @@ export function computeWeeklySchedule(
   const roundedEmi = roundUp(emi, emiRounding);
 
   let balance = principal;
-  const schedule: Array<{
-    number: number; dueDate: string;
-    principalAmount: number; interestAmount: number; totalAmount: number;
-  }> = [];
+  const schedule: WeeklyScheduleRow[] = [];
 
   for (let i = 1; i <= termWeeks; i++) {
     let interest: number;
@@ -236,6 +536,7 @@ export function computeWeeklySchedule(
       principalAmount: principalAmt,
       interestAmount: interest,
       totalAmount: total,
+      principalOutstanding: i === termWeeks ? 0 : balance,
     });
   }
 
@@ -399,6 +700,7 @@ export class TenantLoansService {
     await client.query(`ALTER TABLE loan_types ALTER COLUMN max_interest_rate TYPE NUMERIC(7,4)`).catch(() => undefined);
     await client.query(`ALTER TABLE loans ADD COLUMN IF NOT EXISTS close_comment TEXT`).catch(() => undefined);
     await client.query(`ALTER TABLE loans ADD COLUMN IF NOT EXISTS reopen_comment TEXT`).catch(() => undefined);
+    await client.query(`ALTER TABLE loans ADD COLUMN IF NOT EXISTS interest_per_1000_per_day NUMERIC(6,2)`).catch(() => undefined);
     this.widenedInterestSchemas.add(schemaName);
   }
 
@@ -503,6 +805,7 @@ export class TenantLoansService {
         status: l.status, purpose: l.purpose,
         cycleType: l.cycle_type,
         calculationType: l.calculation_type,
+        interestPerDay: l.interest_per_1000_per_day ? parseFloat(l.interest_per_1000_per_day) : null,
         emiAmount: l.emi_amount ? parseFloat(l.emi_amount) : null,
         securityDocUrl: l.security_doc_url ?? null,
         promissoryNoteUrl: l.promissory_note_url ?? null,
@@ -514,6 +817,7 @@ export class TenantLoansService {
         closeComment: l.close_comment ?? null,
         reopenComment: l.reopen_comment ?? null,
         createdAt: l.created_at, updatedAt: l.updated_at,
+        projection: buildPer1000Projection(l, installmentsRes.rows),
         installments: installmentsRes.rows.map((i) => ({
           id: i.id, number: i.installment_number, dueDate: i.due_date,
           principal: parseFloat(i.principal_amount), interest: parseFloat(i.interest_amount),
@@ -849,10 +1153,11 @@ export class TenantLoansService {
     });
   }
 
-  previewWeeklySchedule(dto: Pick<CreateWeeklyLoanDto, 'principal' | 'interestRate' | 'termWeeks' | 'firstDueDate' | 'calculationType' | 'emiRounding'>) {
+  previewWeeklySchedule(dto: Pick<CreateWeeklyLoanDto, 'principal' | 'interestRate' | 'termWeeks' | 'firstDueDate' | 'calculationType' | 'emiRounding' | 'interestPerDay'>) {
+    assertWeeklyRateInput(dto.calculationType, dto.interestRate, dto.interestPerDay);
     const { schedule, emi, weeklyRate } = computeWeeklySchedule(
       dto.principal, dto.interestRate, dto.termWeeks,
-      dto.firstDueDate, dto.calculationType, dto.emiRounding,
+      dto.firstDueDate, dto.calculationType, dto.emiRounding, dto.interestPerDay,
     );
     const totalInterest = schedule.reduce((s, i) => s + i.interestAmount, 0);
     const totalPayable = schedule.reduce((s, i) => s + i.totalAmount, 0);
@@ -952,11 +1257,15 @@ export class TenantLoansService {
   async createWeeklyLoan(user: TenantJwtPayload, dto: CreateWeeklyLoanDto) {
     if (!['ADMIN', 'LOAN_OFFICER'].includes(user.role)) throw new ForbiddenException('Only Admins and Loan Officers can create loans');
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
-    if (dto.interestRate < 0 || dto.interestRate > 200) throw new BadRequestException('Invalid interest rate');
     if (dto.termWeeks < 1 || dto.termWeeks > 99) throw new BadRequestException('Term must be 1–99 weeks');
     if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
-    if (!['FLAT', 'REDUCING'].includes(dto.calculationType)) throw new BadRequestException('calculationType must be FLAT or REDUCING');
+    assertWeeklyRateInput(dto.calculationType, dto.interestRate, dto.interestPerDay);
     assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
+
+    const isPerDay = dto.calculationType === 'PER_1000_PER_DAY';
+    // interest_rate always holds a % p.a. so generic loan lists/reports stay meaningful;
+    // the ₹/₹1,000/day figure the user actually typed is kept alongside it.
+    const storedRate = isPerDay ? perDayRateToAnnualPct(dto.interestPerDay!) : dto.interestRate;
 
     return this.withSchema(user.schemaName, async (client) => {
       const custRes = await client.query(`SELECT id, first_name, last_name FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
@@ -968,7 +1277,7 @@ export class TenantLoansService {
 
       const { schedule, emi } = computeWeeklySchedule(
         dto.principal, dto.interestRate, dto.termWeeks,
-        dto.firstDueDate, dto.calculationType, dto.emiRounding,
+        dto.firstDueDate, dto.calculationType, dto.emiRounding, dto.interestPerDay,
       );
 
       const loanRes = await client.query(`
@@ -976,14 +1285,15 @@ export class TenantLoansService {
           loan_number, customer_id, loan_officer_id, branch_id, loan_type_id,
           principal, interest_rate, term_months, status, purpose,
           first_due_date, cycle_type, calculation_type, emi_amount,
-          security_doc_url, promissory_note_url
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'DISBURSED',$9,$10,'WEEKLY',$11,$12,$13,$14)
+          security_doc_url, promissory_note_url, interest_per_1000_per_day
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'DISBURSED',$9,$10,'WEEKLY',$11,$12,$13,$14,$15)
         RETURNING *
       `, [
         loanNumber, dto.customerId, user.sub, dto.branchId ?? null, dto.loanTypeId ?? null,
-        dto.principal, dto.interestRate, dto.termWeeks, dto.purpose ?? null,
+        dto.principal, storedRate, dto.termWeeks, dto.purpose ?? null,
         dto.firstDueDate, dto.calculationType, emi,
         dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null,
+        isPerDay ? dto.interestPerDay : null,
       ]);
 
       const loan = loanRes.rows[0];
@@ -1028,10 +1338,11 @@ export class TenantLoansService {
 
   // ── DAILY LOANS ──────────────────────────────────────────────────────────────
 
-  previewDailySchedule(dto: Pick<CreateDailyLoanDto, 'principal' | 'interestRate' | 'termDays' | 'firstDueDate' | 'calculationType' | 'emiRounding' | 'cycleType'>) {
+  previewDailySchedule(dto: Pick<CreateDailyLoanDto, 'principal' | 'interestRate' | 'termDays' | 'firstDueDate' | 'calculationType' | 'emiRounding' | 'cycleType' | 'interestPerDay'>) {
+    assertWeeklyRateInput(dto.calculationType, dto.interestRate, dto.interestPerDay);
     const { schedule, emi, dailyRate } = computeDailySchedule(
       dto.principal, dto.interestRate, dto.termDays,
-      dto.firstDueDate, dto.calculationType, dto.emiRounding, dto.cycleType,
+      dto.firstDueDate, dto.calculationType, dto.emiRounding, dto.cycleType, dto.interestPerDay,
     );
     const totalInterest = schedule.reduce((s, i) => s + i.interestAmount, 0);
     const totalPayable = schedule.reduce((s, i) => s + i.totalAmount, 0);
@@ -1131,12 +1442,16 @@ export class TenantLoansService {
   async createDailyLoan(user: TenantJwtPayload, dto: CreateDailyLoanDto) {
     if (!['ADMIN', 'LOAN_OFFICER'].includes(user.role)) throw new ForbiddenException('Only Admins and Loan Officers can create loans');
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
-    if (dto.interestRate < 0 || dto.interestRate > 200) throw new BadRequestException('Invalid interest rate');
     if (dto.termDays < 1 || dto.termDays > 3650) throw new BadRequestException('Term must be 1–3650 days');
     if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
-    if (!['FLAT', 'REDUCING'].includes(dto.calculationType)) throw new BadRequestException('calculationType must be FLAT or REDUCING');
+    assertWeeklyRateInput(dto.calculationType, dto.interestRate, dto.interestPerDay);
     if (!['DAILY_NO_SUNDAY', 'DAILY_WITH_SUNDAY'].includes(dto.cycleType)) throw new BadRequestException('cycleType must be DAILY_NO_SUNDAY or DAILY_WITH_SUNDAY');
     assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
+
+    const isPerDay = dto.calculationType === 'PER_1000_PER_DAY';
+    // interest_rate always holds a % p.a.; for the per-₹1,000 product the daily basis is
+    // 365 days, unlike weekly's 7 × 52 = 364 (computeDailySchedule divides by 365).
+    const storedRate = isPerDay ? Math.round(dto.interestPerDay! * 36.5 * 10000) / 10000 : dto.interestRate;
 
     return this.withSchema(user.schemaName, async (client) => {
       const custRes = await client.query(`SELECT id, first_name, last_name FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
@@ -1148,7 +1463,7 @@ export class TenantLoansService {
 
       const { schedule, emi } = computeDailySchedule(
         dto.principal, dto.interestRate, dto.termDays,
-        dto.firstDueDate, dto.calculationType, dto.emiRounding, dto.cycleType,
+        dto.firstDueDate, dto.calculationType, dto.emiRounding, dto.cycleType, dto.interestPerDay,
       );
 
       const loanRes = await client.query(`
@@ -1156,14 +1471,15 @@ export class TenantLoansService {
           loan_number, customer_id, loan_officer_id, branch_id, loan_type_id,
           principal, interest_rate, term_months, status, purpose,
           first_due_date, cycle_type, calculation_type, emi_amount,
-          security_doc_url, promissory_note_url
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'DISBURSED',$9,$10,$11,$12,$13,$14,$15)
+          security_doc_url, promissory_note_url, interest_per_1000_per_day
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'DISBURSED',$9,$10,$11,$12,$13,$14,$15,$16)
         RETURNING *
       `, [
         loanNumber, dto.customerId, user.sub, dto.branchId ?? null, dto.loanTypeId ?? null,
-        dto.principal, dto.interestRate, dto.termDays, dto.purpose ?? null,
+        dto.principal, storedRate, dto.termDays, dto.purpose ?? null,
         dto.firstDueDate, dto.cycleType, dto.calculationType, emi,
         dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null,
+        isPerDay ? dto.interestPerDay : null,
       ]);
 
       const loan = loanRes.rows[0];
