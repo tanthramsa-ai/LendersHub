@@ -237,7 +237,8 @@ One row per loan. Supports multiple repayment cycle types.
 | `term_months` | SMALLINT | NOT NULL | — | Tenure (weeks for weekly loans) |
 | `emi_amount` | NUMERIC(14,2) | ✓ | — | Calculated EMI / weekly / daily instalment |
 | `cycle_type` | TEXT | NOT NULL | `MONTHLY` | `WEEKLY`, `DAILY`, `MONTHLY`, `AGENT_RISK`, `TERM_LOAN` |
-| `calculation_type` | TEXT | NOT NULL | `REDUCING` | `REDUCING` or `FLAT` |
+| `calculation_type` | TEXT | NOT NULL | `REDUCING` | `REDUCING`, `FLAT`, or `PER_1000_PER_DAY` (weekly only) |
+| `interest_per_1000_per_day` | NUMERIC(6,2) | ✓ | — | ₹ per ₹1,000 per day; set only for `PER_1000_PER_DAY`. `interest_rate` then holds the equivalent flat % p.a. (rate × 36.4) |
 | `status` | `loan_status` | NOT NULL | `PENDING` | Lifecycle state |
 | `purpose` | TEXT | ✓ | — | Loan purpose |
 | `first_due_date` | DATE | ✓ | — | Date of first instalment |

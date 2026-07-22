@@ -27,6 +27,10 @@ const SUBROUTE_PERMISSIONS: { suffix: string; roles: UserRole[] }[] = [
 const BRAND = '#0F4C81';
 const BRAND_DARK = '#0a3660';
 
+// Sidebar collapse is desktop-only and sticky across sessions; on mobile the sidebar is a
+// drawer, so the rail is applied via `lg:` variants rather than by dropping the labels outright.
+const NAV_COLLAPSED_KEY = 'tenant_nav_collapsed';
+
 type NavItem = { href: string; label: string; icon: React.ReactNode; roles: UserRole[] };
 
 // Loan-cadence variants are collapsed into a single "Loans" sidebar group so the
@@ -170,6 +174,7 @@ export default function TenantLayout({ children }: { children: React.ReactNode }
   const [user, setUser] = useState<TenantUser | null>(null);
   const [tenant, setTenant] = useState<TenantInfo | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const [loansOpen, setLoansOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [showNotifDropdown, setShowNotifDropdown] = useState(false);
@@ -178,6 +183,19 @@ export default function TenantLayout({ children }: { children: React.ReactNode }
   const notifRef = useRef<HTMLDivElement>(null);
 
   const isLoginPage = pathname.endsWith('/login');
+
+  // Read after mount — reading localStorage during render would desync SSR markup.
+  useEffect(() => {
+    setCollapsed(localStorage.getItem(NAV_COLLAPSED_KEY) === '1');
+  }, []);
+
+  const toggleCollapsed = useCallback(() => {
+    setCollapsed((v) => {
+      const next = !v;
+      localStorage.setItem(NAV_COLLAPSED_KEY, next ? '1' : '0');
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     document.title = tenant?.companyName
@@ -288,6 +306,15 @@ export default function TenantLayout({ children }: { children: React.ReactNode }
 
   const initials = `${user.firstName[0]}${user.lastName[0]}`;
 
+  // `collapsed` only takes effect from lg up — the mobile drawer keeps its labels.
+  const railed = collapsed ? 'lg:hidden' : '';
+  const rowCls = (active: boolean, tight = false) => [
+    'flex items-center gap-3 rounded-lg text-sm font-medium transition-colors',
+    tight ? 'px-3 py-2' : 'px-3 py-2.5',
+    collapsed ? 'lg:justify-center lg:px-2' : '',
+    active ? 'bg-white/20 text-white' : 'text-blue-100 hover:bg-white/10 hover:text-white',
+  ].join(' ');
+
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">
       {/* Mobile overlay */}
@@ -300,17 +327,17 @@ export default function TenantLayout({ children }: { children: React.ReactNode }
 
       {/* Sidebar */}
       <aside
-        className={`fixed lg:static inset-y-0 left-0 z-30 w-64 flex flex-col transition-transform duration-200 ${
-          sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
-        }`}
+        className={`fixed lg:static inset-y-0 left-0 z-30 w-64 flex flex-col transition-all duration-200 ${
+          collapsed ? 'lg:w-20' : 'lg:w-64'
+        } ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}
         style={{ backgroundColor: BRAND }}
       >
         {/* Logo */}
-        <div className="flex items-center gap-3 px-5 py-5 border-b border-white/10">
+        <div className={`flex items-center gap-3 py-5 border-b border-white/10 px-5 ${collapsed ? 'lg:px-0 lg:justify-center' : ''}`}>
           <div className="w-9 h-9 bg-white rounded-lg flex items-center justify-center flex-shrink-0">
             <span className="font-bold text-sm" style={{ color: BRAND }}>LH</span>
           </div>
-          <div className="min-w-0">
+          <div className={`min-w-0 ${railed}`}>
             <p className="font-bold text-white text-sm truncate">{tenant.companyName}</p>
             <p className="text-xs text-blue-200 truncate">{tenant.subdomain}.{process.env.NEXT_PUBLIC_TENANT_ROOT_DOMAIN ?? 'lendershub.in'}</p>
           </div>
@@ -325,18 +352,15 @@ export default function TenantLayout({ children }: { children: React.ReactNode }
                 key={item.href}
                 href={`/${subdomain}/${item.href}`}
                 onClick={() => setSidebarOpen(false)}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                  active
-                    ? 'bg-white/20 text-white'
-                    : 'text-blue-100 hover:bg-white/10 hover:text-white'
-                }`}
+                title={collapsed ? item.label : undefined}
+                className={rowCls(active)}
               >
                 <span className={`flex-shrink-0 ${active ? 'text-white' : 'text-blue-300'}`}>
                   {item.icon}
                 </span>
-                {item.label}
+                <span className={railed}>{item.label}</span>
                 {active && (
-                  <span className="ml-auto w-1.5 h-1.5 rounded-full bg-white" />
+                  <span className={`ml-auto w-1.5 h-1.5 rounded-full bg-white ${railed}`} />
                 )}
               </Link>
             );
@@ -351,26 +375,27 @@ export default function TenantLayout({ children }: { children: React.ReactNode }
               <div>
                 <button
                   type="button"
-                  onClick={() => setLoansOpen((v) => !v)}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                    groupActive && !loansOpen
-                      ? 'bg-white/20 text-white'
-                      : 'text-blue-100 hover:bg-white/10 hover:text-white'
-                  }`}
+                  // Collapsed, the sub-items would be unlabelled icons — open the rail first.
+                  onClick={() => {
+                    if (collapsed) { toggleCollapsed(); setLoansOpen(true); }
+                    else setLoansOpen((v) => !v);
+                  }}
+                  title={collapsed ? 'Loans' : undefined}
+                  className={`w-full ${rowCls(groupActive && !loansOpen)}`}
                 >
                   <span className={`flex-shrink-0 ${groupActive ? 'text-white' : 'text-blue-300'}`}>
                     {LOANS_GROUP_ICON}
                   </span>
-                  Loans
+                  <span className={railed}>Loans</span>
                   <svg
-                    className={`w-4 h-4 ml-auto flex-shrink-0 transition-transform ${loansOpen ? 'rotate-90' : ''}`}
+                    className={`w-4 h-4 ml-auto flex-shrink-0 transition-transform ${loansOpen ? 'rotate-90' : ''} ${railed}`}
                     fill="none" viewBox="0 0 24 24" stroke="currentColor"
                   >
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                   </svg>
                 </button>
                 {loansOpen && (
-                  <div className="mt-0.5 ml-3 pl-3 border-l border-white/10 space-y-0.5">
+                  <div className={`mt-0.5 ml-3 pl-3 border-l border-white/10 space-y-0.5 ${railed}`}>
                     {visibleLoanItems.map((item) => {
                       const active = isActive(item.href);
                       return (
@@ -407,34 +432,52 @@ export default function TenantLayout({ children }: { children: React.ReactNode }
                 key={item.href}
                 href={`/${subdomain}/${item.href}`}
                 onClick={() => setSidebarOpen(false)}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                  active
-                    ? 'bg-white/20 text-white'
-                    : 'text-blue-100 hover:bg-white/10 hover:text-white'
-                }`}
+                title={collapsed ? item.label : undefined}
+                className={rowCls(active)}
               >
                 <span className={`flex-shrink-0 ${active ? 'text-white' : 'text-blue-300'}`}>
                   {item.icon}
                 </span>
-                {item.label}
+                <span className={railed}>{item.label}</span>
                 {active && (
-                  <span className="ml-auto w-1.5 h-1.5 rounded-full bg-white" />
+                  <span className={`ml-auto w-1.5 h-1.5 rounded-full bg-white ${railed}`} />
                 )}
               </Link>
             );
           })}
         </nav>
 
+        {/* Collapse / expand — desktop only; the mobile drawer uses the hamburger instead. */}
+        <button
+          type="button"
+          onClick={toggleCollapsed}
+          title={collapsed ? 'Expand menu' : 'Collapse menu'}
+          aria-label={collapsed ? 'Expand menu' : 'Collapse menu'}
+          aria-expanded={!collapsed}
+          className={`hidden lg:flex items-center gap-3 mx-3 mb-1 px-3 py-2.5 rounded-lg text-sm font-medium text-blue-100 hover:bg-white/10 hover:text-white transition-colors ${
+            collapsed ? 'lg:justify-center lg:px-2' : ''
+          }`}
+        >
+          <svg
+            className={`w-5 h-5 flex-shrink-0 text-blue-300 transition-transform ${collapsed ? 'rotate-180' : ''}`}
+            fill="none" viewBox="0 0 24 24" stroke="currentColor"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+          </svg>
+          <span className={railed}>Collapse</span>
+        </button>
+
         {/* User profile */}
-        <div className="px-4 py-4 border-t border-white/10">
-          <div className="flex items-center gap-3">
+        <div className={`py-4 border-t border-white/10 px-4 ${collapsed ? 'lg:px-2' : ''}`}>
+          <div className={`flex items-center gap-3 ${collapsed ? 'lg:flex-col lg:gap-2' : ''}`}>
             <div
               className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0"
               style={{ backgroundColor: '#FF6B35' }}
+              title={collapsed ? `${user.firstName} ${user.lastName}` : undefined}
             >
               <span className="text-white">{initials}</span>
             </div>
-            <div className="min-w-0 flex-1">
+            <div className={`min-w-0 flex-1 ${railed}`}>
               <p className="text-sm font-semibold text-white truncate">
                 {user.firstName} {user.lastName}
               </p>
