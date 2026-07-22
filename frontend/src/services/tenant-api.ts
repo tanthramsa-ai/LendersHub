@@ -615,6 +615,9 @@ export interface DailyLoanDetail extends DailyLoan {
   purpose?: string | null;
   cycleType: string;
   calculationType: string;
+  /** ₹ per ₹1,000 per day — set only when calculationType is PER_1000_PER_DAY. */
+  interestPerDay?: number | null;
+  projection?: LoanProjection | null;
   emiAmount: number | null;
   termDays: number;
   securityDocUrl?: string | null;
