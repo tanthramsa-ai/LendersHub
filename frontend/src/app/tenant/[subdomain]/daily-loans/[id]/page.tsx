@@ -4,7 +4,8 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
-  getDailyLoan, recordPayment, undoInstallmentPayment, closeLoan, reopenLoan, DailyLoanDetail, DailyInstallment,
+  getDailyLoan, recordPayment, undoInstallmentPayment, closeLoan, reopenLoan, resolveMissedInstallment,
+  DailyLoanDetail, DailyInstallment, MissResolution,
   getTenantSession, COLLECTION_ROLES, MANAGER_ROLES,
 } from '@/services/tenant-api';
 import { CloseLoanModal, CloseCommentBanner, ReopenLoanModal } from '@/components/CloseLoanModal';
@@ -18,6 +19,12 @@ function fmtDate(d: string | null | undefined) {
   if (!d) return '—';
   return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
+
+const MISS_RESOLUTION_LABELS: Record<MissResolution, string> = {
+  PAY_EXTRA_NEXT: 'Pay extra next visit',
+  EXTEND_EMI: 'Extend EMI (spread over remaining days)',
+  DEFER_TO_END: 'Defer to end of loan',
+};
 
 const LOAN_STATUS_COLORS: Record<string, string> = {
   DISBURSED: 'bg-green-100 text-green-700',
@@ -127,6 +134,8 @@ export default function DailyLoanDetailPage() {
   const [showReopenConfirm, setShowReopenConfirm] = useState(false);
   const [reopening, setReopening] = useState(false);
   const [reopenError, setReopenError] = useState('');
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
+  const [resolveError, setResolveError] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true); setError('');
@@ -163,6 +172,16 @@ export default function DailyLoanDetailPage() {
     } catch (e: unknown) {
       setPayError((e as Error).message);
     } finally { setPaying(false); }
+  }
+
+  async function handleResolve(installmentId: string, strategy: MissResolution) {
+    setResolvingId(installmentId); setResolveError('');
+    try {
+      await resolveMissedInstallment(id, installmentId, strategy);
+      await load();
+    } catch (e: unknown) {
+      setResolveError((e as Error).message);
+    } finally { setResolvingId(null); }
   }
 
   async function handleUndo() {
@@ -256,7 +275,10 @@ export default function DailyLoanDetailPage() {
           </div>
           <div>
             <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">Interest Rate</p>
-            <p className="text-sm font-semibold text-gray-900">{loan.interestRate}% p.a.</p>
+            <p className="text-sm font-semibold text-gray-900">
+              {loan.interestPerDay ? `₹${loan.interestPerDay} per ₹1,000/day` : `${loan.interestRate}% p.a.`}
+            </p>
+            {loan.interestPerDay ? <p className="text-xs text-gray-400">{loan.interestRate}% p.a. flat</p> : null}
           </div>
           <div>
             <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">Term (Days)</p>
@@ -268,7 +290,9 @@ export default function DailyLoanDetailPage() {
           </div>
           <div>
             <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">Calculation</p>
-            <p className="text-sm font-semibold text-gray-900">{loan.calculationType ?? '—'}</p>
+            <p className="text-sm font-semibold text-gray-900">
+              {loan.calculationType === 'PER_1000_PER_DAY' ? 'Per ₹1,000 / day' : loan.calculationType ?? '—'}
+            </p>
           </div>
           <div>
             <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">First Due</p>
@@ -376,6 +400,105 @@ export default function DailyLoanDetailPage() {
           </p>
         )}
       </div>
+
+      {/* Projected schedule — per-₹1,000 loans only; uncollected periods keep accruing
+          interest, so the row count grows past the contracted term. */}
+      {loan.projection && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+          <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
+            <h2 className="text-sm font-bold text-gray-700">
+              Projected Schedule — {loan.projection.rows.length} periods
+              {loan.projection.extraPeriods > 0 && (
+                <span className="ml-2 px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-xs font-normal">
+                  +{loan.projection.extraPeriods} beyond contracted {loan.termDays}
+                </span>
+              )}
+            </h2>
+            <span className="flex items-center gap-1 text-xs text-gray-500">
+              <span className="w-3 h-3 rounded bg-red-50 border border-red-300 inline-block" />
+              Missed / short — interest still accruing
+            </span>
+          </div>
+          <p className="text-xs text-gray-400 mb-3">
+            Live projection against payments received. The signed schedule is unchanged —
+            totals here move only because uncollected periods keep charging interest.
+          </p>
+          {resolveError && <p className="text-xs text-red-600 mb-2">{resolveError}</p>}
+
+          <div className="max-h-96 overflow-y-auto overflow-x-auto border border-gray-200 rounded-lg">
+            <table className="w-full text-xs whitespace-nowrap">
+              <thead className="bg-gray-50 sticky top-0">
+                <tr>
+                  {['#', 'Due Date', 'Principal', 'Interest', 'Payment', 'Outstanding', 'Received', 'Status', 'Missed payment'].map((h) => (
+                    <th key={h} className="px-3 py-2 text-left font-semibold text-gray-500">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {loan.projection.rows.map((r) => {
+                  const beyondContract = r.number > loan.termDays;
+                  return (
+                    <tr
+                      key={r.number}
+                      className={
+                        r.isMissed ? 'bg-red-50 text-red-700 font-medium'
+                        : beyondContract ? 'bg-amber-50/60'
+                        : 'hover:bg-gray-50'
+                      }
+                    >
+                      <td className="px-3 py-1.5">{r.number}</td>
+                      <td className="px-3 py-1.5">{fmtDate(r.dueDate)}</td>
+                      <td className="px-3 py-1.5">{fmt(r.principalAmount)}</td>
+                      <td className="px-3 py-1.5">{fmt(r.interestAmount)}</td>
+                      <td className="px-3 py-1.5 font-medium">{fmt(r.totalAmount)}</td>
+                      <td className="px-3 py-1.5">{fmt(r.principalOutstanding)}</td>
+                      <td className="px-3 py-1.5">{r.amountPaid > 0 ? fmt(r.amountPaid) : '—'}</td>
+                      <td className="px-3 py-1.5">{r.status}</td>
+                      <td className="px-3 py-1.5">
+                        {r.isMissed && r.installmentId ? (
+                          canRecord ? (
+                            <select
+                              value={r.missResolution ?? ''}
+                              disabled={resolvingId === r.installmentId}
+                              onChange={(e) => handleResolve(r.installmentId!, e.target.value as MissResolution)}
+                              className="text-xs border border-red-200 rounded px-1.5 py-1 bg-white text-red-700 font-normal disabled:opacity-50"
+                            >
+                              <option value="" disabled>+ Resolve…</option>
+                              {(Object.keys(MISS_RESOLUTION_LABELS) as MissResolution[]).map((k) => (
+                                <option key={k} value={k}>{MISS_RESOLUTION_LABELS[k]}</option>
+                              ))}
+                            </select>
+                          ) : r.missResolution ? (
+                            <span className="font-normal">{MISS_RESOLUTION_LABELS[r.missResolution]}</span>
+                          ) : (
+                            <span className="font-normal text-gray-400">Unresolved</span>
+                          )
+                        ) : (
+                          r.missResolution && <span className="font-normal text-gray-400">{MISS_RESOLUTION_LABELS[r.missResolution]}</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
+            {[
+              { label: 'Daily EMI', value: fmt(loan.projection.emi) },
+              { label: 'Interest (projected)', value: fmt(loan.projection.totalInterest) },
+              { label: 'Total Payable', value: fmt(loan.projection.totalPayable) },
+              { label: 'Missed periods', value: String(loan.projection.rows.filter((r) => r.isMissed).length) },
+            ].map((s) => (
+              <div key={s.label} className="bg-gray-50 rounded-lg p-3 text-center">
+                <p className="text-sm font-bold text-gray-900">{s.value}</p>
+                <p className="text-xs text-gray-400 mt-0.5">{s.label}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Documents */}
       {(loan.securityDocUrl || loan.promissoryNoteUrl) && (
@@ -491,6 +614,9 @@ export default function DailyLoanDetailPage() {
                 <input type="number" value={payForm.amount} min="1"
                   onChange={(e) => setPayForm(f => ({ ...f, amount: e.target.value }))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                {parseFloat(payForm.amount || '0') > Math.max(0, payInst.total - payInst.paid) && (
+                  <p className="text-xs text-gray-500 mt-1">Extra amount will apply to the next installment(s).</p>
+                )}
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Payment Method</label>
