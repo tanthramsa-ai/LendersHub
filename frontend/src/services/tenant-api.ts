@@ -459,6 +459,16 @@ export function createWeeklyLoan(dto: {
 
 export type ProjectedStatus = 'PAID' | 'PARTIAL' | 'MISSED' | 'DUE' | 'PROJECTED';
 
+/**
+ * How a collector has chosen to resolve a specific missed/short installment:
+ *  - PAY_EXTRA_NEXT — label only. The plan is a single larger payment covering both next visit.
+ *  - EXTEND_EMI — the shortfall is spread across every remaining period; the schedule below
+ *    already reflects the raised amounts once this is chosen.
+ *  - DEFER_TO_END — label only. Matches the engine's default: the shortfall rolls forward
+ *    silently and lands on whatever the final period turns out to be.
+ */
+export type MissResolution = 'PAY_EXTRA_NEXT' | 'EXTEND_EMI' | 'DEFER_TO_END';
+
 export interface ProjectedRow {
   number: number;
   dueDate: string;
@@ -470,6 +480,10 @@ export interface ProjectedRow {
   status: ProjectedStatus;
   /** Period came and went without covering what was due — render the row red. */
   isMissed: boolean;
+  /** Real installment id for contracted periods; null for virtual rows beyond the original term. */
+  installmentId: string | null;
+  /** The collector's chosen resolution for this period, if any. */
+  missResolution: MissResolution | null;
 }
 
 /**
@@ -520,6 +534,13 @@ export function recordPayment(loanId: string, dto: {
   return tenantFetch<{ id: string; installmentsPaid: number }>(`/api/v1/tenant/loans/${loanId}/payments`, {
     method: 'POST', body: JSON.stringify(dto),
   });
+}
+
+export function resolveMissedInstallment(loanId: string, installmentId: string, strategy: MissResolution) {
+  return tenantFetch<{ installmentId: string; missResolution: MissResolution }>(
+    `/api/v1/tenant/loans/${loanId}/installments/${installmentId}/resolve-miss`,
+    { method: 'POST', body: JSON.stringify({ strategy }) },
+  );
 }
 
 export function undoInstallmentPayment(loanId: string, installmentId: string) {

@@ -245,6 +245,9 @@ export function tenantSchemaDDL(s: string): string[] {
     `ALTER TABLE ${q}."loans" ADD COLUMN IF NOT EXISTS reopen_comment      TEXT`,
     // ₹ per ₹1,000 per day — source rate for calculation_type = 'PER_1000_PER_DAY' weekly loans
     `ALTER TABLE ${q}."loans" ADD COLUMN IF NOT EXISTS interest_per_1000_per_day NUMERIC(6,2)`,
+    // Collector's chosen resolution for a missed/short PER_1000_PER_DAY installment —
+    // 'PAY_EXTRA_NEXT' | 'EXTEND_EMI' | 'DEFER_TO_END'. Null until explicitly resolved.
+    `ALTER TABLE ${q}."installments" ADD COLUMN IF NOT EXISTS miss_resolution TEXT`,
 
     // Widen interest_rate so values up to 200% p.a. (and loan-type bounds) fit.
     // NUMERIC(6,4) only allowed ≤ 99.9999 and caused "Numeric value out of range".

@@ -1,5 +1,5 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, Request, ParseIntPipe, DefaultValuePipe } from '@nestjs/common';
-import { TenantLoansService, CreateLoanDto, CreateWeeklyLoanDto, CreateDailyLoanDto, CreateMonthlyLoanDto, CreateAgentRiskLoanDto, CreateTermLoanDto, RecordPaymentDto } from './tenant-loans.service';
+import { TenantLoansService, CreateLoanDto, CreateWeeklyLoanDto, CreateDailyLoanDto, CreateMonthlyLoanDto, CreateAgentRiskLoanDto, CreateTermLoanDto, RecordPaymentDto, MissResolution } from './tenant-loans.service';
 import { TenantJwtGuard } from '../auth/guards/tenant-jwt.guard';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 
@@ -189,6 +189,16 @@ export class TenantLoansController {
     @Body() dto: RecordPaymentDto,
   ) {
     return this.svc.recordPayment(req.user, id, dto);
+  }
+
+  @Post(':id/installments/:installmentId/resolve-miss')
+  resolveMissedInstallment(
+    @Request() req: { user: TenantJwtPayload },
+    @Param('id') id: string,
+    @Param('installmentId') installmentId: string,
+    @Body() dto: { strategy: MissResolution },
+  ) {
+    return this.svc.resolveMissedInstallment(req.user, id, installmentId, dto.strategy);
   }
 
   @Post(':id/installments/:installmentId/undo-payment')

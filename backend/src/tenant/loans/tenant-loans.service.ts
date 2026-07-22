@@ -312,11 +312,30 @@ function computePer1000Schedule(
 
 export type ProjectedStatus = 'PAID' | 'PARTIAL' | 'MISSED' | 'DUE' | 'PROJECTED';
 
+/**
+ * How a collector has chosen to resolve a specific missed/short installment:
+ *  - PAY_EXTRA_NEXT — pure label. The plan is a single larger payment against THIS installment
+ *    next visit; the existing payment cascade (recordPayment) already applies an over-payment
+ *    forward to later installments, so no schedule math changes — this only marks intent.
+ *  - EXTEND_EMI — the shortfall is spread evenly across every remaining CONTRACTED period
+ *    (i+1..periods), raising their due amount so the loan still finishes on the original date.
+ *  - DEFER_TO_END — pure label. This already matches the engine's default behavior (the
+ *    shortfall rolls forward silently and lands on whatever the final period turns out to be);
+ *    choosing it just records that the collector has acknowledged and accepted that outcome.
+ */
+export type MissResolution = 'PAY_EXTRA_NEXT' | 'EXTEND_EMI' | 'DEFER_TO_END';
+
 export interface ProjectedRow extends WeeklyScheduleRow {
   amountPaid: number;
   status: ProjectedStatus;
   /** True when the period came and went without covering what was due — render this row red. */
   isMissed: boolean;
+  /** Real installment id for CONTRACTED periods (number <= the original term); null for periods
+   *  beyond it — those are virtual extension rows with no installment record to attach a
+   *  resolution to. */
+  installmentId: string | null;
+  /** The collector's chosen resolution for this specific period, if any. */
+  missResolution: MissResolution | null;
 }
 
 /**
@@ -345,10 +364,16 @@ export function projectPer1000Schedule(opts: {
   collected: number[];
   /** YYYY-MM-DD; periods due on or before this date are actuals, later ones are projections. */
   today: string;
+  /** Real installment id for CONTRACTED period i (0-based), for stamping onto rows. */
+  installmentIds?: (string | null)[];
+  /** Collector's chosen resolution for CONTRACTED period i (0-based), if any. */
+  resolutions?: (MissResolution | null)[];
   skipSundays?: boolean;
   maxPeriods?: number;
 }): { rows: ProjectedRow[]; emi: number; totalInterest: number; totalPayable: number; extraPeriods: number } {
   const { principal, interestPerDay, periods, daysPerPeriod, firstDueDate, collected, today } = opts;
+  const installmentIds = opts.installmentIds ?? [];
+  const resolutions = opts.resolutions ?? [];
   const cap = opts.maxPeriods ?? periods * 10 + 100;
 
   const contractInterest = round2(principal * ((interestPerDay * daysPerPeriod) / 1000) * periods);
@@ -368,6 +393,18 @@ export function projectPer1000Schedule(opts: {
   let principalRemaining = principal;
   let unpaidInterest = 0;
   let interestCharged = 0;
+  // EXTEND_EMI resolutions push here: each raises the due amount for every period up to and
+  // including `toIndex` (the original contracted term). Multiple active extensions stack
+  // additively, so a second miss compounds on top of an earlier one.
+  //
+  // perPeriodAddOn is rounded to paise, so summing it across many periods would drift a few
+  // paise short of the true shortfall — and because this product charges a full flat
+  // interestPerPeriod regardless of how small the remaining balance is, an unswept residual as
+  // tiny as ₹0.05 would otherwise trigger one whole extra period's interest (₹1,000+). Instead
+  // the LAST period this extension applies to takes the exact remainder, guaranteeing the sum
+  // across the extension's periods equals the shortfall to the paisa — the same "final row is a
+  // plug" principle the original contract builder already uses.
+  const activeExtensions: { perPeriodAddOn: number; lastPeriodAddOn: number; toIndex: number }[] = [];
 
   for (let i = 1; i <= cap; i++) {
     if (principalRemaining <= 0.005 && unpaidInterest <= 0.005) break;
@@ -377,8 +414,14 @@ export function projectPer1000Schedule(opts: {
     interestCharged = round2(interestCharged + interestPerPeriod);
 
     const outstandingTotal = round2(principalRemaining + unpaidInterest);
-    // Never more than the EMI — arrears roll into additional periods instead of a balloon.
-    const due = Math.min(emi, outstandingTotal);
+    const extensionAddOn = round2(
+      activeExtensions
+        .filter((e) => i <= e.toIndex)
+        .reduce((s, e) => s + (i === e.toIndex ? e.lastPeriodAddOn : e.perPeriodAddOn), 0),
+    );
+    // Never more than the EMI (plus any EXTEND_EMI top-up the collector explicitly chose) —
+    // arrears otherwise roll into additional periods instead of a balloon.
+    const due = Math.min(emi + extensionAddOn, outstandingTotal);
     const dueDate = cursor.toISOString().slice(0, 10);
     const isPast = dueDate <= today;
     const paid = isPast ? round2(Math.min(collected[i - 1] ?? 0, outstandingTotal)) : due;
@@ -407,6 +450,9 @@ export function projectPer1000Schedule(opts: {
       : 'MISSED';
 
     const isMissed = status === 'MISSED' || status === 'PARTIAL';
+    // Resolutions only exist for originally-contracted periods — rows beyond `periods` are
+    // virtual extension rows with no installment record.
+    const resolution = i <= periods ? (resolutions[i - 1] ?? null) : null;
 
     rows.push({
       number: i,
@@ -418,7 +464,22 @@ export function projectPer1000Schedule(opts: {
       amountPaid: paid,
       status,
       isMissed,
+      installmentId: i <= periods ? (installmentIds[i - 1] ?? null) : null,
+      missResolution: resolution,
     });
+
+    // A fresh EXTEND_EMI choice on this miss spreads its shortfall across the CONTRACTED
+    // periods still ahead. If the miss lands on the final contracted period there's nothing
+    // left to spread it over — it falls back to the default carry-forward behavior instead.
+    if (isMissed && resolution === 'EXTEND_EMI') {
+      const shortfall = round2(due - paid);
+      const remainingPeriods = periods - i;
+      if (shortfall > 0.005 && remainingPeriods > 0) {
+        const perPeriodAddOn = round2(shortfall / remainingPeriods);
+        const lastPeriodAddOn = round2(shortfall - perPeriodAddOn * (remainingPeriods - 1));
+        activeExtensions.push({ perPeriodAddOn, lastPeriodAddOn, toIndex: periods });
+      }
+    }
 
     cursor.setUTCDate(cursor.getUTCDate() + daysPerPeriod);
     if (opts.skipSundays) { while (cursor.getUTCDay() === 0) cursor.setUTCDate(cursor.getUTCDate() + 1); }
@@ -447,11 +508,17 @@ export function buildPer1000Projection(
   const periods = Number(loan.term_months);
   if (!periods || periods < 1) return null;
 
-  // paid_amount indexed by installment_number; gaps stay 0 so an uncollected period reads as a miss.
+  // paid_amount / id / miss_resolution indexed by installment_number; gaps stay 0/null so an
+  // uncollected period reads as a miss with no resolution chosen yet.
   const collected: number[] = new Array(installments.length).fill(0);
+  const installmentIds: (string | null)[] = new Array(installments.length).fill(null);
+  const resolutions: (MissResolution | null)[] = new Array(installments.length).fill(null);
   for (const inst of installments) {
     const idx = Number(inst.installment_number) - 1;
-    if (idx >= 0) collected[idx] = parseFloat(inst.paid_amount ?? 0) || 0;
+    if (idx < 0) continue;
+    collected[idx] = parseFloat(inst.paid_amount ?? 0) || 0;
+    installmentIds[idx] = inst.id ?? null;
+    resolutions[idx] = (inst.miss_resolution as MissResolution | null) ?? null;
   }
 
   return projectPer1000Schedule({
@@ -462,6 +529,8 @@ export function buildPer1000Projection(
     firstDueDate: toYmd(loan.first_due_date),
     collected,
     today: toYmd(new Date()),
+    installmentIds,
+    resolutions,
     skipSundays: loan.cycle_type === 'DAILY_NO_SUNDAY',
   });
 }
@@ -701,6 +770,7 @@ export class TenantLoansService {
     await client.query(`ALTER TABLE loans ADD COLUMN IF NOT EXISTS close_comment TEXT`).catch(() => undefined);
     await client.query(`ALTER TABLE loans ADD COLUMN IF NOT EXISTS reopen_comment TEXT`).catch(() => undefined);
     await client.query(`ALTER TABLE loans ADD COLUMN IF NOT EXISTS interest_per_1000_per_day NUMERIC(6,2)`).catch(() => undefined);
+    await client.query(`ALTER TABLE installments ADD COLUMN IF NOT EXISTS miss_resolution TEXT`).catch(() => undefined);
     this.widenedInterestSchemas.add(schemaName);
   }
 
@@ -2188,6 +2258,57 @@ export class TenantLoansService {
       });
 
       return { id: paymentId, amount: dto.amount, paymentDate, installmentsPaid: allocations.length };
+    });
+  }
+
+  /**
+   * Records how a collector has chosen to handle a missed/short PER_1000_PER_DAY installment.
+   * Only EXTEND_EMI changes the projected numbers (see projectPer1000Schedule); the other two
+   * are labels the projection surfaces back on the row. Never touches the stored contract
+   * amounts — this is metadata, re-read by buildPer1000Projection on every request.
+   */
+  async resolveMissedInstallment(
+    user: TenantJwtPayload,
+    loanId: string,
+    installmentId: string,
+    strategy: MissResolution,
+  ) {
+    if (user.role === 'VIEWER') throw new ForbiddenException('Viewers cannot resolve missed payments');
+    const VALID: MissResolution[] = ['PAY_EXTRA_NEXT', 'EXTEND_EMI', 'DEFER_TO_END'];
+    if (!VALID.includes(strategy)) throw new BadRequestException(`strategy must be one of: ${VALID.join(', ')}`);
+
+    return this.withSchema(user.schemaName, async (client) => {
+      const loanRes = await client.query(`SELECT * FROM loans WHERE id = $1`, [loanId]);
+      if (!loanRes.rows[0] || loanRes.rows[0].deleted_at) throw new NotFoundException('Loan not found');
+      const loan = loanRes.rows[0];
+      if (loan.calculation_type !== 'PER_1000_PER_DAY') {
+        throw new BadRequestException('Missed-payment resolution only applies to PER_1000_PER_DAY loans');
+      }
+
+      const instRes = await client.query(`SELECT * FROM installments WHERE loan_id = $1 ORDER BY installment_number`, [loanId]);
+      const inst = instRes.rows.find((r) => r.id === installmentId);
+      if (!inst) throw new NotFoundException('Installment not found');
+
+      // Use the exact same live projection the UI renders from — not a raw contract-amount
+      // comparison — so eligibility can never drift from what the collector actually sees as
+      // red on screen (e.g. a period whose due was already bumped by an earlier EXTEND_EMI).
+      const projection = buildPer1000Projection(loan, instRes.rows);
+      const row = projection?.rows.find((r) => r.installmentId === installmentId);
+      if (!row?.isMissed) {
+        throw new BadRequestException('This installment is not currently missed or short');
+      }
+
+      await client.query(`UPDATE installments SET miss_resolution = $1 WHERE id = $2`, [strategy, installmentId]);
+
+      await this.activity.record(client, user, {
+        action: 'installment.miss_resolved',
+        entityType: 'loan',
+        entityId: loanId,
+        entityLabel: loan.loan_number,
+        metadata: { installmentId, installmentNumber: inst.installment_number, strategy },
+      });
+
+      return { installmentId, missResolution: strategy };
     });
   }
 

@@ -4,7 +4,8 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
-  getWeeklyLoan, recordPayment, undoInstallmentPayment, closeLoan, reopenLoan, WeeklyLoanDetail, WeeklyInstallment,
+  getWeeklyLoan, recordPayment, undoInstallmentPayment, closeLoan, reopenLoan, resolveMissedInstallment,
+  WeeklyLoanDetail, WeeklyInstallment, MissResolution,
   getTenantSession, COLLECTION_ROLES, MANAGER_ROLES,
 } from '@/services/tenant-api';
 import { CloseLoanModal, CloseCommentBanner, ReopenLoanModal } from '@/components/CloseLoanModal';
@@ -18,6 +19,12 @@ function fmtDate(d: string | null | undefined) {
   if (!d) return '—';
   return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
+
+const MISS_RESOLUTION_LABELS: Record<MissResolution, string> = {
+  PAY_EXTRA_NEXT: 'Pay extra next visit',
+  EXTEND_EMI: 'Extend EMI (spread over remaining weeks)',
+  DEFER_TO_END: 'Defer to end of loan',
+};
 
 const LOAN_STATUS_COLORS: Record<string, string> = {
   DISBURSED: 'bg-green-100 text-green-700',
@@ -122,6 +129,8 @@ export default function WeeklyLoanDetailPage() {
   const [undoTarget, setUndoTarget] = useState<WeeklyInstallment | null>(null);
   const [undoing, setUndoing] = useState(false);
   const [undoError, setUndoError] = useState('');
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
+  const [resolveError, setResolveError] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true); setError('');
@@ -158,6 +167,16 @@ export default function WeeklyLoanDetailPage() {
     } catch (e: unknown) {
       setPayError((e as Error).message);
     } finally { setPaying(false); }
+  }
+
+  async function handleResolve(installmentId: string, strategy: MissResolution) {
+    setResolvingId(installmentId); setResolveError('');
+    try {
+      await resolveMissedInstallment(id, installmentId, strategy);
+      await load();
+    } catch (e: unknown) {
+      setResolveError((e as Error).message);
+    } finally { setResolvingId(null); }
   }
 
   async function handleUndo() {
@@ -395,12 +414,13 @@ export default function WeeklyLoanDetailPage() {
             Live projection against payments received. The signed schedule is unchanged —
             totals here move only because uncollected periods keep charging interest.
           </p>
+          {resolveError && <p className="text-xs text-red-600 mb-2">{resolveError}</p>}
 
           <div className="max-h-96 overflow-y-auto overflow-x-auto border border-gray-200 rounded-lg">
             <table className="w-full text-xs whitespace-nowrap">
               <thead className="bg-gray-50 sticky top-0">
                 <tr>
-                  {['#', 'Due Date', 'Principal', 'Interest', 'Payment', 'Outstanding', 'Received', 'Status'].map((h) => (
+                  {['#', 'Due Date', 'Principal', 'Interest', 'Payment', 'Outstanding', 'Received', 'Status', 'Missed payment'].map((h) => (
                     <th key={h} className="px-3 py-2 text-left font-semibold text-gray-500">{h}</th>
                   ))}
                 </tr>
@@ -425,6 +445,29 @@ export default function WeeklyLoanDetailPage() {
                       <td className="px-3 py-1.5">{fmt(r.principalOutstanding)}</td>
                       <td className="px-3 py-1.5">{r.amountPaid > 0 ? fmt(r.amountPaid) : '—'}</td>
                       <td className="px-3 py-1.5">{r.status}</td>
+                      <td className="px-3 py-1.5">
+                        {r.isMissed && r.installmentId ? (
+                          canRecord ? (
+                            <select
+                              value={r.missResolution ?? ''}
+                              disabled={resolvingId === r.installmentId}
+                              onChange={(e) => handleResolve(r.installmentId!, e.target.value as MissResolution)}
+                              className="text-xs border border-red-200 rounded px-1.5 py-1 bg-white text-red-700 font-normal disabled:opacity-50"
+                            >
+                              <option value="" disabled>+ Resolve…</option>
+                              {(Object.keys(MISS_RESOLUTION_LABELS) as MissResolution[]).map((k) => (
+                                <option key={k} value={k}>{MISS_RESOLUTION_LABELS[k]}</option>
+                              ))}
+                            </select>
+                          ) : r.missResolution ? (
+                            <span className="font-normal">{MISS_RESOLUTION_LABELS[r.missResolution]}</span>
+                          ) : (
+                            <span className="font-normal text-gray-400">Unresolved</span>
+                          )
+                        ) : (
+                          r.missResolution && <span className="font-normal text-gray-400">{MISS_RESOLUTION_LABELS[r.missResolution]}</span>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
