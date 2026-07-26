@@ -5,9 +5,9 @@ import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   getCustomers, createCustomer, updateCustomer, getCustomer, getBranches, getLoanTypes,
-  previewWeeklySchedule, createWeeklyLoan,
-  Customer, TenantBranch, LoanType, WeeklySchedulePreview, WeeklyCalculationType,
-  getTenantSession, LOAN_CREATE_ROLES,
+  previewWeeklySchedule, createWeeklyLoan, getOfficers,
+  Customer, TenantBranch, LoanType, WeeklySchedulePreview, WeeklyCalculationType, Officer,
+  getTenantSession, LOAN_CREATE_ROLES, MANAGER_ROLES,
 } from '@/services/tenant-api';
 import {
   getQuickAddCustomerErrors, sanitizeNameInput, sanitizeLocalityInput, sanitizePanInput, sanitizeLoanPurposeInput,
@@ -32,10 +32,11 @@ export default function NewWeeklyLoanPage() {
   const subdomain = params.subdomain;
 
   const session = getTenantSession();
-  if (!LOAN_CREATE_ROLES.includes(session?.user.role ?? 'VIEWER')) {
+  if (!LOAN_CREATE_ROLES.includes(session?.user.role ?? 'CUSTOMER')) {
     router.replace(`/${subdomain}/dashboard`);
     return null;
   }
+  const canAssignOfficer = MANAGER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
 
   const [step, setStep] = useState<Step>(1);
 
@@ -54,8 +55,9 @@ export default function NewWeeklyLoanPage() {
   const [branches, setBranches] = useState<TenantBranch[]>([]);
   const [loanTypes, setLoanTypes] = useState<LoanType[]>([]);
   const [weeklyTypeId, setWeeklyTypeId] = useState('');
+  const [officers, setOfficers] = useState<Officer[]>([]);
   const [form, setForm] = useState({
-    branchId: '', purpose: '',
+    branchId: '', purpose: '', loanOfficerId: '',
     principal: '', interestRate: '', termWeeks: '',
     firstDueDate: '', calculationType: 'REDUCING' as WeeklyCalculationType,
     interestPerDay: '3.19',
@@ -87,6 +89,9 @@ export default function NewWeeklyLoanPage() {
         if (weekly) setWeeklyTypeId(weekly.id);
       })
       .catch(() => setLoanTypes([]));
+    if (canAssignOfficer) {
+      getOfficers().then(setOfficers).catch(() => setOfficers([]));
+    }
     // Default first due date to next Monday
     const nextMon = new Date();
     nextMon.setDate(nextMon.getDate() + ((8 - nextMon.getDay()) % 7 || 7));
@@ -222,6 +227,7 @@ export default function NewWeeklyLoanPage() {
         ...(form.purpose && { purpose: form.purpose }),
         ...(form.branchId && { branchId: form.branchId }),
         ...(weeklyTypeId && { loanTypeId: weeklyTypeId }),
+        ...(canAssignOfficer && form.loanOfficerId && { loanOfficerId: form.loanOfficerId }),
         ...(securityB64 && { securityDocUrl: securityB64 }),
         ...(promissoryB64 && { promissoryNoteUrl: promissoryB64 }),
       });
@@ -475,6 +481,15 @@ export default function NewWeeklyLoanPage() {
                 <label className="block text-xs font-medium text-gray-600 mb-1">Loan Purpose</label>
                 <input value={form.purpose} onChange={(e) => setF('purpose', sanitizeLoanPurposeInput(e.target.value))} className={inputCls} placeholder="Agriculture, Business…" />
               </div>
+              {canAssignOfficer && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Loan Agent</label>
+                  <select value={form.loanOfficerId} onChange={(e) => setF('loanOfficerId', e.target.value)} className={inputCls}>
+                    <option value="">Assign to myself</option>
+                    {officers.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                  </select>
+                </div>
+              )}
             </div>
 
             <div className="pt-2">

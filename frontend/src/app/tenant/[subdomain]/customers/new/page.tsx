@@ -106,7 +106,7 @@ export default function NewCustomerPage() {
   const subdomain = params.subdomain;
 
   const session = getTenantSession();
-  const canAdd = CUSTOMER_ROLES.includes(session?.user.role ?? 'VIEWER');
+  const canAdd = CUSTOMER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
 
   const [branches, setBranches] = useState<TenantBranch[]>([]);
   const [form, setForm] = useState<FormFields>({

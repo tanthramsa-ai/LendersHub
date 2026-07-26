@@ -34,7 +34,7 @@ export default function LedgerPage() {
   const params = useParams<{ subdomain: string }>();
   const subdomain = params.subdomain;
   const session = getTenantSession();
-  const canAdd = MANAGER_ROLES.includes(session?.user.role ?? 'VIEWER');
+  const canAdd = MANAGER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
 
   const [tab, setTab] = useState<Tab>('credits');
   const [month, setMonth] = useState(thisMonth());

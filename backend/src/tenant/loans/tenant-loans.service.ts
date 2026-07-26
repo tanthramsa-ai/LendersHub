@@ -4,6 +4,7 @@ import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { TenantNotificationsService } from '../notifications/tenant-notifications.service';
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
 import { safePagination } from '../../common/utils/pagination';
+import { MANAGER_ROLES, FIELD_ROLES, UserRole } from '../common/roles';
 import { assertNoDigitsOrSpecialChars } from '../customers/customer-validation';
 
 export interface CreateLoanDto {
@@ -14,6 +15,7 @@ export interface CreateLoanDto {
   purpose?: string;
   firstDueDate?: string;
   branchId?: string;
+  loanOfficerId?: string;
 }
 
 export type WeeklyCalculationType = 'REDUCING' | 'FLAT' | 'PER_1000_PER_DAY';
@@ -32,6 +34,7 @@ export interface CreateWeeklyLoanDto {
   loanTypeId?: string;
   securityDocUrl?: string;
   promissoryNoteUrl?: string;
+  loanOfficerId?: string;
 }
 
 export interface RecordPaymentDto {
@@ -57,6 +60,7 @@ export interface CreateDailyLoanDto {
   loanTypeId?: string;
   securityDocUrl?: string;
   promissoryNoteUrl?: string;
+  loanOfficerId?: string;
 }
 
 export interface CreateMonthlyLoanDto {
@@ -70,6 +74,7 @@ export interface CreateMonthlyLoanDto {
   loanTypeId?: string;
   securityDocUrl?: string;
   promissoryNoteUrl?: string;
+  loanOfficerId?: string;
 }
 
 export interface CreateAgentRiskLoanDto {
@@ -83,6 +88,7 @@ export interface CreateAgentRiskLoanDto {
   loanTypeId?: string;
   securityDocUrl?: string;
   promissoryNoteUrl?: string;
+  loanOfficerId?: string;
 }
 
 export interface CreateTermLoanDto {
@@ -98,6 +104,7 @@ export interface CreateTermLoanDto {
   loanTypeId?: string;
   securityDocUrl?: string;
   promissoryNoteUrl?: string;
+  loanOfficerId?: string;
 }
 
 function roundUp(amount: number, nearest: number): number {
@@ -389,22 +396,35 @@ export function projectPer1000Schedule(opts: {
   const cursor = new Date(Date.UTC(yr, mo - 1, dy));
   if (opts.skipSundays) { while (cursor.getUTCDay() === 0) cursor.setUTCDate(cursor.getUTCDate() + 1); }
 
+  // The ORIGINAL, un-bumped due for every contracted period — used only to tell whether a
+  // later period was already paid in full according to what was actually asked of the borrower
+  // at the time. An EXTEND_EMI resolution must never retroactively make an already-settled
+  // installment look short just because a *different, earlier* miss was resolved afterward —
+  // that reads as the fix "chasing" the collector down the schedule, one row at a time.
+  const advance = (c: Date) => {
+    c.setUTCDate(c.getUTCDate() + daysPerPeriod);
+    if (opts.skipSundays) { while (c.getUTCDay() === 0) c.setUTCDate(c.getUTCDate() + 1); }
+  };
+  const baseDue = computePer1000Schedule(principal, interestPerDay, periods, daysPerPeriod, firstDueDate, advance)
+    .schedule.map((r) => r.totalAmount);
+
   const rows: ProjectedRow[] = [];
   let principalRemaining = principal;
   let unpaidInterest = 0;
   let interestCharged = 0;
-  // EXTEND_EMI resolutions push here: each raises the due amount for every period up to and
-  // including `toIndex` (the original contracted term). Multiple active extensions stack
-  // additively, so a second miss compounds on top of an earlier one.
+  // EXTEND_EMI resolutions push here: each raises the due amount for every period in its
+  // `eligible` set — every contracted period after the miss that was NOT already fully paid at
+  // its original amount. Multiple active extensions stack additively on the periods they share,
+  // so a second, genuinely separate miss compounds on top of an earlier one.
   //
   // perPeriodAddOn is rounded to paise, so summing it across many periods would drift a few
   // paise short of the true shortfall — and because this product charges a full flat
   // interestPerPeriod regardless of how small the remaining balance is, an unswept residual as
   // tiny as ₹0.05 would otherwise trigger one whole extra period's interest (₹1,000+). Instead
-  // the LAST period this extension applies to takes the exact remainder, guaranteeing the sum
-  // across the extension's periods equals the shortfall to the paisa — the same "final row is a
-  // plug" principle the original contract builder already uses.
-  const activeExtensions: { perPeriodAddOn: number; lastPeriodAddOn: number; toIndex: number }[] = [];
+  // the LAST eligible period takes the exact remainder, guaranteeing the sum across the
+  // extension's periods equals the shortfall to the paisa — the same "final row is a plug"
+  // principle the original contract builder already uses.
+  const activeExtensions: { perPeriodAddOn: number; lastPeriodAddOn: number; lastIndex: number; eligible: Set<number> }[] = [];
 
   for (let i = 1; i <= cap; i++) {
     if (principalRemaining <= 0.005 && unpaidInterest <= 0.005) break;
@@ -416,8 +436,8 @@ export function projectPer1000Schedule(opts: {
     const outstandingTotal = round2(principalRemaining + unpaidInterest);
     const extensionAddOn = round2(
       activeExtensions
-        .filter((e) => i <= e.toIndex)
-        .reduce((s, e) => s + (i === e.toIndex ? e.lastPeriodAddOn : e.perPeriodAddOn), 0),
+        .filter((e) => e.eligible.has(i))
+        .reduce((s, e) => s + (i === e.lastIndex ? e.lastPeriodAddOn : e.perPeriodAddOn), 0),
     );
     // Never more than the EMI (plus any EXTEND_EMI top-up the collector explicitly chose) —
     // arrears otherwise roll into additional periods instead of a balloon.
@@ -469,15 +489,23 @@ export function projectPer1000Schedule(opts: {
     });
 
     // A fresh EXTEND_EMI choice on this miss spreads its shortfall across the CONTRACTED
-    // periods still ahead. If the miss lands on the final contracted period there's nothing
-    // left to spread it over — it falls back to the default carry-forward behavior instead.
+    // periods still ahead that are NOT already fully paid at their original amount — a period
+    // paid in full before this resolution existed is left alone, and its share rolls onto the
+    // periods that are genuinely still open instead. If nothing later is still open (the rest
+    // of the loan was already paid off around this one miss), there's nowhere to spread it —
+    // it falls back to the default carry-forward behavior instead.
     if (isMissed && resolution === 'EXTEND_EMI') {
       const shortfall = round2(due - paid);
-      const remainingPeriods = periods - i;
-      if (shortfall > 0.005 && remainingPeriods > 0) {
-        const perPeriodAddOn = round2(shortfall / remainingPeriods);
-        const lastPeriodAddOn = round2(shortfall - perPeriodAddOn * (remainingPeriods - 1));
-        activeExtensions.push({ perPeriodAddOn, lastPeriodAddOn, toIndex: periods });
+      const eligible: number[] = [];
+      for (let j = i + 1; j <= periods; j++) {
+        const alreadySettled = (collected[j - 1] ?? 0) >= baseDue[j - 1] - 0.005;
+        if (!alreadySettled) eligible.push(j);
+      }
+      if (shortfall > 0.005 && eligible.length > 0) {
+        const perPeriodAddOn = round2(shortfall / eligible.length);
+        const lastIndex = eligible[eligible.length - 1];
+        const lastPeriodAddOn = round2(shortfall - perPeriodAddOn * (eligible.length - 1));
+        activeExtensions.push({ perPeriodAddOn, lastPeriodAddOn, lastIndex, eligible: new Set(eligible) });
       }
     }
 
@@ -771,6 +799,13 @@ export class TenantLoansService {
     await client.query(`ALTER TABLE loans ADD COLUMN IF NOT EXISTS reopen_comment TEXT`).catch(() => undefined);
     await client.query(`ALTER TABLE loans ADD COLUMN IF NOT EXISTS interest_per_1000_per_day NUMERIC(6,2)`).catch(() => undefined);
     await client.query(`ALTER TABLE installments ADD COLUMN IF NOT EXISTS miss_resolution TEXT`).catch(() => undefined);
+    await client.query(`ALTER TABLE loans ADD COLUMN IF NOT EXISTS pending_closure BOOLEAN NOT NULL DEFAULT FALSE`).catch(() => undefined);
+    // Belt-and-braces on a column that drives money maths — the service validates too, but the
+    // DB should reject a stray value even if something reaches it another way.
+    await client.query(
+      `ALTER TABLE installments ADD CONSTRAINT installments_miss_resolution_chk
+       CHECK (miss_resolution IS NULL OR miss_resolution IN ('PAY_EXTRA_NEXT','EXTEND_EMI','DEFER_TO_END'))`,
+    ).catch(() => undefined);
     this.widenedInterestSchemas.add(schemaName);
   }
 
@@ -785,8 +820,8 @@ export class TenantLoansService {
       const filterParams: unknown[] = [];
       let idx = 1;
 
-      // Role-based visibility: Agent (LOAN_OFFICER) sees only their own loans
-      if (user.role === 'LOAN_OFFICER') {
+      // Role-based visibility: Agent sees only their own loans
+      if (user.role === 'AGENT') {
         conditions.push(`l.loan_officer_id = $${idx++}`);
         filterParams.push(user.sub);
       }
@@ -795,8 +830,8 @@ export class TenantLoansService {
       if (opts.customerId) { conditions.push(`l.customer_id = $${idx++}`); filterParams.push(opts.customerId); }
       if (opts.branchId) { conditions.push(`l.branch_id = $${idx++}`); filterParams.push(opts.branchId); }
       if (opts.loanTypeId) { conditions.push(`l.loan_type_id = $${idx++}`); filterParams.push(opts.loanTypeId); }
-      // Only OWNER/ADMIN/MANAGER can filter by officer; for LOAN_OFFICER it's always self
-      if (opts.officerId && user.role !== 'LOAN_OFFICER') {
+      // Only OWNER/ADMIN/MANAGER can filter by officer; for AGENT it's always self
+      if (opts.officerId && user.role !== 'AGENT') {
         conditions.push(`l.loan_officer_id = $${idx++}`);
         filterParams.push(opts.officerId);
       }
@@ -866,6 +901,9 @@ export class TenantLoansService {
 
       if (!loanRes.rows[0]) throw new NotFoundException('Loan not found');
       const l = loanRes.rows[0];
+      if (user.role === 'AGENT' && l.loan_officer_id !== user.sub) {
+        throw new ForbiddenException('You can only view loans assigned to you');
+      }
       return {
         id: l.id, loanNumber: l.loan_number,
         customerId: l.customer_id_ref, customerName: l.customer_name, customerPhone: l.customer_phone,
@@ -886,6 +924,8 @@ export class TenantLoansService {
         closedAt: l.closed_at ?? null,
         closeComment: l.close_comment ?? null,
         reopenComment: l.reopen_comment ?? null,
+        pendingClosure: l.pending_closure ?? false,
+        loanOfficerId: l.loan_officer_id ?? null,
         createdAt: l.created_at, updatedAt: l.updated_at,
         projection: buildPer1000Projection(l, installmentsRes.rows),
         installments: installmentsRes.rows.map((i) => ({
@@ -904,7 +944,7 @@ export class TenantLoansService {
   }
 
   async create(user: TenantJwtPayload, dto: CreateLoanDto) {
-    if (!['ADMIN', 'LOAN_OFFICER'].includes(user.role)) throw new ForbiddenException('Only Admins and Loan Officers can create loans');
+    if (!['ADMIN', 'MANAGER', ...FIELD_ROLES].includes(user.role as UserRole)) throw new ForbiddenException('Only Admins, Managers, Agents or Staff can create loans');
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.interestRate < 0 || dto.interestRate > 100) throw new BadRequestException('Invalid interest rate');
     if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
@@ -926,11 +966,12 @@ export class TenantLoansService {
         ? new Date(dto.firstDueDate)
         : new Date(Date.now() + 30 * 86400000);
 
+      const officerId = MANAGER_ROLES.includes(user.role as UserRole) && dto.loanOfficerId ? dto.loanOfficerId : user.sub;
       const loanRes = await client.query(`
         INSERT INTO loans (loan_number, customer_id, loan_officer_id, branch_id, principal, interest_rate, term_months, status, purpose, first_due_date)
         VALUES ($1,$2,$3,$4,$5,$6,$7,'PENDING',$8,$9)
         RETURNING *
-      `, [loanNumber, dto.customerId, user.sub, dto.branchId ?? null, dto.principal, dto.interestRate, dto.termMonths, dto.purpose ?? null, firstDueDate.toISOString().slice(0, 10)]);
+      `, [loanNumber, dto.customerId, officerId, dto.branchId ?? null, dto.principal, dto.interestRate, dto.termMonths, dto.purpose ?? null, firstDueDate.toISOString().slice(0, 10)]);
 
       const loan = loanRes.rows[0];
 
@@ -982,9 +1023,10 @@ export class TenantLoansService {
   }
 
   async closeLoan(user: TenantJwtPayload, loanId: string, dto: { comment?: string } = {}) {
-    if (!['OWNER', 'MANAGER', 'ADMIN'].includes(user.role)) {
-      throw new BadRequestException('Only Owner, Manager or Admin can close a loan');
+    if (!MANAGER_ROLES.includes(user.role as UserRole) && !FIELD_ROLES.includes(user.role as UserRole)) {
+      throw new ForbiddenException('You do not have permission to close a loan');
     }
+    const isFieldRequest = FIELD_ROLES.includes(user.role as UserRole);
 
     const comment = (dto.comment ?? '').trim();
     if (!comment) {
@@ -1037,6 +1079,41 @@ export class TenantLoansService {
       const outstanding = parseFloat(duesRes.rows[0]?.outstanding ?? '0');
       const unpaidCount = parseInt(duesRes.rows[0]?.unpaid_count ?? '0', 10);
       const closedWithPendingDues = unpaidCount > 0 || outstanding > 0;
+
+      if (isFieldRequest) {
+        // Agent/Staff cannot finalize a close — flag it for a manager to approve instead.
+        await client.query(
+          `UPDATE loans SET pending_closure = TRUE, close_comment = $2, updated_at = NOW() WHERE id = $1`,
+          [loanId, comment],
+        );
+
+        await this.activity.record(client, user, {
+          action: 'loan.close_requested',
+          entityType: 'loan',
+          entityId: loanId,
+          entityLabel: loanNumber,
+          metadata: { comment, outstanding, unpaidInstallments: unpaidCount },
+        });
+
+        const mgrsRes = await client.query<{ id: string }>(
+          `SELECT id FROM users WHERE role IN ('OWNER','MANAGER','ADMIN') AND is_active = TRUE`,
+        );
+        const requesterName = `${user.firstName} ${user.lastName}`.trim() || user.email;
+        const customerName = [firstName, lastName].filter(Boolean).join(' ') || 'customer';
+        for (const m of mgrsRes.rows) {
+          await TenantNotificationsService.insertNotification(client, {
+            userId: m.id,
+            title: `Loan close requested — ${loanNumber}`,
+            body: `${requesterName} requested to close the loan for ${customerName}. Needs your approval.`,
+            type: 'loan',
+            entityType: 'loan',
+            entityId: loanId,
+            link: loanDetailLink(cycleType, loanId),
+          });
+        }
+
+        return { id: loanId, status, pendingClosure: true, closeComment: comment };
+      }
 
       await client.query(
         `UPDATE loans
@@ -1103,8 +1180,179 @@ export class TenantLoansService {
     });
   }
 
+  async approveLoan(user: TenantJwtPayload, loanId: string) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) {
+      throw new ForbiddenException('Only Owner, Manager or Admin can approve a loan');
+    }
+    return this.withSchema(user.schemaName, async (client) => {
+      const res = await client.query<{ id: string; status: string; loan_number: string }>(
+        `SELECT id, status, loan_number FROM loans WHERE id = $1 AND deleted_at IS NULL`,
+        [loanId],
+      );
+      if (!res.rows[0]) throw new NotFoundException('Loan not found');
+      if (res.rows[0].status !== 'PENDING') {
+        throw new BadRequestException(`Only PENDING loans can be approved (current status: ${res.rows[0].status})`);
+      }
+      await client.query(`UPDATE loans SET status = 'APPROVED', updated_at = NOW() WHERE id = $1`, [loanId]);
+      await this.activity.record(client, user, {
+        action: 'loan.approved',
+        entityType: 'loan',
+        entityId: loanId,
+        entityLabel: res.rows[0].loan_number,
+      });
+      return { id: loanId, status: 'APPROVED' };
+    });
+  }
+
+  async rejectLoan(user: TenantJwtPayload, loanId: string, dto: { reason?: string } = {}) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) {
+      throw new ForbiddenException('Only Owner, Manager or Admin can reject a loan');
+    }
+    return this.withSchema(user.schemaName, async (client) => {
+      const res = await client.query<{ id: string; status: string; loan_number: string }>(
+        `SELECT id, status, loan_number FROM loans WHERE id = $1 AND deleted_at IS NULL`,
+        [loanId],
+      );
+      if (!res.rows[0]) throw new NotFoundException('Loan not found');
+      if (res.rows[0].status !== 'PENDING') {
+        throw new BadRequestException(`Only PENDING loans can be rejected (current status: ${res.rows[0].status})`);
+      }
+      const reason = (dto.reason ?? '').trim() || null;
+      // No dedicated rejection-reason column exists; reuse close_comment, mirroring how the
+      // close/reopen flow already stores its comment there.
+      await client.query(
+        `UPDATE loans SET status = 'REJECTED', close_comment = $2, updated_at = NOW() WHERE id = $1`,
+        [loanId, reason],
+      );
+      await this.activity.record(client, user, {
+        action: 'loan.rejected',
+        entityType: 'loan',
+        entityId: loanId,
+        entityLabel: res.rows[0].loan_number,
+        metadata: { reason },
+      });
+      return { id: loanId, status: 'REJECTED', reason };
+    });
+  }
+
+  async approveCloseLoan(user: TenantJwtPayload, loanId: string) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) {
+      throw new ForbiddenException('Only Owner, Manager or Admin can approve a loan closure');
+    }
+    return this.withSchema(user.schemaName, async (client) => {
+      const res = await client.query<{
+        id: string; status: string; loan_number: string; pending_closure: boolean;
+        loan_officer_id: string | null; cycle_type: string | null;
+        first_name: string | null; last_name: string | null;
+      }>(
+        `SELECT l.id, l.status, l.loan_number, l.pending_closure, l.loan_officer_id, l.cycle_type,
+                c.first_name, c.last_name
+         FROM loans l
+         LEFT JOIN customers c ON c.id = l.customer_id
+         WHERE l.id = $1 AND l.deleted_at IS NULL`,
+        [loanId],
+      );
+      if (!res.rows[0]) throw new NotFoundException('Loan not found');
+      const row = res.rows[0];
+      if (!row.pending_closure) {
+        throw new BadRequestException('This loan does not have a pending closure request');
+      }
+
+      await client.query(
+        `UPDATE loans SET status = 'CLOSED', closed_at = NOW(), pending_closure = FALSE, updated_at = NOW() WHERE id = $1`,
+        [loanId],
+      );
+      await client.query(
+        `UPDATE installments SET status = 'WAIVED' WHERE loan_id = $1 AND status IN ('PENDING','PARTIALLY_PAID','OVERDUE')`,
+        [loanId],
+      );
+
+      await this.activity.record(client, user, {
+        action: 'loan.close_approved',
+        entityType: 'loan',
+        entityId: loanId,
+        entityLabel: row.loan_number,
+      });
+
+      const notifyIds = new Set<string>();
+      if (row.loan_officer_id) notifyIds.add(row.loan_officer_id);
+      const customerName = [row.first_name, row.last_name].filter(Boolean).join(' ') || 'customer';
+      for (const uid of notifyIds) {
+        await TenantNotificationsService.insertNotification(client, {
+          userId: uid,
+          title: `Loan close approved — ${row.loan_number}`,
+          body: `Closure approved by ${(`${user.firstName} ${user.lastName}`).trim() || user.email} for ${customerName}.`,
+          type: 'loan',
+          entityType: 'loan',
+          entityId: loanId,
+          link: loanDetailLink(row.cycle_type, loanId),
+        });
+      }
+
+      return { id: loanId, status: 'CLOSED' };
+    });
+  }
+
+  /**
+   * Extends a loan's schedule with one extra installment. Treated as an edit to the loan record
+   * (not a "create loan" action), so — matching Update Loan=No for Agent/Staff — this is
+   * restricted to MANAGER_ROLES only, unlike the create-loan endpoints which also allow
+   * FIELD_ROLES.
+   */
+  async addInstallment(
+    user: TenantJwtPayload,
+    loanId: string,
+    dto: { dueDate: string; principalAmount?: number; interestAmount?: number; totalAmount: number },
+  ) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) {
+      throw new ForbiddenException('Only Owner, Manager or Admin can add an installment');
+    }
+    if (!dto.dueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.dueDate)) {
+      throw new BadRequestException('dueDate must be YYYY-MM-DD');
+    }
+    if (typeof dto.totalAmount !== 'number' || dto.totalAmount <= 0) {
+      throw new BadRequestException('totalAmount must be a positive number');
+    }
+    const principalAmount = dto.principalAmount ?? dto.totalAmount;
+    const interestAmount = dto.interestAmount ?? 0;
+
+    return this.withSchema(user.schemaName, async (client) => {
+      const loanRes = await client.query(`SELECT id, loan_number FROM loans WHERE id = $1 AND deleted_at IS NULL`, [loanId]);
+      if (!loanRes.rows[0]) throw new NotFoundException('Loan not found');
+
+      const numRes = await client.query<{ next: string }>(
+        `SELECT COALESCE(MAX(installment_number), 0) + 1 AS next FROM installments WHERE loan_id = $1`,
+        [loanId],
+      );
+      const nextNumber = parseInt(numRes.rows[0].next, 10);
+
+      const insRes = await client.query(
+        `INSERT INTO installments (loan_id, installment_number, due_date, principal_amount, interest_amount, total_amount, status)
+         VALUES ($1,$2,$3,$4,$5,$6,'PENDING')
+         RETURNING *`,
+        [loanId, nextNumber, dto.dueDate, principalAmount, interestAmount, dto.totalAmount],
+      );
+      const inst = insRes.rows[0];
+
+      await this.activity.record(client, user, {
+        action: 'installment.added',
+        entityType: 'loan',
+        entityId: loanId,
+        entityLabel: loanRes.rows[0].loan_number,
+        metadata: { installmentNumber: nextNumber, dueDate: dto.dueDate, totalAmount: dto.totalAmount },
+      });
+
+      return {
+        id: inst.id, number: inst.installment_number, dueDate: inst.due_date,
+        principal: parseFloat(inst.principal_amount), interest: parseFloat(inst.interest_amount),
+        total: parseFloat(inst.total_amount), paid: parseFloat(inst.paid_amount),
+        status: inst.status, paidAt: inst.paid_at,
+      };
+    });
+  }
+
   async reopenLoan(user: TenantJwtPayload, loanId: string, dto: { comment?: string } = {}) {
-    if (!['OWNER', 'MANAGER', 'ADMIN'].includes(user.role)) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) {
       throw new BadRequestException('Only Owner, Manager or Admin can reopen a loan');
     }
 
@@ -1248,7 +1496,7 @@ export class TenantLoansService {
       const filterParams: unknown[] = [];
       let idx = 1;
 
-      if (user.role === 'LOAN_OFFICER') {
+      if (user.role === 'AGENT') {
         conditions.push(`l.loan_officer_id = $${idx++}`);
         filterParams.push(user.sub);
       }
@@ -1325,7 +1573,7 @@ export class TenantLoansService {
   }
 
   async createWeeklyLoan(user: TenantJwtPayload, dto: CreateWeeklyLoanDto) {
-    if (!['ADMIN', 'LOAN_OFFICER'].includes(user.role)) throw new ForbiddenException('Only Admins and Loan Officers can create loans');
+    if (!['ADMIN', 'MANAGER', ...FIELD_ROLES].includes(user.role as UserRole)) throw new ForbiddenException('Only Admins, Managers, Agents or Staff can create loans');
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.termWeeks < 1 || dto.termWeeks > 99) throw new BadRequestException('Term must be 1–99 weeks');
     if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
@@ -1350,6 +1598,7 @@ export class TenantLoansService {
         dto.firstDueDate, dto.calculationType, dto.emiRounding, dto.interestPerDay,
       );
 
+      const officerId = MANAGER_ROLES.includes(user.role as UserRole) && dto.loanOfficerId ? dto.loanOfficerId : user.sub;
       const loanRes = await client.query(`
         INSERT INTO loans (
           loan_number, customer_id, loan_officer_id, branch_id, loan_type_id,
@@ -1359,7 +1608,7 @@ export class TenantLoansService {
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'DISBURSED',$9,$10,'WEEKLY',$11,$12,$13,$14,$15)
         RETURNING *
       `, [
-        loanNumber, dto.customerId, user.sub, dto.branchId ?? null, dto.loanTypeId ?? null,
+        loanNumber, dto.customerId, officerId, dto.branchId ?? null, dto.loanTypeId ?? null,
         dto.principal, storedRate, dto.termWeeks, dto.purpose ?? null,
         dto.firstDueDate, dto.calculationType, emi,
         dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null,
@@ -1436,7 +1685,7 @@ export class TenantLoansService {
       const filterParams: unknown[] = [];
       let idx = 1;
 
-      if (user.role === 'LOAN_OFFICER') { conditions.push(`l.loan_officer_id = $${idx++}`); filterParams.push(user.sub); }
+      if (user.role === 'AGENT') { conditions.push(`l.loan_officer_id = $${idx++}`); filterParams.push(user.sub); }
       if (opts.status)    { conditions.push(`l.status = $${idx++}`);    filterParams.push(opts.status); }
       if (opts.branchId)  { conditions.push(`l.branch_id = $${idx++}`); filterParams.push(opts.branchId); }
       if (opts.cycleType) { conditions.push(`l.cycle_type = $${idx++}`); filterParams.push(opts.cycleType); }
@@ -1510,7 +1759,7 @@ export class TenantLoansService {
   }
 
   async createDailyLoan(user: TenantJwtPayload, dto: CreateDailyLoanDto) {
-    if (!['ADMIN', 'LOAN_OFFICER'].includes(user.role)) throw new ForbiddenException('Only Admins and Loan Officers can create loans');
+    if (!['ADMIN', 'MANAGER', ...FIELD_ROLES].includes(user.role as UserRole)) throw new ForbiddenException('Only Admins, Managers, Agents or Staff can create loans');
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.termDays < 1 || dto.termDays > 3650) throw new BadRequestException('Term must be 1–3650 days');
     if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
@@ -1536,6 +1785,7 @@ export class TenantLoansService {
         dto.firstDueDate, dto.calculationType, dto.emiRounding, dto.cycleType, dto.interestPerDay,
       );
 
+      const officerId = MANAGER_ROLES.includes(user.role as UserRole) && dto.loanOfficerId ? dto.loanOfficerId : user.sub;
       const loanRes = await client.query(`
         INSERT INTO loans (
           loan_number, customer_id, loan_officer_id, branch_id, loan_type_id,
@@ -1545,7 +1795,7 @@ export class TenantLoansService {
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'DISBURSED',$9,$10,$11,$12,$13,$14,$15,$16)
         RETURNING *
       `, [
-        loanNumber, dto.customerId, user.sub, dto.branchId ?? null, dto.loanTypeId ?? null,
+        loanNumber, dto.customerId, officerId, dto.branchId ?? null, dto.loanTypeId ?? null,
         dto.principal, storedRate, dto.termDays, dto.purpose ?? null,
         dto.firstDueDate, dto.cycleType, dto.calculationType, emi,
         dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null,
@@ -1616,7 +1866,7 @@ export class TenantLoansService {
       const filterParams: unknown[] = [];
       let idx = 1;
 
-      if (user.role === 'LOAN_OFFICER') { conditions.push(`l.loan_officer_id = $${idx++}`); filterParams.push(user.sub); }
+      if (user.role === 'AGENT') { conditions.push(`l.loan_officer_id = $${idx++}`); filterParams.push(user.sub); }
       if (opts.status)   { conditions.push(`l.status = $${idx++}`);    filterParams.push(opts.status); }
       if (opts.branchId) { conditions.push(`l.branch_id = $${idx++}`); filterParams.push(opts.branchId); }
       if (opts.search) {
@@ -1683,7 +1933,7 @@ export class TenantLoansService {
   }
 
   async createMonthlyLoan(user: TenantJwtPayload, dto: CreateMonthlyLoanDto) {
-    if (!['ADMIN', 'LOAN_OFFICER'].includes(user.role)) throw new ForbiddenException('Only Admins and Loan Officers can create loans');
+    if (!['ADMIN', 'MANAGER', ...FIELD_ROLES].includes(user.role as UserRole)) throw new ForbiddenException('Only Admins, Managers, Agents or Staff can create loans');
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
     if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
@@ -1706,6 +1956,7 @@ export class TenantLoansService {
         dto.principal, dto.interestRate, dto.termMonths, dto.firstDueDate,
       );
 
+      const officerId = MANAGER_ROLES.includes(user.role as UserRole) && dto.loanOfficerId ? dto.loanOfficerId : user.sub;
       const loanRes = await client.query(`
         INSERT INTO loans (
           loan_number, customer_id, loan_officer_id, branch_id, loan_type_id,
@@ -1715,7 +1966,7 @@ export class TenantLoansService {
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'MONTHLY','DISBURSED',$10,$11,$12,$13,NOW())
         RETURNING *
       `, [
-        loanNumber, dto.customerId, user.sub, dto.branchId || null, dto.loanTypeId ?? null,
+        loanNumber, dto.customerId, officerId, dto.branchId || null, dto.loanTypeId ?? null,
         dto.principal, dto.interestRate, dto.termMonths, monthlyInterest,
         dto.purpose ?? null, dto.firstDueDate,
         dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null,
@@ -1786,7 +2037,7 @@ export class TenantLoansService {
       const filterParams: unknown[] = [];
       let idx = 1;
 
-      if (user.role === 'LOAN_OFFICER') { conditions.push(`l.loan_officer_id = $${idx++}`); filterParams.push(user.sub); }
+      if (user.role === 'AGENT') { conditions.push(`l.loan_officer_id = $${idx++}`); filterParams.push(user.sub); }
       if (opts.status)   { conditions.push(`l.status = $${idx++}`);    filterParams.push(opts.status); }
       if (opts.branchId) { conditions.push(`l.branch_id = $${idx++}`); filterParams.push(opts.branchId); }
       if (opts.search) {
@@ -1853,7 +2104,7 @@ export class TenantLoansService {
   }
 
   async createAgentRiskLoan(user: TenantJwtPayload, dto: CreateAgentRiskLoanDto) {
-    if (!['ADMIN', 'LOAN_OFFICER'].includes(user.role)) throw new ForbiddenException('Only Admins and Loan Officers can create loans');
+    if (!['ADMIN', 'MANAGER', ...FIELD_ROLES].includes(user.role as UserRole)) throw new ForbiddenException('Only Admins, Managers, Agents or Staff can create loans');
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
     if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
@@ -1875,6 +2126,7 @@ export class TenantLoansService {
         dto.principal, dto.interestRate, dto.termMonths, dto.firstDueDate,
       );
 
+      const officerId = MANAGER_ROLES.includes(user.role as UserRole) && dto.loanOfficerId ? dto.loanOfficerId : user.sub;
       const loanRes = await client.query(`
         INSERT INTO loans (
           loan_number, customer_id, loan_officer_id, branch_id, loan_type_id,
@@ -1884,7 +2136,7 @@ export class TenantLoansService {
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'AGENT_RISK','DISBURSED',$10,$11,$12,$13,NOW())
         RETURNING *
       `, [
-        loanNumber, dto.customerId, user.sub, dto.branchId || null, dto.loanTypeId ?? null,
+        loanNumber, dto.customerId, officerId, dto.branchId || null, dto.loanTypeId ?? null,
         dto.principal, dto.interestRate, dto.termMonths, monthlyInterest,
         dto.purpose ?? null, dto.firstDueDate,
         dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null,
@@ -1954,7 +2206,7 @@ export class TenantLoansService {
       const filterParams: unknown[] = [];
       let idx = 1;
 
-      if (user.role === 'LOAN_OFFICER') { conditions.push(`l.loan_officer_id = $${idx++}`); filterParams.push(user.sub); }
+      if (user.role === 'AGENT') { conditions.push(`l.loan_officer_id = $${idx++}`); filterParams.push(user.sub); }
       if (opts.status) { conditions.push(`l.status = $${idx++}`); filterParams.push(opts.status); }
       if (opts.branchId) { conditions.push(`l.branch_id = $${idx++}`); filterParams.push(opts.branchId); }
       if (opts.search) {
@@ -2010,7 +2262,7 @@ export class TenantLoansService {
   }
 
   async createTermLoan(user: TenantJwtPayload, dto: CreateTermLoanDto) {
-    if (!['ADMIN', 'LOAN_OFFICER'].includes(user.role)) throw new ForbiddenException('Only Admins and Loan Officers can create loans');
+    if (!['ADMIN', 'MANAGER', ...FIELD_ROLES].includes(user.role as UserRole)) throw new ForbiddenException('Only Admins, Managers, Agents or Staff can create loans');
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.interestRate < 0 || dto.interestRate > 100) throw new BadRequestException('Invalid interest rate');
     if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
@@ -2033,6 +2285,7 @@ export class TenantLoansService {
         dto.principal, dto.interestRate, dto.termMonths, dto.firstDueDate, dto.calculationType, dto.emiRounding,
       );
 
+      const officerId = MANAGER_ROLES.includes(user.role as UserRole) && dto.loanOfficerId ? dto.loanOfficerId : user.sub;
       const loanRes = await client.query(`
         INSERT INTO loans (
           loan_number, customer_id, loan_officer_id, branch_id, loan_type_id,
@@ -2042,7 +2295,7 @@ export class TenantLoansService {
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'DISBURSED',$10,$11,NOW(),'TERM_LOAN',$12,$13,$14)
         RETURNING id, loan_number
       `, [
-        loanNumber, dto.customerId, user.sub, dto.branchId || null, dto.loanTypeId ?? null,
+        loanNumber, dto.customerId, officerId, dto.branchId || null, dto.loanTypeId ?? null,
         dto.principal, dto.interestRate, dto.termMonths, emi,
         dto.purpose ?? null, dto.firstDueDate, dto.calculationType,
         dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null,
@@ -2091,7 +2344,7 @@ export class TenantLoansService {
   }
 
   async deleteLoan(user: TenantJwtPayload, loanId: string) {
-    if (!['OWNER', 'MANAGER', 'ADMIN'].includes(user.role)) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) {
       throw new ForbiddenException('Only Owner, Manager or Admin can delete a loan');
     }
     return this.withSchema(user.schemaName, async (client) => {
@@ -2118,7 +2371,7 @@ export class TenantLoansService {
   }
 
   async recordPayment(user: TenantJwtPayload, loanId: string, dto: RecordPaymentDto) {
-    if (user.role === 'VIEWER') throw new ForbiddenException('Viewers cannot record payments');
+    if (user.role === 'CUSTOMER') throw new ForbiddenException('Customers cannot record payments');
 
     const VALID_METHODS = ['CASH', 'UPI', 'BANK_TRANSFER', 'CHEQUE', 'NEFT', 'RTGS'];
     if (!dto.amount || dto.amount <= 0) throw new BadRequestException('Payment amount must be greater than zero');
@@ -2262,58 +2515,181 @@ export class TenantLoansService {
   }
 
   /**
-   * Records how a collector has chosen to handle a missed/short PER_1000_PER_DAY installment.
-   * Only EXTEND_EMI changes the projected numbers (see projectPer1000Schedule); the other two
-   * are labels the projection surfaces back on the row. Never touches the stored contract
-   * amounts — this is metadata, re-read by buildPer1000Projection on every request.
+   * Loads the loan + installments and asserts the given installment is genuinely resolvable,
+   * returning everything the resolve/preview paths both need. Eligibility is judged from the
+   * exact same live projection the UI renders from — not a raw contract-amount comparison — so
+   * it can never drift from what the collector actually sees as red on screen.
+   */
+  private async loadResolvableMiss(client: import('pg').PoolClient, loanId: string, installmentId: string) {
+    const loanRes = await client.query(`SELECT * FROM loans WHERE id = $1`, [loanId]);
+    if (!loanRes.rows[0] || loanRes.rows[0].deleted_at) throw new NotFoundException('Loan not found');
+    const loan = loanRes.rows[0];
+    if (loan.calculation_type !== 'PER_1000_PER_DAY') {
+      throw new BadRequestException('Missed-payment options only apply to ₹-per-₹1,000-per-day loans');
+    }
+
+    const instRes = await client.query(`SELECT * FROM installments WHERE loan_id = $1 ORDER BY installment_number`, [loanId]);
+    const inst = instRes.rows.find((r) => r.id === installmentId);
+    if (!inst) throw new NotFoundException('Installment not found');
+
+    const projection = buildPer1000Projection(loan, instRes.rows);
+    const row = projection?.rows.find((r) => r.installmentId === installmentId);
+    if (!projection || !row?.isMissed) {
+      throw new BadRequestException('This installment is not currently missed or short, so there is nothing to resolve');
+    }
+    return { loan, installments: instRes.rows, inst, projection, row };
+  }
+
+  /**
+   * What each option would actually do to this loan, in rupees, before anyone commits to one.
+   * Powers the confirmation step — a collector should never change what a borrower owes from a
+   * dropdown without seeing the consequence first.
+   */
+  async previewMissResolutions(user: TenantJwtPayload, loanId: string, installmentId: string) {
+    return this.withSchema(user.schemaName, async (client) => {
+      const { loan, installments, inst, projection, row } = await this.loadResolvableMiss(client, loanId, installmentId);
+
+      const shortfall = round2(row.totalAmount - row.amountPaid);
+      // The next collection the agent will actually make — i.e. the first period after this one
+      // that isn't already settled. Using "the very next row" would report an already-paid
+      // instalment and wrongly read as "nothing changes".
+      const nextOpenAfter = (rows: typeof projection.rows) =>
+        rows.find((r) => r.number > row.number && r.status !== 'PAID');
+      const currentNext = nextOpenAfter(projection.rows);
+      const current = {
+        periods: projection.rows.length,
+        totalPayable: projection.totalPayable,
+        nextDue: currentNext?.totalAmount ?? projection.emi,
+      };
+
+      const options = (['PAY_EXTRA_NEXT', 'EXTEND_EMI', 'DEFER_TO_END'] as MissResolution[]).map((strategy) => {
+        const candidate = installments.map((r) =>
+          r.id === installmentId ? { ...r, miss_resolution: strategy } : r,
+        );
+        const p = buildPer1000Projection(loan, candidate)!;
+        const nextDue = nextOpenAfter(p.rows)?.totalAmount ?? p.emi;
+        const changesAmounts =
+          Math.abs(nextDue - current.nextDue) > 0.005 ||
+          p.rows.length !== current.periods ||
+          Math.abs(p.totalPayable - current.totalPayable) > 0.005;
+
+        // EXTEND_EMI needs somewhere to spread the shortfall. If every later contracted period
+        // is already settled there is nothing to raise, and accepting the choice would leave the
+        // UI claiming an outcome the maths never produced.
+        const applicable = strategy !== 'EXTEND_EMI' || changesAmounts;
+
+        return {
+          strategy,
+          applicable,
+          unavailableReason: applicable
+            ? null
+            : 'Every later installment is already paid, so there is nothing left to spread this across. Use another option.',
+          changesAmounts,
+          periods: p.rows.length,
+          totalPayable: p.totalPayable,
+          nextDue,
+          periodsAffected: p.rows.filter((r, i) => {
+            const before = projection.rows[i];
+            return before && Math.abs(r.totalAmount - before.totalAmount) > 0.005;
+          }).length,
+        };
+      });
+
+      return {
+        installmentId,
+        installmentNumber: inst.installment_number,
+        dueDate: toYmd(inst.due_date),
+        shortfall,
+        current,
+        options,
+      };
+    });
+  }
+
+  /**
+   * Records how a collector has chosen to handle a missed/short installment, after they have
+   * seen the preview above. Never touches the stored contract amounts — this is metadata,
+   * re-read by buildPer1000Projection on every request. Pass `null` to clear the choice and
+   * return the installment to unresolved, which is the undo path.
    */
   async resolveMissedInstallment(
     user: TenantJwtPayload,
     loanId: string,
     installmentId: string,
-    strategy: MissResolution,
+    strategy: MissResolution | null,
   ) {
-    if (user.role === 'VIEWER') throw new ForbiddenException('Viewers cannot resolve missed payments');
+    if (user.role === 'CUSTOMER') throw new ForbiddenException('Customers cannot resolve missed payments');
     const VALID: MissResolution[] = ['PAY_EXTRA_NEXT', 'EXTEND_EMI', 'DEFER_TO_END'];
-    if (!VALID.includes(strategy)) throw new BadRequestException(`strategy must be one of: ${VALID.join(', ')}`);
+    if (strategy !== null && !VALID.includes(strategy)) {
+      throw new BadRequestException(`strategy must be null (to clear) or one of: ${VALID.join(', ')}`);
+    }
 
     return this.withSchema(user.schemaName, async (client) => {
-      const loanRes = await client.query(`SELECT * FROM loans WHERE id = $1`, [loanId]);
-      if (!loanRes.rows[0] || loanRes.rows[0].deleted_at) throw new NotFoundException('Loan not found');
-      const loan = loanRes.rows[0];
-      if (loan.calculation_type !== 'PER_1000_PER_DAY') {
-        throw new BadRequestException('Missed-payment resolution only applies to PER_1000_PER_DAY loans');
-      }
+      const { loan, installments, inst, projection } = await this.loadResolvableMiss(client, loanId, installmentId);
+      const previous = (inst.miss_resolution as MissResolution | null) ?? null;
 
-      const instRes = await client.query(`SELECT * FROM installments WHERE loan_id = $1 ORDER BY installment_number`, [loanId]);
-      const inst = instRes.rows.find((r) => r.id === installmentId);
-      if (!inst) throw new NotFoundException('Installment not found');
-
-      // Use the exact same live projection the UI renders from — not a raw contract-amount
-      // comparison — so eligibility can never drift from what the collector actually sees as
-      // red on screen (e.g. a period whose due was already bumped by an earlier EXTEND_EMI).
-      const projection = buildPer1000Projection(loan, instRes.rows);
-      const row = projection?.rows.find((r) => r.installmentId === installmentId);
-      if (!row?.isMissed) {
-        throw new BadRequestException('This installment is not currently missed or short');
+      // Re-check applicability server-side rather than trusting the preview the client saw —
+      // another collector may have recorded a payment in between.
+      if (strategy === 'EXTEND_EMI') {
+        const candidate = installments.map((r) =>
+          r.id === installmentId ? { ...r, miss_resolution: strategy } : r,
+        );
+        const p = buildPer1000Projection(loan, candidate)!;
+        const unchanged =
+          p.rows.length === projection.rows.length &&
+          Math.abs(p.totalPayable - projection.totalPayable) < 0.005;
+        if (unchanged) {
+          throw new BadRequestException(
+            'Every later installment is already paid, so there is nothing left to spread this across. Use another option.',
+          );
+        }
       }
 
       await client.query(`UPDATE installments SET miss_resolution = $1 WHERE id = $2`, [strategy, installmentId]);
 
       await this.activity.record(client, user, {
-        action: 'installment.miss_resolved',
+        action: strategy === null ? 'installment.miss_resolution_cleared' : 'installment.miss_resolved',
         entityType: 'loan',
         entityId: loanId,
         entityLabel: loan.loan_number,
-        metadata: { installmentId, installmentNumber: inst.installment_number, strategy },
+        metadata: {
+          installmentId,
+          installmentNumber: inst.installment_number,
+          strategy,
+          previousStrategy: previous,
+        },
       });
 
-      return { installmentId, missResolution: strategy };
+      // Only the option that actually re-prices the loan is worth interrupting a manager for.
+      if (strategy === 'EXTEND_EMI') {
+        const after = buildPer1000Projection(loan, await client
+          .query(`SELECT * FROM installments WHERE loan_id = $1 ORDER BY installment_number`, [loanId])
+          .then((r) => r.rows))!;
+        const mgrs = await client.query<{ id: string }>(
+          `SELECT id FROM users WHERE role IN ('OWNER','MANAGER','ADMIN') AND is_active = TRUE`,
+        );
+        for (const m of mgrs.rows) {
+          await TenantNotificationsService.insertNotification(client, {
+            userId: m.id,
+            title: `Instalment amount raised — ${loan.loan_number}`,
+            body:
+              `Missed instalment #${inst.installment_number} was spread across the remaining ` +
+              `collections. The amount due each time is now ₹${after.emi.toLocaleString('en-IN')} or more — ` +
+              `tell the borrower before the next visit.`,
+            type: 'loan',
+            entityType: 'loan',
+            entityId: loanId,
+            link: `/loans/${loanId}`,
+          });
+        }
+      }
+
+      return { installmentId, missResolution: strategy, previousResolution: previous };
     });
   }
 
   async undoInstallmentPayment(user: TenantJwtPayload, loanId: string, installmentId: string) {
-    if (!['OWNER', 'MANAGER', 'ADMIN'].includes(user.role)) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) {
       throw new ForbiddenException('Only Owner, Manager or Admin can undo a payment');
     }
 

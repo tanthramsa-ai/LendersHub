@@ -4,6 +4,7 @@ import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { sanitizeStrings } from '../../common/utils/sanitize';
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
 import { validateCustomerFields } from './customer-validation';
+import { MANAGER_ROLES, UserRole } from '../common/roles';
 
 export interface CreateCustomerDto {
   firstName: string;
@@ -79,7 +80,7 @@ export class TenantCustomersService {
       const filterParams: unknown[] = [];
       let idx = 1;
 
-      if (user.role === 'LOAN_OFFICER') {
+      if (user.role === 'AGENT') {
         conditions.push(`c.id IN (SELECT DISTINCT customer_id FROM loans WHERE loan_officer_id = $${idx++})`);
         filterParams.push(user.sub);
       }
@@ -181,7 +182,7 @@ export class TenantCustomersService {
   }
 
   async create(user: TenantJwtPayload, dto: CreateCustomerDto) {
-    if (user.role === 'VIEWER') throw new ForbiddenException('Customers cannot add customers');
+    if (user.role === 'CUSTOMER') throw new ForbiddenException('Customers cannot add customers');
     dto = sanitizeStrings(dto);
     validateCustomerFields({ ...dto, requireCore: true });
 
@@ -229,7 +230,7 @@ export class TenantCustomersService {
   }
 
   async setActive(user: TenantJwtPayload, id: string, isActive: boolean) {
-    if (user.role === 'VIEWER') throw new ForbiddenException('Viewers cannot modify customers');
+    if (user.role === 'CUSTOMER') throw new ForbiddenException('Customers cannot modify customers');
     return this.withSchema(user.schemaName, async (client) => {
       const res = await client.query(
         `UPDATE customers SET is_active = $1, updated_at = NOW() WHERE id = $2 RETURNING id, is_active, customer_code, first_name, last_name`,
@@ -248,7 +249,7 @@ export class TenantCustomersService {
   }
 
   async softDelete(user: TenantJwtPayload, id: string) {
-    if (!['OWNER', 'MANAGER', 'ADMIN'].includes(user.role)) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) {
       throw new ForbiddenException('Only Owner, Manager or Admin can delete customers');
     }
     return this.withSchema(user.schemaName, async (client) => {
@@ -276,7 +277,7 @@ export class TenantCustomersService {
   }
 
   async update(user: TenantJwtPayload, id: string, dto: UpdateCustomerDto) {
-    if (user.role === 'VIEWER') throw new ForbiddenException('You do not have permission to update customers');
+    if (user.role === 'CUSTOMER') throw new ForbiddenException('You do not have permission to update customers');
     dto = sanitizeStrings(dto);
     validateCustomerFields({ ...dto, requireCore: false });
 

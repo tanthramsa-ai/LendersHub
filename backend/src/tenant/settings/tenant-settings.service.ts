@@ -2,6 +2,7 @@ import { Injectable, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
+import { USER_ADMIN_ROLES, UserRole } from '../common/roles';
 
 export interface SmsConfigDto {
   provider: 'fast2sms' | 'msg91' | 'console';
@@ -38,7 +39,7 @@ export class TenantSettingsService {
   }
 
   private assertAdmin(user: TenantJwtPayload) {
-    if (!['OWNER', 'ADMIN'].includes(user.role)) throw new ForbiddenException('Only admins can access settings');
+    if (!USER_ADMIN_ROLES.includes(user.role as UserRole)) throw new ForbiddenException('Only admins can access settings');
   }
 
   async getSmsConfig(user: TenantJwtPayload) {

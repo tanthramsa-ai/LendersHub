@@ -4,7 +4,9 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
-  getAgentRiskLoan, recordPayment, undoInstallmentPayment, closeLoan, reopenLoan, AgentRiskLoanDetail, MonthlyInstallment,
+  getAgentRiskLoan, recordPayment, undoInstallmentPayment, closeLoan, reopenLoan,
+  approveLoan, rejectLoan, approveCloseLoan,
+  AgentRiskLoanDetail, MonthlyInstallment,
   getTenantSession, COLLECTION_ROLES, MANAGER_ROLES,
 } from '@/services/tenant-api';
 import { CloseLoanModal, CloseCommentBanner, ReopenLoanModal } from '@/components/CloseLoanModal';
@@ -23,6 +25,7 @@ const LOAN_STATUS_COLORS: Record<string, string> = {
   DISBURSED: 'bg-green-100 text-green-700',
   PENDING:   'bg-yellow-100 text-yellow-700',
   APPROVED:  'bg-blue-100 text-blue-700',
+  REJECTED:  'bg-red-100 text-red-700',
   CLOSED:    'bg-slate-200 text-slate-800',
   DEFAULTED: 'bg-red-100 text-red-700',
 };
@@ -82,8 +85,8 @@ export default function AgentRiskLoanDetailPage() {
   const params = useParams<{ subdomain: string; id: string }>();
   const { subdomain, id } = params;
   const session = getTenantSession();
-  const canRecord = COLLECTION_ROLES.includes(session?.user.role ?? 'VIEWER');
-  const canClose = MANAGER_ROLES.includes(session?.user.role ?? 'VIEWER');
+  const canRecord = COLLECTION_ROLES.includes(session?.user.role ?? 'CUSTOMER');
+  const canClose = MANAGER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
 
   const [loan, setLoan] = useState<AgentRiskLoanDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -102,6 +105,10 @@ export default function AgentRiskLoanDetailPage() {
   const [showReopenConfirm, setShowReopenConfirm] = useState(false);
   const [reopening, setReopening] = useState(false);
   const [reopenError, setReopenError] = useState('');
+  const [approving, setApproving] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
+  const [approvingClose, setApprovingClose] = useState(false);
+  const [actionError, setActionError] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true); setError('');
@@ -177,6 +184,41 @@ export default function AgentRiskLoanDetailPage() {
     } finally { setReopening(false); }
   }
 
+  async function handleApprove() {
+    setApproving(true); setActionError('');
+    try {
+      await approveLoan(id);
+      refreshNotificationBell();
+      await load();
+    } catch (e: unknown) {
+      setActionError((e as Error).message);
+    } finally { setApproving(false); }
+  }
+
+  async function handleReject() {
+    const reason = window.prompt('Reason for rejecting this loan (optional):') ?? undefined;
+    if (reason === undefined) return; // cancelled
+    setRejecting(true); setActionError('');
+    try {
+      await rejectLoan(id, reason || undefined);
+      refreshNotificationBell();
+      await load();
+    } catch (e: unknown) {
+      setActionError((e as Error).message);
+    } finally { setRejecting(false); }
+  }
+
+  async function handleApproveClose() {
+    setApprovingClose(true); setActionError('');
+    try {
+      await approveCloseLoan(id);
+      refreshNotificationBell();
+      await load();
+    } catch (e: unknown) {
+      setActionError((e as Error).message);
+    } finally { setApprovingClose(false); }
+  }
+
   if (loading) return <div className="p-6 text-gray-400 text-sm">Loading…</div>;
   if (error) return <div className="p-6 text-red-600 text-sm">{error}</div>;
   if (!loan) return null;
@@ -195,7 +237,32 @@ export default function AgentRiskLoanDetailPage() {
         <span className={`px-2 py-0.5 rounded text-xs font-semibold ${LOAN_STATUS_COLORS[loan.status] ?? 'bg-gray-100 text-gray-500'}`}>{loan.status}</span>
         {isNpa && <span className="px-2 py-0.5 bg-red-200 text-red-800 rounded text-xs font-bold">NPA</span>}
         <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-medium">Agent Risk</span>
+        {loan.pendingClosure && (
+          <span className="px-2 py-0.5 bg-amber-100 text-amber-800 rounded text-xs font-semibold">Closure pending approval</span>
+        )}
+        {canClose && loan.status === 'PENDING' && (
+          <span className="flex gap-2 ml-2">
+            <button onClick={handleApprove} disabled={approving}
+              className="px-3 py-1 bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white text-xs font-medium rounded-lg transition-colors">
+              {approving ? 'Approving…' : 'Approve'}
+            </button>
+            <button onClick={handleReject} disabled={rejecting}
+              className="px-3 py-1 bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white text-xs font-medium rounded-lg transition-colors">
+              {rejecting ? 'Rejecting…' : 'Reject'}
+            </button>
+          </span>
+        )}
+        {canClose && loan.pendingClosure && (
+          <button onClick={handleApproveClose} disabled={approvingClose}
+            className="px-3 py-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-xs font-medium rounded-lg transition-colors ml-2">
+            {approvingClose ? 'Approving…' : 'Approve Closure'}
+          </button>
+        )}
       </div>
+
+      {actionError && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{actionError}</div>
+      )}
 
       {loan.status === 'CLOSED' && (
         <CloseCommentBanner

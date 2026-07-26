@@ -3,6 +3,7 @@ import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
+import { UserRole, USER_ADMIN_ROLES } from '../common/roles';
 
 export interface CreateUserDto {
   email: string;
@@ -10,7 +11,7 @@ export interface CreateUserDto {
   firstName: string;
   lastName: string;
   phone: string;
-  role: 'ADMIN' | 'LOAN_OFFICER' | 'COLLECTOR' | 'VIEWER';
+  role: Extract<UserRole, 'ADMIN' | 'MANAGER' | 'AGENT' | 'STAFF'>;
   branchId?: string;
 }
 
@@ -18,13 +19,12 @@ export interface UpdateUserDto {
   firstName?: string;
   lastName?: string;
   phone?: string;
-  role?: 'ADMIN' | 'LOAN_OFFICER' | 'COLLECTOR' | 'VIEWER';
+  role?: Extract<UserRole, 'ADMIN' | 'MANAGER' | 'AGENT' | 'STAFF'>;
   branchId?: string | null;
 }
 
-const VALID_ROLES = ['ADMIN', 'LOAN_OFFICER', 'COLLECTOR', 'VIEWER'];
-// Only Owner and Admin can manage users (Matrix: Manager=No for Add User)
-const USER_ADMIN_ROLES = ['OWNER', 'ADMIN'];
+// Roles an Owner/Admin can assign when creating or editing a user (excludes OWNER and CUSTOMER)
+const VALID_ROLES = ['ADMIN', 'MANAGER', 'AGENT', 'STAFF'];
 
 @Injectable()
 export class TenantUsersService {
@@ -44,7 +44,7 @@ export class TenantUsersService {
   }
 
   private assertManager(user: TenantJwtPayload) {
-    if (!USER_ADMIN_ROLES.includes(user.role)) throw new ForbiddenException('Only Owner or Admin can manage users');
+    if (!USER_ADMIN_ROLES.includes(user.role as UserRole)) throw new ForbiddenException('Only Owner or Admin can manage users');
   }
 
   async list(user: TenantJwtPayload, page: number, limit: number, search?: string) {
@@ -283,7 +283,7 @@ export class TenantUsersService {
       const res = await client.query(`
         SELECT id, first_name || ' ' || last_name AS name, role
         FROM users
-        WHERE role IN ('OWNER','MANAGER','ADMIN','LOAN_OFFICER') AND is_active = TRUE
+        WHERE role = 'AGENT' AND is_active = TRUE
         ORDER BY first_name, last_name
       `);
       return res.rows.map((r) => ({ id: r.id, name: r.name, role: r.role }));

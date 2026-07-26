@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, BadRequestException, ForbiddenException 
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
+import { FIELD_ROLES } from '../common/roles';
 
 export interface RecordCollectionPaymentDto {
   amount: number;
@@ -78,12 +79,12 @@ export class TenantCollectionsService {
     return this.withSchema(user.schemaName, async (client) => {
       const today = new Date().toISOString().slice(0, 10);
       const offset = (page - 1) * limit;
-      // Agent (LOAN_OFFICER) sees only installments assigned to them or in their loans.
+      // Agent sees only installments assigned to them or in their loans.
       // user.sub is bound as a parameter (not interpolated) — data and count queries
       // have independent parameter lists, so they build filters separately.
       const dataParams: unknown[] = [today, limit, offset];
       let selfFilter = '';
-      if (user.role === 'LOAN_OFFICER') {
+      if (user.role === 'AGENT') {
         dataParams.push(user.sub);
         const p = `$${dataParams.length}`;
         selfFilter = `AND (i.assigned_to = ${p} OR l.loan_officer_id = ${p})`;
@@ -96,7 +97,7 @@ export class TenantCollectionsService {
       }
       const countParams: unknown[] = [today];
       let countSelf = '';
-      if (user.role === 'LOAN_OFFICER') {
+      if (user.role === 'AGENT') {
         countParams.push(user.sub);
         const p = `$${countParams.length}`;
         countSelf = `AND (i.assigned_to = ${p} OR l.loan_officer_id = ${p})`;
@@ -146,7 +147,7 @@ export class TenantCollectionsService {
       // their filters against independent parameter lists.
       const dataParams: unknown[] = [limit, offset];
       let selfFilter = '';
-      if (user.role === 'LOAN_OFFICER') {
+      if (user.role === 'AGENT') {
         dataParams.push(user.sub);
         const p = `$${dataParams.length}`;
         selfFilter = `AND (i.assigned_to = ${p} OR l.loan_officer_id = ${p})`;
@@ -159,7 +160,7 @@ export class TenantCollectionsService {
       }
       const countParams: unknown[] = [];
       let countSelf = '';
-      if (user.role === 'LOAN_OFFICER') {
+      if (user.role === 'AGENT') {
         countParams.push(user.sub);
         const p = `$${countParams.length}`;
         countSelf = `AND (i.assigned_to = ${p} OR l.loan_officer_id = ${p})`;
@@ -212,7 +213,7 @@ export class TenantCollectionsService {
       const res = await client.query(
         `SELECT id, first_name || ' ' || last_name AS name, role
          FROM users
-         WHERE role IN ('COLLECTOR','LOAN_OFFICER','ADMIN') AND is_active = TRUE
+         WHERE role IN (${[...FIELD_ROLES, 'ADMIN'].map((r) => `'${r}'`).join(',')}) AND is_active = TRUE
          ORDER BY first_name`,
       );
       return res.rows.map((r) => ({ id: r.id, name: r.name, role: r.role }));
@@ -240,7 +241,7 @@ export class TenantCollectionsService {
   }
 
   async recordPayment(user: TenantJwtPayload, installmentId: string, dto: RecordCollectionPaymentDto) {
-    if (user.role === 'VIEWER') throw new ForbiddenException('You do not have permission to record payments');
+    if (user.role === 'CUSTOMER') throw new ForbiddenException('You do not have permission to record payments');
     if (!dto.amount || dto.amount <= 0) throw new BadRequestException('Amount must be positive');
     return this.withSchema(user.schemaName, async (client) => {
       const instRes = await client.query(

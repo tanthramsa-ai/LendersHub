@@ -5,10 +5,13 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   getWeeklyLoan, recordPayment, undoInstallmentPayment, closeLoan, reopenLoan, resolveMissedInstallment,
+  approveLoan, rejectLoan, approveCloseLoan,
   WeeklyLoanDetail, WeeklyInstallment, MissResolution,
   getTenantSession, COLLECTION_ROLES, MANAGER_ROLES,
 } from '@/services/tenant-api';
 import { CloseLoanModal, CloseCommentBanner, ReopenLoanModal } from '@/components/CloseLoanModal';
+import { MissedPaymentModal } from '@/components/MissedPaymentModal';
+import { AddInstallmentModal } from '@/components/AddInstallmentModal';
 import { refreshNotificationBell } from '@/lib/notifications-bus';
 
 function fmt(n: number) {
@@ -21,15 +24,16 @@ function fmtDate(d: string | null | undefined) {
 }
 
 const MISS_RESOLUTION_LABELS: Record<MissResolution, string> = {
-  PAY_EXTRA_NEXT: 'Pay extra next visit',
-  EXTEND_EMI: 'Extend EMI (spread over remaining weeks)',
-  DEFER_TO_END: 'Defer to end of loan',
+  PAY_EXTRA_NEXT: 'Collecting next visit',
+  EXTEND_EMI: 'Spread across remaining weeks',
+  DEFER_TO_END: 'Added to end of loan',
 };
 
 const LOAN_STATUS_COLORS: Record<string, string> = {
   DISBURSED: 'bg-green-100 text-green-700',
   PENDING:   'bg-yellow-100 text-yellow-700',
   APPROVED:  'bg-blue-100 text-blue-700',
+  REJECTED:  'bg-red-100 text-red-700',
   CLOSED:    'bg-slate-200 text-slate-800',
   DEFAULTED: 'bg-red-100 text-red-700',
 };
@@ -108,8 +112,8 @@ export default function WeeklyLoanDetailPage() {
   const params = useParams<{ subdomain: string; id: string }>();
   const { subdomain, id } = params;
   const session = getTenantSession();
-  const canRecord = COLLECTION_ROLES.includes(session?.user.role ?? 'VIEWER');
-  const canClose = MANAGER_ROLES.includes(session?.user.role ?? 'VIEWER');
+  const canRecord = COLLECTION_ROLES.includes(session?.user.role ?? 'CUSTOMER');
+  const canClose = MANAGER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
 
   const [loan, setLoan] = useState<WeeklyLoanDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -129,7 +133,13 @@ export default function WeeklyLoanDetailPage() {
   const [undoTarget, setUndoTarget] = useState<WeeklyInstallment | null>(null);
   const [undoing, setUndoing] = useState(false);
   const [undoError, setUndoError] = useState('');
-  const [resolvingId, setResolvingId] = useState<string | null>(null);
+  const [missTarget, setMissTarget] = useState<{ installmentId: string; current: MissResolution | null } | null>(null);
+  const [showAddInstallment, setShowAddInstallment] = useState(false);
+  const [approving, setApproving] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
+  const [approvingClose, setApprovingClose] = useState(false);
+  const [actionError, setActionError] = useState('');
+  const [resolving, setResolving] = useState(false);
   const [resolveError, setResolveError] = useState('');
 
   const load = useCallback(async () => {
@@ -169,14 +179,17 @@ export default function WeeklyLoanDetailPage() {
     } finally { setPaying(false); }
   }
 
-  async function handleResolve(installmentId: string, strategy: MissResolution) {
-    setResolvingId(installmentId); setResolveError('');
+  async function handleResolve(strategy: MissResolution | null) {
+    if (!missTarget) return;
+    setResolving(true); setResolveError('');
     try {
-      await resolveMissedInstallment(id, installmentId, strategy);
+      await resolveMissedInstallment(id, missTarget.installmentId, strategy);
+      setMissTarget(null);
+      refreshNotificationBell();
       await load();
     } catch (e: unknown) {
       setResolveError((e as Error).message);
-    } finally { setResolvingId(null); }
+    } finally { setResolving(false); }
   }
 
   async function handleUndo() {
@@ -218,6 +231,41 @@ export default function WeeklyLoanDetailPage() {
     } finally { setReopening(false); }
   }
 
+  async function handleApprove() {
+    setApproving(true); setActionError('');
+    try {
+      await approveLoan(id);
+      refreshNotificationBell();
+      await load();
+    } catch (e: unknown) {
+      setActionError((e as Error).message);
+    } finally { setApproving(false); }
+  }
+
+  async function handleReject() {
+    const reason = window.prompt('Reason for rejecting this loan (optional):') ?? undefined;
+    if (reason === undefined) return; // cancelled
+    setRejecting(true); setActionError('');
+    try {
+      await rejectLoan(id, reason || undefined);
+      refreshNotificationBell();
+      await load();
+    } catch (e: unknown) {
+      setActionError((e as Error).message);
+    } finally { setRejecting(false); }
+  }
+
+  async function handleApproveClose() {
+    setApprovingClose(true); setActionError('');
+    try {
+      await approveCloseLoan(id);
+      refreshNotificationBell();
+      await load();
+    } catch (e: unknown) {
+      setActionError((e as Error).message);
+    } finally { setApprovingClose(false); }
+  }
+
   if (loading) return <div className="p-6 text-gray-400 text-sm">Loading…</div>;
   if (error) return <div className="p-6 text-red-600 text-sm">{error}</div>;
   if (!loan) return null;
@@ -235,7 +283,32 @@ export default function WeeklyLoanDetailPage() {
         <h1 className="text-lg font-bold text-gray-900 font-mono">{loan.loanNumber}</h1>
         <span className={`px-2 py-0.5 rounded text-xs font-semibold ${LOAN_STATUS_COLORS[loan.status] ?? 'bg-gray-100 text-gray-500'}`}>{loan.status}</span>
         {isNpa && <span className="px-2 py-0.5 bg-red-200 text-red-800 rounded text-xs font-bold">NPA</span>}
+        {loan.pendingClosure && (
+          <span className="px-2 py-0.5 bg-amber-100 text-amber-800 rounded text-xs font-semibold">Closure pending approval</span>
+        )}
+        {canClose && loan.status === 'PENDING' && (
+          <span className="flex gap-2 ml-2">
+            <button onClick={handleApprove} disabled={approving}
+              className="px-3 py-1 bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white text-xs font-medium rounded-lg transition-colors">
+              {approving ? 'Approving…' : 'Approve'}
+            </button>
+            <button onClick={handleReject} disabled={rejecting}
+              className="px-3 py-1 bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white text-xs font-medium rounded-lg transition-colors">
+              {rejecting ? 'Rejecting…' : 'Reject'}
+            </button>
+          </span>
+        )}
+        {canClose && loan.pendingClosure && (
+          <button onClick={handleApproveClose} disabled={approvingClose}
+            className="px-3 py-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-xs font-medium rounded-lg transition-colors ml-2">
+            {approvingClose ? 'Approving…' : 'Approve Closure'}
+          </button>
+        )}
       </div>
+
+      {actionError && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{actionError}</div>
+      )}
 
       {loan.status === 'CLOSED' && (
         <CloseCommentBanner
@@ -382,6 +455,17 @@ export default function WeeklyLoanDetailPage() {
               </div>
             );
           })}
+
+          {canClose && (
+            <button
+              type="button"
+              onClick={() => setShowAddInstallment(true)}
+              title="Add installment"
+              className="relative flex items-center justify-center rounded-lg border-2 border-dashed border-gray-300 text-gray-400 hover:border-blue-400 hover:text-blue-500 transition-colors p-1.5"
+            >
+              <span className="text-lg font-bold leading-none">+</span>
+            </button>
+          )}
         </div>
 
         {canRecord && loan.status !== 'CLOSED' && (
@@ -448,21 +532,20 @@ export default function WeeklyLoanDetailPage() {
                       <td className="px-3 py-1.5">
                         {r.isMissed && r.installmentId ? (
                           canRecord ? (
-                            <select
-                              value={r.missResolution ?? ''}
-                              disabled={resolvingId === r.installmentId}
-                              onChange={(e) => handleResolve(r.installmentId!, e.target.value as MissResolution)}
-                              className="text-xs border border-red-200 rounded px-1.5 py-1 bg-white text-red-700 font-normal disabled:opacity-50"
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setResolveError('');
+                                setMissTarget({ installmentId: r.installmentId!, current: r.missResolution });
+                              }}
+                              className="text-xs font-normal underline decoration-dotted underline-offset-2 hover:no-underline"
                             >
-                              <option value="" disabled>+ Resolve…</option>
-                              {(Object.keys(MISS_RESOLUTION_LABELS) as MissResolution[]).map((k) => (
-                                <option key={k} value={k}>{MISS_RESOLUTION_LABELS[k]}</option>
-                              ))}
-                            </select>
+                              {r.missResolution ? MISS_RESOLUTION_LABELS[r.missResolution] : 'Choose how to handle…'}
+                            </button>
                           ) : r.missResolution ? (
                             <span className="font-normal">{MISS_RESOLUTION_LABELS[r.missResolution]}</span>
                           ) : (
-                            <span className="font-normal text-gray-400">Unresolved</span>
+                            <span className="font-normal text-gray-400">Not yet handled</span>
                           )
                         ) : (
                           r.missResolution && <span className="font-normal text-gray-400">{MISS_RESOLUTION_LABELS[r.missResolution]}</span>
@@ -574,6 +657,14 @@ export default function WeeklyLoanDetailPage() {
         />
       )}
 
+      {showAddInstallment && (
+        <AddInstallmentModal
+          loanId={id}
+          onCancel={() => setShowAddInstallment(false)}
+          onAdded={() => { setShowAddInstallment(false); load(); }}
+        />
+      )}
+
       {showReopenConfirm && (
         <ReopenLoanModal
           loanNumber={loan.loanNumber}
@@ -583,6 +674,20 @@ export default function WeeklyLoanDetailPage() {
           error={reopenError}
           onCancel={() => { setShowReopenConfirm(false); setReopenError(''); }}
           onConfirm={handleReopen}
+        />
+      )}
+
+      {missTarget && (
+        <MissedPaymentModal
+          loanId={id}
+          installmentId={missTarget.installmentId}
+          periodNoun="Week"
+          currentResolution={missTarget.current}
+          saving={resolving}
+          error={resolveError}
+          onCancel={() => { setMissTarget(null); setResolveError(''); }}
+          onConfirm={(s) => handleResolve(s)}
+          onClear={() => handleResolve(null)}
         />
       )}
 

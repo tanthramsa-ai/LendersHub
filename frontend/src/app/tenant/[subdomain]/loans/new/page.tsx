@@ -4,9 +4,9 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
-  createTermLoan, previewTermLoanSchedule, getCustomers, getBranches, getLoanTypes,
-  Customer, TenantBranch, LoanType, TermSchedulePreview,
-  getTenantSession, LOAN_CREATE_ROLES,
+  createTermLoan, previewTermLoanSchedule, getCustomers, getBranches, getLoanTypes, getOfficers,
+  Customer, TenantBranch, LoanType, TermSchedulePreview, Officer,
+  getTenantSession, LOAN_CREATE_ROLES, MANAGER_ROLES,
 } from '@/services/tenant-api';
 import { sanitizeLoanPurposeInput } from '@/lib/quick-add-customer';
 
@@ -29,10 +29,11 @@ export default function NewTermLoanPage() {
   const subdomain = params.subdomain;
 
   const session = getTenantSession();
-  if (!LOAN_CREATE_ROLES.includes(session?.user.role ?? 'VIEWER')) {
+  if (!LOAN_CREATE_ROLES.includes(session?.user.role ?? 'CUSTOMER')) {
     router.replace(`/${subdomain}/dashboard`);
     return null;
   }
+  const canAssignOfficer = MANAGER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
 
   // Step 1: Customer
   const [step, setStep] = useState(1);
@@ -51,6 +52,7 @@ export default function NewTermLoanPage() {
   const [calculationType, setCalculationType] = useState<'REDUCING' | 'FLAT'>('REDUCING');
   const [emiRounding, setEmiRounding] = useState<0 | 10 | 50 | 100>(0);
   const [purpose, setPurpose] = useState('');
+  const [loanOfficerId, setLoanOfficerId] = useState('');
   const [securityDocUrl, setSecurityDocUrl] = useState('');
   const [promissoryNoteUrl, setPromissoryNoteUrl] = useState('');
 
@@ -60,12 +62,16 @@ export default function NewTermLoanPage() {
 
   const [branches, setBranches] = useState<TenantBranch[]>([]);
   const [loanTypes, setLoanTypes] = useState<LoanType[]>([]);
+  const [officers, setOfficers] = useState<Officer[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
     getBranches().then((b) => setBranches(b.filter((x) => x.isActive)));
     getLoanTypes().then((t) => setLoanTypes(t.filter((x) => x.isActive)));
+    if (canAssignOfficer) {
+      getOfficers().then(setOfficers).catch(() => setOfficers([]));
+    }
     // default first due date = 1 month from today
     const d = new Date(); d.setMonth(d.getMonth() + 1);
     setFirstDueDate(d.toISOString().slice(0, 10));
@@ -114,6 +120,7 @@ export default function NewTermLoanPage() {
         termMonths: parseInt(termMonths), firstDueDate,
         calculationType, emiRounding,
         purpose: purpose || undefined,
+        ...(canAssignOfficer && loanOfficerId && { loanOfficerId }),
         securityDocUrl: securityDocUrl || undefined,
         promissoryNoteUrl: promissoryNoteUrl || undefined,
       });
@@ -281,6 +288,16 @@ export default function NewTermLoanPage() {
                 placeholder="e.g. Business expansion, Home renovation…"
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
+            {canAssignOfficer && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Loan Agent</label>
+                <select value={loanOfficerId} onChange={(e) => setLoanOfficerId(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="">Assign to myself</option>
+                  {officers.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                </select>
+              </div>
+            )}
           </div>
 
           {/* Document uploads */}

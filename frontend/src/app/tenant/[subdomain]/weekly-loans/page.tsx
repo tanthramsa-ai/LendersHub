@@ -23,7 +23,7 @@ export default function WeeklyLoansPage() {
   const params = useParams<{ subdomain: string }>();
   const subdomain = params.subdomain;
   const session = getTenantSession();
-  const canCreate = LOAN_ROLES.includes(session?.user.role ?? 'VIEWER');
+  const canCreate = LOAN_ROLES.includes(session?.user.role ?? 'CUSTOMER');
 
   const [loans, setLoans] = useState<WeeklyLoan[]>([]);
   const [total, setTotal] = useState(0);

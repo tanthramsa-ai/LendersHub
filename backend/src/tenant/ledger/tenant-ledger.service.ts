@@ -1,7 +1,8 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
+import { LEDGER_ROLES, UserRole } from '../common/roles';
 
 export interface CreateTransactionDto {
   transactionDate: string;   // YYYY-MM-DD
@@ -33,6 +34,10 @@ export class TenantLedgerService {
     }
   }
 
+  private assertLedgerAccess(user: TenantJwtPayload) {
+    if (!LEDGER_ROLES.includes(user.role as UserRole)) throw new ForbiddenException('Only Owner or Admin can access the ledger');
+  }
+
   // Ensure table exists (idempotent for older tenants)
   private async ensureTable(client: import('pg').PoolClient, schemaName: string) {
     const q = `"${schemaName}"`;
@@ -59,6 +64,7 @@ export class TenantLedgerService {
   }
 
   async listCredits(user: TenantJwtPayload, page: number, limit: number, month?: string) {
+    this.assertLedgerAccess(user);
     return this.withSchema(user.schemaName, async (client) => {
       await this.ensureTable(client, user.schemaName);
       const offset = (page - 1) * limit;
@@ -133,6 +139,7 @@ export class TenantLedgerService {
   }
 
   async listDebits(user: TenantJwtPayload, page: number, limit: number, month?: string) {
+    this.assertLedgerAccess(user);
     return this.withSchema(user.schemaName, async (client) => {
       await this.ensureTable(client, user.schemaName);
 
@@ -193,6 +200,7 @@ export class TenantLedgerService {
   }
 
   async listPrincipalTransactions(user: TenantJwtPayload, page: number, limit: number, month?: string) {
+    this.assertLedgerAccess(user);
     return this.withSchema(user.schemaName, async (client) => {
       await this.ensureTable(client, user.schemaName);
 
@@ -255,9 +263,7 @@ export class TenantLedgerService {
   }
 
   async addTransaction(user: TenantJwtPayload, dto: CreateTransactionDto) {
-    if (!['OWNER', 'MANAGER', 'ADMIN'].includes(user.role)) {
-      throw new BadRequestException('Only Owner, Manager or Admin can add transactions');
-    }
+    this.assertLedgerAccess(user);
     if (!dto.amount || dto.amount <= 0) throw new BadRequestException('Amount must be positive');
 
     return this.withSchema(user.schemaName, async (client) => {
@@ -293,6 +299,7 @@ export class TenantLedgerService {
   }
 
   async listManualTransactions(user: TenantJwtPayload, page: number, limit: number, month?: string) {
+    this.assertLedgerAccess(user);
     return this.withSchema(user.schemaName, async (client) => {
       await this.ensureTable(client, user.schemaName);
       const monthFilter = month ? `AND DATE_TRUNC('month', ft.transaction_date) = DATE_TRUNC('month', $1::date)` : '';

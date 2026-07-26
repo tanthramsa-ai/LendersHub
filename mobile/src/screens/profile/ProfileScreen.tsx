@@ -54,12 +54,14 @@ export default function ProfileScreen() {
   const initials = `${user.firstName[0]}${user.lastName[0]}`;
 
   const roleColors: Record<string, { bg: string; text: string }> = {
-    ADMIN:        { bg: '#DBEAFE', text: '#1E40AF' },
-    LOAN_OFFICER: { bg: '#D1FAE5', text: '#065F46' },
-    COLLECTOR:    { bg: '#FEF3C7', text: '#92400E' },
-    VIEWER:       { bg: '#F3F4F6', text: '#374151' },
+    OWNER:   { bg: '#DBEAFE', text: '#1E40AF' },
+    ADMIN:   { bg: '#DBEAFE', text: '#1E40AF' },
+    MANAGER: { bg: '#E0E7FF', text: '#3730A3' },
+    AGENT:   { bg: '#D1FAE5', text: '#065F46' },
+    STAFF:   { bg: '#FEF3C7', text: '#92400E' },
+    CUSTOMER: { bg: '#F3F4F6', text: '#374151' },
   };
-  const roleColor = roleColors[user.role] ?? roleColors.VIEWER;
+  const roleColor = roleColors[user.role] ?? roleColors.CUSTOMER;
 
   return (
     <ScrollView style={styles.root} contentContainerStyle={{ paddingBottom: 60 }}>
