@@ -40,7 +40,7 @@ export default function LoanTypesPage() {
   const params = useParams<{ subdomain: string }>();
   const subdomain = params.subdomain;
   const session = getTenantSession();
-  const canManage = MANAGER_ROLES.includes(session?.user.role ?? 'VIEWER');
+  const canManage = MANAGER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
 
   const [types, setTypes] = useState<LoanType[]>([]);
   const [loading, setLoading] = useState(true);

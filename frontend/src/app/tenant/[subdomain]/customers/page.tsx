@@ -10,7 +10,7 @@ export default function CustomersPage() {
   const subdomain = params.subdomain;
   const router = useRouter();
   const session = getTenantSession();
-  const canAddCustomer = CUSTOMER_ROLES.includes(session?.user.role ?? 'VIEWER');
+  const canAddCustomer = CUSTOMER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [total, setTotal] = useState(0);

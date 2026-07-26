@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/commo
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
+import { MANAGER_ROLES, UserRole } from '../common/roles';
 
 export interface CreateLoanTypeDto {
   name: string;
@@ -13,8 +14,6 @@ export interface CreateLoanTypeDto {
   minTermMonths?: number;
   maxTermMonths?: number;
 }
-
-const MANAGER_ROLES = ['OWNER', 'MANAGER', 'ADMIN'];
 
 @Injectable()
 export class TenantLoanTypesService {
@@ -93,7 +92,7 @@ export class TenantLoanTypesService {
   }
 
   async getLoansByType(user: TenantJwtPayload, id: string, page: number, limit: number, search?: string) {
-    if (!MANAGER_ROLES.includes(user.role)) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) {
       throw new ForbiddenException('Only Owner, Manager or Admin can view loan-type breakdowns');
     }
     return this.withSchema(user.schemaName, async (client) => {
@@ -147,7 +146,7 @@ export class TenantLoanTypesService {
   }
 
   async getCustomersByType(user: TenantJwtPayload, id: string, page: number, limit: number, search?: string) {
-    if (!MANAGER_ROLES.includes(user.role)) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) {
       throw new ForbiddenException('Only Owner, Manager or Admin can view loan-type breakdowns');
     }
     return this.withSchema(user.schemaName, async (client) => {
@@ -199,7 +198,7 @@ export class TenantLoanTypesService {
   }
 
   async create(user: TenantJwtPayload, dto: CreateLoanTypeDto) {
-    if (!MANAGER_ROLES.includes(user.role)) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) {
       throw new ForbiddenException('Only Owner, Manager or Admin can manage loan types');
     }
     return this.withSchema(user.schemaName, async (client) => {
@@ -226,7 +225,7 @@ export class TenantLoanTypesService {
   }
 
   async update(user: TenantJwtPayload, id: string, dto: Partial<CreateLoanTypeDto> & { isActive?: boolean }) {
-    if (!MANAGER_ROLES.includes(user.role)) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) {
       throw new ForbiddenException('Only Owner, Manager or Admin can manage loan types');
     }
     return this.withSchema(user.schemaName, async (client) => {
@@ -273,7 +272,7 @@ export class TenantLoanTypesService {
   }
 
   async remove(user: TenantJwtPayload, id: string) {
-    if (!MANAGER_ROLES.includes(user.role)) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) {
       throw new ForbiddenException('Only Owner, Manager or Admin can manage loan types');
     }
     return this.withSchema(user.schemaName, async (client) => {

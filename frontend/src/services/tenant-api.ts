@@ -26,37 +26,37 @@ async function tenantFetch<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export type UserRole = 'OWNER' | 'MANAGER' | 'ADMIN' | 'LOAN_OFFICER' | 'COLLECTOR' | 'VIEWER';
+export type UserRole = 'OWNER' | 'ADMIN' | 'MANAGER' | 'AGENT' | 'STAFF' | 'CUSTOMER';
 
 export const ROLE_LABELS: Record<UserRole, string> = {
   OWNER: 'Owner',
-  MANAGER: 'Manager',
   ADMIN: 'Admin',
-  LOAN_OFFICER: 'Loan Officer',
-  COLLECTOR: 'Collector',
-  VIEWER: 'Viewer',
+  MANAGER: 'Manager',
+  AGENT: 'Loan Agent',
+  STAFF: 'Staff',
+  CUSTOMER: 'Customer',
 };
 
 /** Roles that can approve/close loans and manage settings */
-export const MANAGER_ROLES: UserRole[] = ['OWNER', 'MANAGER', 'ADMIN'];
+export const MANAGER_ROLES: UserRole[] = ['OWNER', 'ADMIN', 'MANAGER'];
 
 /** Only Owner and Admin can add/edit/deactivate users (Manager cannot) */
 export const USER_ADMIN_ROLES: UserRole[] = ['OWNER', 'ADMIN'];
 
-/** Roles that can VIEW loan pages (includes COLLECTOR who can see but not create) */
-export const LOAN_ROLES: UserRole[] = ['OWNER', 'MANAGER', 'ADMIN', 'LOAN_OFFICER', 'COLLECTOR'];
+/** Roles that can VIEW loan pages (includes STAFF who can see but not create) */
+export const LOAN_ROLES: UserRole[] = ['OWNER', 'ADMIN', 'MANAGER', 'AGENT', 'STAFF'];
 
-/** Roles that can CREATE loans — COLLECTOR excluded (backend enforces this too) */
-export const LOAN_CREATE_ROLES: UserRole[] = ['OWNER', 'MANAGER', 'ADMIN', 'LOAN_OFFICER'];
+/** Roles that can CREATE loans (backend enforces this too) */
+export const LOAN_CREATE_ROLES: UserRole[] = ['OWNER', 'ADMIN', 'MANAGER', 'AGENT', 'STAFF'];
 
-/** Roles that can record collection payments (all except VIEWER) */
-export const COLLECTION_ROLES: UserRole[] = ['OWNER', 'MANAGER', 'ADMIN', 'LOAN_OFFICER', 'COLLECTOR'];
+/** Roles that can record collection payments (all except CUSTOMER) */
+export const COLLECTION_ROLES: UserRole[] = ['OWNER', 'ADMIN', 'MANAGER', 'AGENT', 'STAFF'];
 
-/** Roles that can add customers (all except VIEWER) */
-export const CUSTOMER_ROLES: UserRole[] = ['OWNER', 'MANAGER', 'ADMIN', 'LOAN_OFFICER', 'COLLECTOR'];
+/** Roles that can add customers (all except CUSTOMER) */
+export const CUSTOMER_ROLES: UserRole[] = ['OWNER', 'ADMIN', 'MANAGER', 'AGENT', 'STAFF'];
 
 /** Roles that can view everything */
-export const READ_ROLES: UserRole[] = ['OWNER', 'MANAGER', 'ADMIN', 'LOAN_OFFICER', 'COLLECTOR', 'VIEWER'];
+export const READ_ROLES: UserRole[] = ['OWNER', 'ADMIN', 'MANAGER', 'AGENT', 'STAFF', 'CUSTOMER'];
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
@@ -449,7 +449,7 @@ export function createWeeklyLoan(dto: {
   customerId: string; principal: number; interestRate: number; termWeeks: number;
   firstDueDate: string; calculationType: WeeklyCalculationType; emiRounding: number;
   interestPerDay?: number;
-  purpose?: string; branchId?: string; loanTypeId?: string;
+  purpose?: string; branchId?: string; loanTypeId?: string; loanOfficerId?: string;
   securityDocUrl?: string; promissoryNoteUrl?: string;
 }) {
   return tenantFetch<{ id: string; loanNumber: string; emi: number; termWeeks: number }>(
@@ -515,6 +515,7 @@ export interface WeeklyLoanDetail extends WeeklyLoan {
   closedAt?: string | null;
   closeComment?: string | null;
   reopenComment?: string | null;
+  pendingClosure?: boolean;
   installments: WeeklyInstallment[];
   payments: Array<{
     id: string; amount: number; method: string;
@@ -536,10 +537,70 @@ export function recordPayment(loanId: string, dto: {
   });
 }
 
-export function resolveMissedInstallment(loanId: string, installmentId: string, strategy: MissResolution) {
-  return tenantFetch<{ installmentId: string; missResolution: MissResolution }>(
+/** What one option would do to the loan, in rupees, before anyone commits to it. */
+export interface MissResolutionOption {
+  strategy: MissResolution;
+  /** False when the option can't do anything here — e.g. nothing left to spread a shortfall onto. */
+  applicable: boolean;
+  unavailableReason: string | null;
+  /** True only for options that actually change what the borrower pays. */
+  changesAmounts: boolean;
+  periods: number;
+  totalPayable: number;
+  nextDue: number;
+  periodsAffected: number;
+}
+
+export interface MissResolutionPreview {
+  installmentId: string;
+  installmentNumber: number;
+  dueDate: string;
+  shortfall: number;
+  current: { periods: number; totalPayable: number; nextDue: number };
+  options: MissResolutionOption[];
+}
+
+export function previewMissResolutions(loanId: string, installmentId: string) {
+  return tenantFetch<MissResolutionPreview>(
+    `/api/v1/tenant/loans/${loanId}/installments/${installmentId}/miss-options`,
+  );
+}
+
+/** Pass `null` as the strategy to clear the choice and return the instalment to unresolved. */
+export function resolveMissedInstallment(
+  loanId: string,
+  installmentId: string,
+  strategy: MissResolution | null,
+) {
+  return tenantFetch<{ installmentId: string; missResolution: MissResolution | null; previousResolution: MissResolution | null }>(
     `/api/v1/tenant/loans/${loanId}/installments/${installmentId}/resolve-miss`,
     { method: 'POST', body: JSON.stringify({ strategy }) },
+  );
+}
+
+export interface AddInstallmentDto {
+  dueDate: string;
+  principalAmount?: number;
+  interestAmount?: number;
+  totalAmount: number;
+}
+
+export interface LoanInstallment {
+  id: string;
+  number: number;
+  dueDate: string;
+  principal: number;
+  interest: number;
+  total: number;
+  paid: number;
+  status: string;
+  paidAt: string | null;
+}
+
+export function addInstallment(loanId: string, dto: AddInstallmentDto) {
+  return tenantFetch<LoanInstallment>(
+    `/api/v1/tenant/loans/${loanId}/installments`,
+    { method: 'POST', body: JSON.stringify(dto) },
   );
 }
 
@@ -627,6 +688,7 @@ export interface DailyLoanDetail extends DailyLoan {
   closedAt?: string | null;
   closeComment?: string | null;
   reopenComment?: string | null;
+  pendingClosure?: boolean;
   installments: DailyInstallment[];
   payments: Array<{
     id: string; amount: number; method: string;
@@ -663,7 +725,7 @@ export function createDailyLoan(dto: {
   firstDueDate: string; calculationType: WeeklyCalculationType; emiRounding: number;
   cycleType: 'DAILY_NO_SUNDAY' | 'DAILY_WITH_SUNDAY';
   interestPerDay?: number;
-  purpose?: string; branchId?: string; loanTypeId?: string;
+  purpose?: string; branchId?: string; loanTypeId?: string; loanOfficerId?: string;
   securityDocUrl?: string; promissoryNoteUrl?: string;
 }) {
   return tenantFetch<{ id: string; loanNumber: string; emi: number; termDays: number }>(
@@ -725,6 +787,7 @@ export interface MonthlyLoanDetail extends MonthlyLoan {
   closedAt?: string | null;
   closeComment?: string | null;
   reopenComment?: string | null;
+  pendingClosure?: boolean;
   installments: MonthlyInstallment[];
   payments: Array<{
     id: string; amount: number; method: string;
@@ -764,7 +827,7 @@ export function previewMonthlySchedule(dto: {
 export function createMonthlyLoan(dto: {
   customerId: string; principal: number; interestRate: number; termMonths: number;
   firstDueDate: string; branchId?: string;
-  purpose?: string; loanTypeId?: string;
+  purpose?: string; loanTypeId?: string; loanOfficerId?: string;
   securityDocUrl?: string; promissoryNoteUrl?: string;
 }) {
   return tenantFetch<{ id: string; loanNumber: string; monthlyInterest: number; termMonths: number }>(
@@ -794,6 +857,7 @@ export interface AgentRiskLoanDetail extends AgentRiskLoan {
   closedAt?: string | null;
   closeComment?: string | null;
   reopenComment?: string | null;
+  pendingClosure?: boolean;
   installments: MonthlyInstallment[];
   payments: Array<{ id: string; amount: number; method: string; referenceNumber?: string | null; paymentDate: string; createdAt: string }>;
 }
@@ -812,7 +876,7 @@ export function previewAgentRiskSchedule(dto: { principal: number; interestRate:
 
 export function createAgentRiskLoan(dto: {
   customerId: string; principal: number; interestRate: number; termMonths: number;
-  firstDueDate: string; branchId?: string; purpose?: string; loanTypeId?: string;
+  firstDueDate: string; branchId?: string; purpose?: string; loanTypeId?: string; loanOfficerId?: string;
   securityDocUrl?: string; promissoryNoteUrl?: string;
 }) {
   return tenantFetch<{ id: string; loanNumber: string; monthlyInterest: number; termMonths: number }>(
@@ -847,6 +911,7 @@ export interface TermLoanDetail extends TermLoan {
   closedAt?: string | null;
   closeComment?: string | null;
   reopenComment?: string | null;
+  pendingClosure?: boolean;
   installments: TermInstallment[];
   payments: Array<{ id: string; amount: number; method: string; referenceNumber?: string; paymentDate: string; createdAt: string }>;
 }
@@ -876,7 +941,7 @@ export function previewTermLoanSchedule(dto: {
 export function createTermLoan(dto: {
   customerId: string; principal: number; interestRate: number; termMonths: number;
   firstDueDate: string; calculationType: 'REDUCING' | 'FLAT'; emiRounding: number;
-  branchId?: string; purpose?: string; loanTypeId?: string;
+  branchId?: string; purpose?: string; loanTypeId?: string; loanOfficerId?: string;
   securityDocUrl?: string; promissoryNoteUrl?: string;
 }) {
   return tenantFetch<{ id: string; loanNumber: string; emi: number }>('/api/v1/tenant/loans/term-loan', {
@@ -1115,6 +1180,25 @@ export function reopenLoan(id: string, dto: { comment: string }) {
   }>(`/api/v1/tenant/loans/${id}/reopen`, {
     method: 'PATCH',
     body: JSON.stringify(dto),
+  });
+}
+
+export function approveLoan(id: string) {
+  return tenantFetch<{ id: string; status: string }>(`/api/v1/tenant/loans/${id}/approve`, {
+    method: 'PATCH',
+  });
+}
+
+export function rejectLoan(id: string, reason?: string) {
+  return tenantFetch<{ id: string; status: string }>(`/api/v1/tenant/loans/${id}/reject`, {
+    method: 'PATCH',
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export function approveCloseLoan(id: string) {
+  return tenantFetch<{ id: string; status: string; pendingClosure: boolean }>(`/api/v1/tenant/loans/${id}/approve-close`, {
+    method: 'PATCH',
   });
 }
 

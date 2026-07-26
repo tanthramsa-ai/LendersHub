@@ -168,6 +168,34 @@ export class TenantLoansController {
     return this.svc.closeLoan(req.user, id, dto ?? {});
   }
 
+  @Patch(':id/approve')
+  approveLoan(@Request() req: { user: TenantJwtPayload }, @Param('id') id: string) {
+    return this.svc.approveLoan(req.user, id);
+  }
+
+  @Patch(':id/reject')
+  rejectLoan(
+    @Request() req: { user: TenantJwtPayload },
+    @Param('id') id: string,
+    @Body() dto: { reason?: string },
+  ) {
+    return this.svc.rejectLoan(req.user, id, dto ?? {});
+  }
+
+  @Patch(':id/approve-close')
+  approveCloseLoan(@Request() req: { user: TenantJwtPayload }, @Param('id') id: string) {
+    return this.svc.approveCloseLoan(req.user, id);
+  }
+
+  @Post(':id/installments')
+  addInstallment(
+    @Request() req: { user: TenantJwtPayload },
+    @Param('id') id: string,
+    @Body() dto: { dueDate: string; principalAmount?: number; interestAmount?: number; totalAmount: number },
+  ) {
+    return this.svc.addInstallment(req.user, id, dto);
+  }
+
   @Patch(':id/reopen')
   reopenLoan(
     @Request() req: { user: TenantJwtPayload },
@@ -191,14 +219,23 @@ export class TenantLoansController {
     return this.svc.recordPayment(req.user, id, dto);
   }
 
+  @Get(':id/installments/:installmentId/miss-options')
+  previewMissResolutions(
+    @Request() req: { user: TenantJwtPayload },
+    @Param('id') id: string,
+    @Param('installmentId') installmentId: string,
+  ) {
+    return this.svc.previewMissResolutions(req.user, id, installmentId);
+  }
+
   @Post(':id/installments/:installmentId/resolve-miss')
   resolveMissedInstallment(
     @Request() req: { user: TenantJwtPayload },
     @Param('id') id: string,
     @Param('installmentId') installmentId: string,
-    @Body() dto: { strategy: MissResolution },
+    @Body() dto: { strategy: MissResolution | null },
   ) {
-    return this.svc.resolveMissedInstallment(req.user, id, installmentId, dto.strategy);
+    return this.svc.resolveMissedInstallment(req.user, id, installmentId, dto.strategy ?? null);
   }
 
   @Post(':id/installments/:installmentId/undo-payment')

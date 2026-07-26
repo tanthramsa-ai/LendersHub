@@ -5,9 +5,9 @@ import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   getCustomers, createCustomer, updateCustomer, getCustomer, getBranches, getLoanTypes,
-  previewDailySchedule, createDailyLoan,
-  Customer, TenantBranch, LoanType, DailySchedulePreview, WeeklyCalculationType,
-  getTenantSession, LOAN_CREATE_ROLES,
+  previewDailySchedule, createDailyLoan, getOfficers,
+  Customer, TenantBranch, LoanType, DailySchedulePreview, WeeklyCalculationType, Officer,
+  getTenantSession, LOAN_CREATE_ROLES, MANAGER_ROLES,
 } from '@/services/tenant-api';
 import {
   getQuickAddCustomerErrors, sanitizeNameInput, sanitizeLocalityInput, sanitizePanInput, sanitizeLoanPurposeInput,
@@ -39,10 +39,11 @@ export default function NewDailyLoanPage() {
   const subdomain = params.subdomain;
 
   const session = getTenantSession();
-  if (!LOAN_CREATE_ROLES.includes(session?.user.role ?? 'VIEWER')) {
+  if (!LOAN_CREATE_ROLES.includes(session?.user.role ?? 'CUSTOMER')) {
     router.replace(`/${subdomain}/dashboard`);
     return null;
   }
+  const canAssignOfficer = MANAGER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
 
   const [step, setStep] = useState<Step>(1);
 
@@ -61,8 +62,9 @@ export default function NewDailyLoanPage() {
   const [branches, setBranches] = useState<TenantBranch[]>([]);
   const [loanTypes, setLoanTypes] = useState<LoanType[]>([]);
   const [dailyTypeId, setDailyTypeId] = useState('');
+  const [officers, setOfficers] = useState<Officer[]>([]);
   const [form, setForm] = useState({
-    branchId: '', purpose: '',
+    branchId: '', purpose: '', loanOfficerId: '',
     principal: '', interestRate: '', termDays: '',
     firstDueDate: '',
     cycleType: 'DAILY_NO_SUNDAY' as CycleType,
@@ -90,6 +92,9 @@ export default function NewDailyLoanPage() {
       const daily = lt.find((t) => t.name.toLowerCase().includes('daily'));
       if (daily) setDailyTypeId(daily.id);
     });
+    if (canAssignOfficer) {
+      getOfficers().then(setOfficers).catch(() => setOfficers([]));
+    }
     setForm((f) => ({ ...f, firstDueDate: nextCollectionDay(true) }));
   }, []);
 
@@ -226,6 +231,7 @@ export default function NewDailyLoanPage() {
         ...(form.purpose && { purpose: form.purpose }),
         ...(form.branchId && { branchId: form.branchId }),
         ...(dailyTypeId && { loanTypeId: dailyTypeId }),
+        ...(canAssignOfficer && form.loanOfficerId && { loanOfficerId: form.loanOfficerId }),
         ...(securityB64 && { securityDocUrl: securityB64 }),
         ...(promissoryB64 && { promissoryNoteUrl: promissoryB64 }),
       });
@@ -487,6 +493,15 @@ export default function NewDailyLoanPage() {
                 <label className="block text-xs font-medium text-gray-600 mb-1">Loan Purpose</label>
                 <input value={form.purpose} onChange={(e) => setF('purpose', sanitizeLoanPurposeInput(e.target.value))} className={inputCls} placeholder="Agriculture, Business…" />
               </div>
+              {canAssignOfficer && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Loan Agent</label>
+                  <select value={form.loanOfficerId} onChange={(e) => setF('loanOfficerId', e.target.value)} className={inputCls}>
+                    <option value="">Assign to myself</option>
+                    {officers.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                  </select>
+                </div>
+              )}
             </div>
 
             <div className="pt-2">

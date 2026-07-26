@@ -11,15 +11,16 @@ import {
 } from '@/services/tenant-api';
 
 const BRAND = '#0F4C81';
-const ROLES: UserRole[] = ['ADMIN', 'LOAN_OFFICER', 'COLLECTOR', 'VIEWER'];
+// Roles an Owner/Admin can assign when creating or editing a user (excludes OWNER and CUSTOMER)
+const ROLES: UserRole[] = ['ADMIN', 'MANAGER', 'AGENT', 'STAFF'];
 
 const ROLE_BADGE: Record<UserRole, string> = {
-  OWNER:        'bg-yellow-100 text-yellow-700',
-  MANAGER:      'bg-indigo-100 text-indigo-700',
-  ADMIN:        'bg-purple-100 text-purple-700',
-  LOAN_OFFICER: 'bg-blue-100 text-blue-700',
-  COLLECTOR:    'bg-orange-100 text-orange-700',
-  VIEWER:       'bg-gray-100 text-gray-600',
+  OWNER:    'bg-yellow-100 text-yellow-700',
+  ADMIN:    'bg-purple-100 text-purple-700',
+  MANAGER:  'bg-indigo-100 text-indigo-700',
+  AGENT:    'bg-blue-100 text-blue-700',
+  STAFF:    'bg-orange-100 text-orange-700',
+  CUSTOMER: 'bg-gray-100 text-gray-600',
 };
 
 const inputCls = 'w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500';
@@ -42,7 +43,7 @@ function UserModal({
     lastName:  user?.lastName  ?? '',
     email:     user?.email     ?? '',
     phone:     user?.phone     ?? '',
-    role:      (user?.role ?? 'LOAN_OFFICER') as UserRole,
+    role:      (user?.role ?? 'AGENT') as UserRole,
     branchId:  user?.branchId  ?? '',
     password:  '',
   });

@@ -2,6 +2,7 @@ import { Injectable, ConflictException, NotFoundException, ForbiddenException, B
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
+import { USER_ADMIN_ROLES, UserRole } from '../common/roles';
 
 export interface CreateBranchDto {
   name: string;
@@ -63,7 +64,7 @@ export class TenantBranchesService {
   }
 
   async create(user: TenantJwtPayload, dto: CreateBranchDto) {
-    if (!['OWNER', 'ADMIN'].includes(user.role)) throw new ForbiddenException('Only Owner or Admin can manage branches');
+    if (!USER_ADMIN_ROLES.includes(user.role as UserRole)) throw new ForbiddenException('Only Owner or Admin can manage branches');
 
     if (!dto.name?.trim()) throw new BadRequestException('Branch name is required');
     if (!dto.code) throw new BadRequestException('Branch code is required');
@@ -110,7 +111,7 @@ export class TenantBranchesService {
   }
 
   async update(user: TenantJwtPayload, id: string, dto: UpdateBranchDto) {
-    if (!['OWNER', 'ADMIN'].includes(user.role)) throw new ForbiddenException('Only Owner or Admin can manage branches');
+    if (!USER_ADMIN_ROLES.includes(user.role as UserRole)) throw new ForbiddenException('Only Owner or Admin can manage branches');
 
     return this.withSchema(user.schemaName, async (client) => {
       const res = await client.query(`

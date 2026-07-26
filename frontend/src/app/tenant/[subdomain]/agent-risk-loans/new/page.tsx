@@ -5,9 +5,9 @@ import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   getCustomers, createCustomer, updateCustomer, getCustomer, getBranches,
-  previewAgentRiskSchedule, createAgentRiskLoan,
-  Customer, TenantBranch, MonthlySchedulePreview,
-  getTenantSession, LOAN_CREATE_ROLES,
+  previewAgentRiskSchedule, createAgentRiskLoan, getOfficers,
+  Customer, TenantBranch, MonthlySchedulePreview, Officer,
+  getTenantSession, LOAN_CREATE_ROLES, MANAGER_ROLES,
 } from '@/services/tenant-api';
 import {
   getQuickAddCustomerErrors, sanitizeNameInput, sanitizeLocalityInput, sanitizePanInput, sanitizeLoanPurposeInput,
@@ -37,10 +37,11 @@ export default function NewAgentRiskLoanPage() {
   const subdomain = params.subdomain;
 
   const session = getTenantSession();
-  if (!LOAN_CREATE_ROLES.includes(session?.user.role ?? 'VIEWER')) {
+  if (!LOAN_CREATE_ROLES.includes(session?.user.role ?? 'CUSTOMER')) {
     router.replace(`/${subdomain}/dashboard`);
     return null;
   }
+  const canAssignOfficer = MANAGER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
 
   const [step, setStep] = useState<Step>(1);
 
@@ -57,8 +58,9 @@ export default function NewAgentRiskLoanPage() {
 
   // Step 2: Loan Terms
   const [branches, setBranches] = useState<TenantBranch[]>([]);
+  const [officers, setOfficers] = useState<Officer[]>([]);
   const [form, setForm] = useState({
-    branchId: '', purpose: '',
+    branchId: '', purpose: '', loanOfficerId: '',
     principal: '', interestRate: '', termMonths: '',
     firstDueDate: '',
   });
@@ -80,6 +82,9 @@ export default function NewAgentRiskLoanPage() {
       setBranches(active);
       if (active.length === 1) setForm((f) => ({ ...f, branchId: active[0].id }));
     });
+    if (canAssignOfficer) {
+      getOfficers().then(setOfficers).catch(() => setOfficers([]));
+    }
     setForm((f) => ({ ...f, firstDueDate: nextMonthDate() }));
   }, []);
 
@@ -188,6 +193,7 @@ export default function NewAgentRiskLoanPage() {
         firstDueDate: form.firstDueDate,
         ...(form.branchId && { branchId: form.branchId }),
         ...(form.purpose && { purpose: form.purpose }),
+        ...(canAssignOfficer && form.loanOfficerId && { loanOfficerId: form.loanOfficerId }),
         ...(securityB64 && { securityDocUrl: securityB64 }),
         ...(promissoryB64 && { promissoryNoteUrl: promissoryB64 }),
       });
@@ -398,6 +404,15 @@ export default function NewAgentRiskLoanPage() {
                 <label className="block text-xs font-medium text-gray-600 mb-1">Loan Purpose</label>
                 <input value={form.purpose} onChange={(e) => setF('purpose', sanitizeLoanPurposeInput(e.target.value))} className={inputCls} placeholder="Business, Agriculture…" />
               </div>
+              {canAssignOfficer && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Loan Agent</label>
+                  <select value={form.loanOfficerId} onChange={(e) => setF('loanOfficerId', e.target.value)} className={inputCls}>
+                    <option value="">Assign to myself</option>
+                    {officers.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                  </select>
+                </div>
+              )}
             </div>
 
             <div className="pt-2">

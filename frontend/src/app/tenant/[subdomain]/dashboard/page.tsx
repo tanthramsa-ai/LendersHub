@@ -43,12 +43,12 @@ export default function TenantDashboardPage() {
   const subdomain = params.subdomain;
 
   const session = getTenantSession();
-  const userRole = session?.user.role ?? 'VIEWER';
+  const userRole = session?.user.role ?? 'CUSTOMER';
   const userName = session ? `${session.user.firstName} ${session.user.lastName}`.trim() : '';
 
   const isManager = MANAGER_ROLES.includes(userRole);
   const canCreateLoan = LOAN_ROLES.includes(userRole);
-  const isCollector = userRole === 'COLLECTOR';
+  const isCollector = userRole === 'AGENT';
 
   const [stats, setStats] = useState<DashboardStats & { roleView?: string } | null>(null);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
@@ -173,11 +173,11 @@ export default function TenantDashboardPage() {
           </p>
         </div>
         <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${
-          userRole === 'OWNER'        ? 'bg-yellow-100 text-yellow-700' :
-          userRole === 'MANAGER'      ? 'bg-indigo-100 text-indigo-700' :
-          userRole === 'ADMIN'        ? 'bg-purple-100 text-purple-700' :
-          userRole === 'LOAN_OFFICER' ? 'bg-blue-100 text-blue-700' :
-          userRole === 'COLLECTOR'    ? 'bg-orange-100 text-orange-700' :
+          userRole === 'OWNER'   ? 'bg-yellow-100 text-yellow-700' :
+          userRole === 'ADMIN'   ? 'bg-purple-100 text-purple-700' :
+          userRole === 'MANAGER' ? 'bg-indigo-100 text-indigo-700' :
+          userRole === 'AGENT'   ? 'bg-blue-100 text-blue-700' :
+          userRole === 'STAFF'   ? 'bg-orange-100 text-orange-700' :
           'bg-gray-100 text-gray-600'
         }`}>
           {userRole.replace('_', ' ')}

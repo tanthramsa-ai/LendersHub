@@ -23,7 +23,7 @@ export default function AgentRiskLoansPage() {
   const params = useParams<{ subdomain: string }>();
   const subdomain = params.subdomain;
   const session = getTenantSession();
-  const canCreate = LOAN_ROLES.includes(session?.user.role ?? 'VIEWER');
+  const canCreate = LOAN_ROLES.includes(session?.user.role ?? 'CUSTOMER');
 
   const [loans, setLoans] = useState<AgentRiskLoan[]>([]);
   const [total, setTotal] = useState(0);

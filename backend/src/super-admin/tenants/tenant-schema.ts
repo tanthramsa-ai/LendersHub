@@ -14,12 +14,15 @@ export function tenantSchemaDDL(s: string): string[] {
 
     // ── Enum types (idempotent via exception handler) ────────────────────────
     `DO $$ BEGIN
-       CREATE TYPE ${q}.user_role AS ENUM ('OWNER','MANAGER','ADMIN','LOAN_OFFICER','COLLECTOR','VIEWER');
+       CREATE TYPE ${q}.user_role AS ENUM ('OWNER','MANAGER','ADMIN','LOAN_OFFICER','COLLECTOR','VIEWER','AGENT','STAFF','CUSTOMER');
      EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
 
     // Add OWNER and MANAGER to existing tenants (ALTER TYPE ADD VALUE is idempotent in PG 9.6+)
     `DO $$ BEGIN ALTER TYPE ${q}.user_role ADD VALUE IF NOT EXISTS 'OWNER'; EXCEPTION WHEN others THEN NULL; END $$`,
     `DO $$ BEGIN ALTER TYPE ${q}.user_role ADD VALUE IF NOT EXISTS 'MANAGER'; EXCEPTION WHEN others THEN NULL; END $$`,
+    `DO $$ BEGIN ALTER TYPE ${q}.user_role ADD VALUE IF NOT EXISTS 'AGENT'; EXCEPTION WHEN others THEN NULL; END $$`,
+    `DO $$ BEGIN ALTER TYPE ${q}.user_role ADD VALUE IF NOT EXISTS 'STAFF'; EXCEPTION WHEN others THEN NULL; END $$`,
+    `DO $$ BEGIN ALTER TYPE ${q}.user_role ADD VALUE IF NOT EXISTS 'CUSTOMER'; EXCEPTION WHEN others THEN NULL; END $$`,
 
     `DO $$ BEGIN
        CREATE TYPE ${q}.loan_status AS ENUM ('PENDING','APPROVED','DISBURSED','CLOSED','DEFAULTED','REJECTED');
@@ -248,6 +251,10 @@ export function tenantSchemaDDL(s: string): string[] {
     // Collector's chosen resolution for a missed/short PER_1000_PER_DAY installment —
     // 'PAY_EXTRA_NEXT' | 'EXTEND_EMI' | 'DEFER_TO_END'. Null until explicitly resolved.
     `ALTER TABLE ${q}."installments" ADD COLUMN IF NOT EXISTS miss_resolution TEXT`,
+    `DO $$ BEGIN
+       ALTER TABLE ${q}."installments" ADD CONSTRAINT installments_miss_resolution_chk
+         CHECK (miss_resolution IS NULL OR miss_resolution IN ('PAY_EXTRA_NEXT','EXTEND_EMI','DEFER_TO_END'));
+     EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
 
     // Widen interest_rate so values up to 200% p.a. (and loan-type bounds) fit.
     // NUMERIC(6,4) only allowed ≤ 99.9999 and caused "Numeric value out of range".
@@ -298,5 +305,10 @@ export function tenantSchemaDDL(s: string): string[] {
        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
      )`,
     `CREATE INDEX IF NOT EXISTS idx_${s}_activity_log_created_at ON ${q}."activity_log" (created_at DESC)`,
+
+    // Role-model migration: merge LOAN_OFFICER/COLLECTOR into AGENT and VIEWER into STAFF.
+    // Runs after the ADD VALUE statements above commit, as its own statement.
+    `UPDATE ${q}."users" SET role = 'AGENT' WHERE role IN ('LOAN_OFFICER','COLLECTOR')`,
+    `UPDATE ${q}."users" SET role = 'STAFF' WHERE role = 'VIEWER'`,
   ];
 }

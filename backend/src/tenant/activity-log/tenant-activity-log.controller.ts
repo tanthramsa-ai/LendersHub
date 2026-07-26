@@ -2,11 +2,12 @@ import { Controller, Get, Query, UseGuards, Request, ForbiddenException } from '
 import { TenantActivityLogService } from './tenant-activity-log.service';
 import { TenantJwtGuard } from '../auth/guards/tenant-jwt.guard';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
+import { MANAGER_ROLES, UserRole } from '../common/roles';
 
 // Oversight roles — same tier that can see "all data" per the permission matrix
-// (Loan Types, Org Settings). LOAN_OFFICER/COLLECTOR/VIEWER only see their own
+// (Loan Types, Org Settings). AGENT/STAFF/CUSTOMER only see their own
 // portfolio elsewhere in the app, so a cross-user activity trail is out of scope for them.
-const CAN_VIEW_ACTIVITY = ['OWNER', 'MANAGER', 'ADMIN'];
+const CAN_VIEW_ACTIVITY = MANAGER_ROLES;
 
 @Controller('api/v1/tenant/activity-log')
 @UseGuards(TenantJwtGuard)
@@ -22,7 +23,7 @@ export class TenantActivityLogController {
     @Query('entityType') entityType?: string,
     @Query('search') search?: string,
   ) {
-    if (!CAN_VIEW_ACTIVITY.includes(req.user.role)) {
+    if (!CAN_VIEW_ACTIVITY.includes(req.user.role as UserRole)) {
       throw new ForbiddenException('You do not have permission to view the activity log');
     }
     return this.activity.list(req.user, parseInt(page, 10), parseInt(limit, 10), {

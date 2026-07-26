@@ -12,10 +12,10 @@ import {
 import { onNotificationBellRefresh } from '@/lib/notifications-bus';
 
 // Routes each role can access. Omitting `roles` means all authenticated users.
-const ALL_ROLES: UserRole[] = ['OWNER', 'MANAGER', 'ADMIN', 'LOAN_OFFICER', 'COLLECTOR', 'VIEWER'];
-const CAN_CREATE_LOANS: UserRole[] = ['OWNER', 'MANAGER', 'ADMIN', 'LOAN_OFFICER'];
-const CAN_COLLECT: UserRole[] = ['OWNER', 'MANAGER', 'ADMIN', 'LOAN_OFFICER', 'COLLECTOR'];
-const CAN_WRITE_CUSTOMERS: UserRole[] = ['OWNER', 'MANAGER', 'ADMIN', 'LOAN_OFFICER', 'COLLECTOR'];
+const ALL_ROLES: UserRole[] = ['OWNER', 'ADMIN', 'MANAGER', 'AGENT', 'STAFF', 'CUSTOMER'];
+const CAN_CREATE_LOANS: UserRole[] = ['OWNER', 'ADMIN', 'MANAGER', 'AGENT', 'STAFF'];
+const CAN_COLLECT: UserRole[] = ['OWNER', 'ADMIN', 'MANAGER', 'AGENT', 'STAFF'];
+const CAN_WRITE_CUSTOMERS: UserRole[] = ['OWNER', 'ADMIN', 'MANAGER', 'AGENT', 'STAFF'];
 
 // Sub-route overrides: more specific path suffixes that need tighter roles than their parent nav item.
 // Checked before the NAV-level guard — first match wins.
@@ -112,7 +112,7 @@ const NAV_TOP: NavItem[] = [
 // Rendered after the collapsible Loans group.
 const NAV_BOTTOM: NavItem[] = [
   {
-    href: 'ledger', label: 'Ledger', roles: ALL_ROLES,
+    href: 'ledger', label: 'Ledger', roles: USER_ADMIN_ROLES,
     icon: (
       <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 11h.01M12 11h.01M15 11h.01M12 7h.01M15 7h.01M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />

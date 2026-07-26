@@ -62,8 +62,8 @@ export default function CustomerDetailPage() {
   const router = useRouter();
 
   const session = getTenantSession();
-  const canEdit = CUSTOMER_ROLES.includes(session?.user.role ?? 'VIEWER');
-  const canAdmin = USER_ADMIN_ROLES.includes(session?.user.role ?? 'VIEWER');
+  const canEdit = CUSTOMER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
+  const canAdmin = USER_ADMIN_ROLES.includes(session?.user.role ?? 'CUSTOMER');
 
   const [customer, setCustomer] = useState<CustomerDetail | null>(null);
   const [loans, setLoans] = useState<Loan[]>([]);

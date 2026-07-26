@@ -1,8 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
-
-const MANAGER_ROLES = ['OWNER', 'MANAGER', 'ADMIN'];
+import { MANAGER_ROLES, UserRole } from '../common/roles';
 
 @Injectable()
 export class TenantDashboardService {
@@ -15,11 +14,11 @@ export class TenantDashboardService {
       await client.query(`SET search_path = "${s}", public`);
 
       const today = new Date().toISOString().slice(0, 10);
-      const isManager = MANAGER_ROLES.includes(user.role);
-      const isCollector = user.role === 'COLLECTOR';
+      const isManager = MANAGER_ROLES.includes(user.role as UserRole);
+      const isCollector = user.role === 'AGENT';
 
       if (isCollector) {
-        // Collectors see only their assigned installments
+        // Agents see only their assigned installments
         // NOTE: queries run sequentially — a single pg connection can only
         // execute one query at a time (concurrent client.query() on one client
         // is deprecated and races). Serial has no cost here: one connection.
@@ -89,7 +88,7 @@ export class TenantDashboardService {
     const client = await this.prisma.pool.connect();
     try {
       await client.query(`SET search_path = "${s}", public`);
-      const isManager = MANAGER_ROLES.includes(user.role);
+      const isManager = MANAGER_ROLES.includes(user.role as UserRole);
       const officerParams = isManager ? [] : [user.sub];
       const officerWhere = isManager ? `WHERE l.deleted_at IS NULL` : `WHERE l.deleted_at IS NULL AND l.loan_officer_id = $1`;
 
@@ -139,9 +138,9 @@ export class TenantDashboardService {
     try {
       await client.query(`SET search_path = "${s}", public`);
 
-      const isManager = MANAGER_ROLES.includes(user.role);
-      // COLLECTOR sees their assigned loans (via installment assignments)
-      const isCollector = user.role === 'COLLECTOR';
+      const isManager = MANAGER_ROLES.includes(user.role as UserRole);
+      // AGENT sees their assigned loans (via installment assignments)
+      const isCollector = user.role === 'AGENT';
 
       let whereClause: string;
       let countWhere: string;
@@ -159,7 +158,7 @@ export class TenantDashboardService {
         params = [limit, offset];
         countParams = [];
       } else {
-        // LOAN_OFFICER: only their loans
+        // STAFF: only their loans
         whereClause = `WHERE l.loan_officer_id = $3 AND l.status = 'DISBURSED' AND l.deleted_at IS NULL`;
         countWhere = `WHERE l.loan_officer_id = $1 AND l.status = 'DISBURSED' AND l.deleted_at IS NULL`;
         params = [limit, offset, user.sub];
