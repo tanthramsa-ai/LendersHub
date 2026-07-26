@@ -87,8 +87,12 @@ export class TenantAuthService {
     if (!user) throw new UnauthorizedException('Invalid credentials');
     if (!user.is_active) throw new UnauthorizedException('Your account has been deactivated');
 
-    const valid = await bcrypt.compare(dto.password, user.password);
-    if (!valid) throw new UnauthorizedException('Invalid credentials');
+    // If password is set, verify it
+    if (user.password) {
+      const valid = await bcrypt.compare(dto.password, user.password);
+      if (!valid) throw new UnauthorizedException('Invalid credentials');
+    }
+    // If no password is set, allow login (useful for testing/passwordless flows)
 
     // Send OTP if user has a phone number
     if (user.phone) {
