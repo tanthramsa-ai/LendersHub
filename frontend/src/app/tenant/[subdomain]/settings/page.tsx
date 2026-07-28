@@ -8,6 +8,8 @@ import {
   getSmsConfig, updateSmsConfig, SmsConfig,
   getLoanTypes, createLoanType, updateLoanType, deleteLoanType, LoanType,
   getWhatsAppConfig, updateWhatsAppConfig, WhatsAppConfig,
+  getPermissionMatrix, updatePermissionMatrix, PermissionMatrix, PermissionKey, PermissionUpdate,
+  PERMISSION_KEYS, PERMISSION_LABELS, PERMISSION_VALUE_OPTIONS,
   ROLE_LABELS, UserRole, USER_ADMIN_ROLES, getTenantSession,
 } from '@/services/tenant-api';
 
@@ -781,11 +783,139 @@ function WhatsAppConfigTab() {
   );
 }
 
+// ── Permissions Tab (role matrix) ─────────────────────────────────────────────
+function PermissionsTab() {
+  const [matrix, setMatrix] = useState<PermissionMatrix | null>(null);
+  const [dirty, setDirty] = useState<Map<string, PermissionUpdate>>(new Map());
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState('');
+
+  const roles = Object.keys(ROLE_LABELS) as UserRole[];
+
+  useEffect(() => {
+    getPermissionMatrix()
+      .then(setMatrix)
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to load permissions'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  function cellValue(role: UserRole, key: PermissionKey): string {
+    const dirtyKey = `${role}:${key}`;
+    return dirty.get(dirtyKey)?.value ?? matrix?.[role]?.[key] ?? '';
+  }
+
+  function setCell(role: UserRole, key: PermissionKey, value: string) {
+    setDirty((prev) => {
+      const next = new Map(prev);
+      next.set(`${role}:${key}`, { role, permissionKey: key, value });
+      return next;
+    });
+    setSaved(false);
+  }
+
+  async function save() {
+    if (dirty.size === 0) return;
+    setSaving(true); setError(''); setSaved(false);
+    try {
+      await updatePermissionMatrix([...dirty.values()]);
+      setMatrix((prev) => {
+        if (!prev) return prev;
+        const next: PermissionMatrix = { ...prev };
+        for (const u of dirty.values()) {
+          next[u.role] = { ...next[u.role], [u.permissionKey]: u.value };
+        }
+        return next;
+      });
+      setDirty(new Map());
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to save permissions');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) return <div className="flex justify-center py-12"><div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>;
+  if (!matrix) return <p className="text-sm text-red-600 font-medium">{error || 'Could not load the permission matrix.'}</p>;
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-blue-800">
+        <p className="font-semibold mb-1">What each role can do, per action.</p>
+        <p>
+          <strong>All</strong> = every record in the tenant. <strong>Self</strong> = only records where
+          this user is the assigned agent. <strong>Partial</strong> (Add Loan) = can create/request
+          close, but Owner/Admin/Manager must approve. Owner&rsquo;s row is fixed at full access.
+        </p>
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Role</th>
+              {PERMISSION_KEYS.map((key) => (
+                <th key={key} className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
+                  {PERMISSION_LABELS[key]}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {roles.map((role) => {
+              const isOwner = role === 'OWNER';
+              return (
+                <tr key={role} className={isOwner ? 'bg-gray-50/60' : 'hover:bg-gray-50'}>
+                  <td className="px-4 py-3">
+                    <span className="font-semibold text-gray-900">{ROLE_LABELS[role]}</span>
+                    {isOwner && <span className="ml-2 text-xs text-gray-400">(fixed)</span>}
+                  </td>
+                  {PERMISSION_KEYS.map((key) => (
+                    <td key={key} className="px-3 py-2.5">
+                      <select
+                        value={cellValue(role, key)}
+                        onChange={(e) => setCell(role, key, e.target.value)}
+                        disabled={isOwner}
+                        className={`text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 ${isOwner ? 'bg-gray-100 text-gray-400' : ''}`}
+                      >
+                        {PERMISSION_VALUE_OPTIONS[key].map((opt) => (
+                          <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        ))}
+                      </select>
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {error && <p className="text-sm text-red-600 font-medium">{error}</p>}
+      {saved && <p className="text-sm text-green-600 font-medium">Permission matrix saved.</p>}
+
+      <button
+        onClick={save}
+        disabled={saving || dirty.size === 0}
+        className="px-6 py-2.5 rounded-xl font-bold text-white text-sm disabled:opacity-40"
+        style={{ backgroundColor: BRAND }}
+      >
+        {saving ? 'Saving…' : dirty.size > 0 ? `Save ${dirty.size} Change${dirty.size === 1 ? '' : 's'}` : 'Save Changes'}
+      </button>
+    </div>
+  );
+}
+
 // ── Main Settings Page ────────────────────────────────────────────────────────
-type SettingsTab = 'branches' | 'loanTypes' | 'sms' | 'whatsapp';
+type SettingsTab = 'branches' | 'loanTypes' | 'sms' | 'whatsapp' | 'permissions';
 
 export default function SettingsPage() {
   const [tab, setTab] = useState<SettingsTab>('branches');
+  const session = getTenantSession();
+  const isAdmin = !!session?.user && USER_ADMIN_ROLES.includes(session.user.role as UserRole);
   const [branches, setBranches] = useState<TenantBranch[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -808,6 +938,7 @@ export default function SettingsPage() {
     { key: 'loanTypes', label: 'Loan Types' },
     { key: 'sms', label: 'SMS / OTP' },
     { key: 'whatsapp', label: 'WhatsApp' },
+    ...(isAdmin ? [{ key: 'permissions' as const, label: 'Permissions' }] : []),
   ];
 
   return (
@@ -864,6 +995,7 @@ export default function SettingsPage() {
       {tab === 'loanTypes' && <LoanTypesTab />}
       {tab === 'sms' && <SmsConfigTab />}
       {tab === 'whatsapp' && <WhatsAppConfigTab />}
+      {tab === 'permissions' && isAdmin && <PermissionsTab />}
 
       {showModal && <BranchModal onClose={() => setShowModal(false)} onSuccess={() => { setShowModal(false); loadBranches(); }} />}
       {editBranch && <BranchModal branch={editBranch} onClose={() => setEditBranch(null)} onSuccess={() => { setEditBranch(null); loadBranches(); }} />}

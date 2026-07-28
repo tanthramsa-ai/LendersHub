@@ -1222,6 +1222,61 @@ export function updateSmsConfig(dto: SmsConfig) {
   });
 }
 
+// ── Permissions (role matrix) ───────────────────────────────────────────────
+// Mirrors backend/src/tenant/permissions/tenant-permissions.service.ts —
+// keep the key list and value vocabularies in sync with that file.
+
+export const PERMISSION_KEYS = [
+  'add_user',
+  'add_customer',
+  'view_loan',
+  'add_loan',
+  'update_loan',
+  'view_collection',
+  'add_collection',
+] as const;
+export type PermissionKey = (typeof PERMISSION_KEYS)[number];
+
+export const PERMISSION_LABELS: Record<PermissionKey, string> = {
+  add_user: 'Add User',
+  add_customer: 'Add Customer',
+  view_loan: 'View Loan',
+  add_loan: 'Add Loan',
+  update_loan: 'Update Loan',
+  view_collection: 'View Collection',
+  add_collection: 'Add Collection',
+};
+
+/** Allowed values per key, in display order — differs per column, not a shared boolean. */
+export const PERMISSION_VALUE_OPTIONS: Record<PermissionKey, { value: string; label: string }[]> = {
+  add_user: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }],
+  add_customer: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }],
+  view_loan: [{ value: 'all', label: 'All' }, { value: 'self', label: 'Self' }, { value: 'no', label: 'No' }],
+  add_loan: [{ value: 'yes', label: 'Yes' }, { value: 'partial', label: 'Partial' }, { value: 'no', label: 'No' }],
+  update_loan: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }],
+  view_collection: [{ value: 'all', label: 'All' }, { value: 'self', label: 'Self' }, { value: 'no', label: 'No' }],
+  add_collection: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }],
+};
+
+export type PermissionMatrix = Record<UserRole, Record<PermissionKey, string>>;
+
+export interface PermissionUpdate {
+  role: UserRole;
+  permissionKey: PermissionKey;
+  value: string;
+}
+
+export function getPermissionMatrix() {
+  return tenantFetch<PermissionMatrix>('/api/v1/tenant/permissions');
+}
+
+export function updatePermissionMatrix(updates: PermissionUpdate[]) {
+  return tenantFetch<{ message: string }>('/api/v1/tenant/permissions', {
+    method: 'PUT',
+    body: JSON.stringify({ updates }),
+  });
+}
+
 // ── Loan Types ────────────────────────────────────────────────────────────────
 
 export interface LoanType {
