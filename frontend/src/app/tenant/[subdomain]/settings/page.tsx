@@ -8,7 +8,8 @@ import {
   getSmsConfig, updateSmsConfig, SmsConfig,
   getLoanTypes, createLoanType, updateLoanType, deleteLoanType, LoanType,
   getWhatsAppConfig, updateWhatsAppConfig, WhatsAppConfig,
-  getPermissionMatrix, updatePermissionMatrix, addPermissionRole, PermissionMatrix, PermissionKey, PermissionUpdate,
+  getPermissionMatrix, updatePermissionMatrix, addPermissionRole, renamePermissionRole, deletePermissionRole,
+  PermissionMatrix, PermissionKey, PermissionUpdate,
   PERMISSION_KEYS, PERMISSION_LABELS, PERMISSION_VALUE_OPTIONS,
   ROLE_LABELS, UserRole, USER_ADMIN_ROLES, getTenantSession,
 } from '@/services/tenant-api';
@@ -802,6 +803,10 @@ function PermissionsTab() {
   const [newRoleName, setNewRoleName] = useState('');
   const [addingRole, setAddingRole] = useState(false);
   const [addRoleError, setAddRoleError] = useState('');
+  const [editingRole, setEditingRole] = useState<string | null>(null);
+  const [editingRoleName, setEditingRoleName] = useState('');
+  const [roleActionError, setRoleActionError] = useState('');
+  const [roleActionBusy, setRoleActionBusy] = useState<string | null>(null);
 
   const builtIns = Object.keys(ROLE_LABELS);
   const roles = matrix
@@ -841,6 +846,52 @@ function PermissionsTab() {
       setAddRoleError(e instanceof Error ? e.message : 'Failed to add role');
     } finally {
       setAddingRole(false);
+    }
+  }
+
+  function startEditRole(role: string) {
+    setEditingRole(role);
+    setEditingRoleName(roleLabel(role));
+    setRoleActionError('');
+  }
+
+  // Renaming/deleting a role invalidates any unsaved matrix edits queued for its old
+  // key — drop them rather than silently losing track of which role they applied to.
+  function dropDirtyFor(role: string) {
+    setDirty((prev) => {
+      const next = new Map(prev);
+      for (const k of next.keys()) if (k.startsWith(`${role}:`)) next.delete(k);
+      return next;
+    });
+  }
+
+  async function saveRoleRename(role: string) {
+    const name = editingRoleName.trim();
+    if (!name || name === roleLabel(role)) { setEditingRole(null); return; }
+    setRoleActionBusy(role); setRoleActionError('');
+    try {
+      const updated = await renamePermissionRole(role, name);
+      setMatrix(updated);
+      dropDirtyFor(role);
+      setEditingRole(null);
+    } catch (e: unknown) {
+      setRoleActionError(e instanceof Error ? e.message : 'Failed to rename role');
+    } finally {
+      setRoleActionBusy(null);
+    }
+  }
+
+  async function removeRole(role: string) {
+    if (!confirm(`Delete the "${roleLabel(role)}" role? Users must be reassigned first if any still have it.`)) return;
+    setRoleActionBusy(role); setRoleActionError('');
+    try {
+      const updated = await deletePermissionRole(role);
+      dropDirtyFor(role);
+      setMatrix(updated);
+    } catch (e: unknown) {
+      setRoleActionError(e instanceof Error ? e.message : 'Failed to delete role');
+    } finally {
+      setRoleActionBusy(null);
     }
   }
 
@@ -921,17 +972,34 @@ function PermissionsTab() {
                   {PERMISSION_LABELS[key]}
                 </th>
               ))}
+              <th className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {roles.map((role) => {
               const isOwner = role === 'OWNER';
+              const isCustom = !(role in ROLE_LABELS);
+              const isEditing = editingRole === role;
+              const busy = roleActionBusy === role;
               return (
                 <tr key={role} className={isOwner ? 'bg-gray-50/60' : 'hover:bg-gray-50'}>
                   <td className="px-4 py-3">
-                    <span className="font-semibold text-gray-900">{roleLabel(role)}</span>
-                    {isOwner && <span className="ml-2 text-xs text-gray-400">(fixed)</span>}
-                    {!(role in ROLE_LABELS) && <span className="ml-2 text-xs text-blue-500">(custom)</span>}
+                    {isEditing ? (
+                      <input
+                        autoFocus
+                        value={editingRoleName}
+                        onChange={(e) => setEditingRoleName(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') saveRoleRename(role); if (e.key === 'Escape') setEditingRole(null); }}
+                        maxLength={30}
+                        className="text-sm border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    ) : (
+                      <>
+                        <span className="font-semibold text-gray-900">{roleLabel(role)}</span>
+                        {isOwner && <span className="ml-2 text-xs text-gray-400">(fixed)</span>}
+                        {isCustom && <span className="ml-2 text-xs text-blue-500">(custom)</span>}
+                      </>
+                    )}
                   </td>
                   {PERMISSION_KEYS.map((key) => (
                     <td key={key} className="px-3 py-2.5">
@@ -947,6 +1015,29 @@ function PermissionsTab() {
                       </select>
                     </td>
                   ))}
+                  <td className="px-3 py-2.5 whitespace-nowrap">
+                    {isCustom && (
+                      isEditing ? (
+                        <div className="flex gap-1.5">
+                          <button onClick={() => saveRoleRename(role)} disabled={busy} className="text-xs font-semibold text-blue-600 hover:text-blue-800 disabled:opacity-40">
+                            {busy ? 'Saving…' : 'Save'}
+                          </button>
+                          <button onClick={() => setEditingRole(null)} disabled={busy} className="text-xs font-semibold text-gray-500 hover:text-gray-700">
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex gap-3">
+                          <button onClick={() => startEditRole(role)} className="text-xs font-semibold text-blue-600 hover:text-blue-800">
+                            Rename
+                          </button>
+                          <button onClick={() => removeRole(role)} disabled={busy} className="text-xs font-semibold text-red-600 hover:text-red-800 disabled:opacity-40">
+                            {busy ? 'Deleting…' : 'Delete'}
+                          </button>
+                        </div>
+                      )
+                    )}
+                  </td>
                 </tr>
               );
             })}
@@ -954,6 +1045,7 @@ function PermissionsTab() {
         </table>
       </div>
 
+      {roleActionError && <p className="text-sm text-red-600 font-medium">{roleActionError}</p>}
       {error && <p className="text-sm text-red-600 font-medium">{error}</p>}
       {saved && <p className="text-sm text-green-600 font-medium">Permission matrix saved.</p>}
 

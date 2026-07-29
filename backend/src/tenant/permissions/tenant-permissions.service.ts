@@ -198,4 +198,86 @@ export class TenantPermissionsService {
       return this.buildMatrix(client);
     });
   }
+
+  /** Renames a custom role. Since role_permissions.role and users.role are both the
+   *  tenant's user_role enum type, ALTER TYPE ... RENAME VALUE updates every existing
+   *  row referencing it automatically — no data migration needed. Built-in roles can't
+   *  be renamed (route guards elsewhere still expect their exact names). */
+  async renameRole(user: TenantJwtPayload, oldKeyRaw: string, newKeyRaw: string): Promise<PermissionMatrix> {
+    this.assertAdmin(user);
+    const oldKey = (oldKeyRaw ?? '').trim().toUpperCase();
+    const newKey = (newKeyRaw ?? '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+    if ((ROLE as readonly string[]).includes(oldKey)) {
+      throw new BadRequestException('Built-in roles cannot be renamed');
+    }
+    if (!ROLE_KEY_RE.test(newKey)) {
+      throw new BadRequestException(
+        'Role name must be 2-30 characters: letters, numbers, underscores, starting with a letter.',
+      );
+    }
+
+    return this.withSchema(user.schemaName, async (client) => {
+      const roles = await this.knownRoles(client);
+      if (!roles.has(oldKey)) throw new BadRequestException(`Role "${oldKey}" does not exist`);
+      if (newKey !== oldKey && roles.has(newKey)) {
+        throw new BadRequestException(`Role "${newKey}" already exists`);
+      }
+
+      if (newKey !== oldKey) {
+        // Safe from injection: both keys are validated above and oldKey is additionally
+        // confirmed to already exist as a known role (so it can only be a value this
+        // service itself previously wrote via addRole's ROLE_KEY_RE check).
+        await client.query(`ALTER TYPE user_role RENAME VALUE '${oldKey}' TO '${newKey}'`);
+      }
+
+      await this.activity.record(client, user, {
+        action: 'permissions.role_renamed',
+        entityType: 'role_permissions',
+        entityLabel: `Role "${oldKey}" renamed to "${newKey}"`,
+        metadata: { from: oldKey, to: newKey },
+      });
+
+      return this.buildMatrix(client);
+    });
+  }
+
+  /** Deletes a custom role. Postgres can't drop a single enum value (no DROP VALUE),
+   *  so the label stays reserved in this tenant's user_role type forever — but removing
+   *  its role_permissions rows is what actually makes it disappear from the matrix and
+   *  the assignable-roles list. Refuses if any user still holds the role, and refuses
+   *  for built-ins outright. */
+  async deleteRole(user: TenantJwtPayload, roleKeyRaw: string): Promise<PermissionMatrix> {
+    this.assertAdmin(user);
+    const roleKey = (roleKeyRaw ?? '').trim().toUpperCase();
+    if ((ROLE as readonly string[]).includes(roleKey)) {
+      throw new BadRequestException('Built-in roles cannot be deleted');
+    }
+
+    return this.withSchema(user.schemaName, async (client) => {
+      const roles = await this.knownRoles(client);
+      if (!roles.has(roleKey)) throw new BadRequestException(`Role "${roleKey}" does not exist`);
+
+      const inUse = await client.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM users WHERE role = $1`,
+        [roleKey],
+      );
+      const count = inUse.rows[0]?.count ?? 0;
+      if (count > 0) {
+        throw new BadRequestException(
+          `${count} user(s) still have the "${roleKey}" role — reassign them before deleting it`,
+        );
+      }
+
+      await client.query(`DELETE FROM role_permissions WHERE role = $1`, [roleKey]);
+
+      await this.activity.record(client, user, {
+        action: 'permissions.role_deleted',
+        entityType: 'role_permissions',
+        entityLabel: `Role "${roleKey}" deleted`,
+        metadata: { role: roleKey },
+      });
+
+      return this.buildMatrix(client);
+    });
+  }
 }

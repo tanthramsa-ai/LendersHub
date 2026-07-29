@@ -1288,6 +1288,21 @@ export function addPermissionRole(roleKey: string) {
   });
 }
 
+/** Renames a custom role (built-ins can't be renamed). */
+export function renamePermissionRole(role: string, newName: string) {
+  return tenantFetch<PermissionMatrix>(`/api/v1/tenant/permissions/roles/${encodeURIComponent(role)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ newName }),
+  });
+}
+
+/** Deletes a custom role (built-ins can't be deleted; fails if any user still has it). */
+export function deletePermissionRole(role: string) {
+  return tenantFetch<PermissionMatrix>(`/api/v1/tenant/permissions/roles/${encodeURIComponent(role)}`, {
+    method: 'DELETE',
+  });
+}
+
 // ── Loan Types ────────────────────────────────────────────────────────────────
 
 export interface LoanType {
