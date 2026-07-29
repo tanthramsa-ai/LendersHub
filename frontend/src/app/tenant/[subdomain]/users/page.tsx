@@ -7,12 +7,21 @@ import {
   getTenantUsers, createTenantUser, updateTenantUser,
   activateTenantUser, deactivateTenantUser, resetTenantUserPassword,
   getBranches, TenantTeamMember, TenantBranch, UserRole, ROLE_LABELS, USER_ADMIN_ROLES,
-  getTenantSession,
+  getTenantSession, getPermissionMatrix,
 } from '@/services/tenant-api';
 
 const BRAND = '#0F4C81';
-// Roles an Owner/Admin can assign when creating or editing a user (excludes OWNER and CUSTOMER)
+// Built-in roles an Owner/Admin can assign when creating or editing a user (excludes
+// OWNER and CUSTOMER). Tenant-defined custom roles are fetched from the permission
+// matrix and appended in UserModal below.
 const ROLES: UserRole[] = ['ADMIN', 'MANAGER', 'AGENT', 'STAFF'];
+
+/** Built-in roles get their friendly label; a custom role falls back to a title-cased
+ *  rendering of its key (kept in sync with settings/page.tsx's roleLabel). */
+function roleLabel(role: string): string {
+  if (role in ROLE_LABELS) return ROLE_LABELS[role as UserRole];
+  return role.toLowerCase().replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 const ROLE_BADGE: Record<UserRole, string> = {
   OWNER:    'bg-yellow-100 text-yellow-700',
@@ -25,10 +34,10 @@ const ROLE_BADGE: Record<UserRole, string> = {
 
 const inputCls = 'w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500';
 
-function roleBadge(role: UserRole) {
+function roleBadge(role: string) {
   return (
-    <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${ROLE_BADGE[role] ?? 'bg-gray-100 text-gray-600'}`}>
-      {ROLE_LABELS[role] ?? role}
+    <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${ROLE_BADGE[role as UserRole] ?? 'bg-gray-100 text-gray-600'}`}>
+      {roleLabel(role)}
     </span>
   );
 }
@@ -49,6 +58,15 @@ function UserModal({
   });
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState('');
+  const [customRoles, setCustomRoles] = useState<string[]>([]);
+
+  useEffect(() => {
+    getPermissionMatrix()
+      .then((matrix) => setCustomRoles(Object.keys(matrix).filter((r) => !ROLES.includes(r as UserRole) && r !== 'OWNER' && r !== 'CUSTOMER')))
+      .catch(() => {}); // Non-fatal: the role dropdown just won't show custom roles.
+  }, []);
+
+  const roleOptions = [...ROLES, ...customRoles];
 
   function set(k: keyof typeof form, v: string) { setForm((f) => ({ ...f, [k]: v })); }
 
@@ -124,7 +142,7 @@ function UserModal({
             <div>
               <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1.5">Role *</label>
               <select value={form.role} onChange={(e) => set('role', e.target.value)} className={`${inputCls} bg-white`}>
-                {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+                {roleOptions.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
               </select>
             </div>
             <div>

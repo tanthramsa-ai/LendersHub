@@ -32,13 +32,19 @@ const ALLOWED_VALUES: Record<PermissionKey, string[]> = {
   add_collection: ['yes', 'no'],
 };
 
-export type PermissionMatrix = Record<UserRole, Record<PermissionKey, string>>;
+// Built-in roles are a fixed literal union (UserRole); tenant admins can additionally
+// define custom roles at runtime (see addRole), so anywhere a role is looked up by
+// name it's treated as a plain string, not narrowed to UserRole.
+export type PermissionMatrix = Record<string, Record<PermissionKey, string>>;
 
 export interface PermissionUpdate {
-  role: UserRole;
+  role: string;
   permissionKey: PermissionKey;
   value: string;
 }
+
+// Custom role keys: 2-30 chars, uppercase letters/digits/underscore, starting with a letter.
+const ROLE_KEY_RE = /^[A-Z][A-Z0-9_]{1,29}$/;
 
 @Injectable()
 export class TenantPermissionsService {
@@ -66,26 +72,38 @@ export class TenantPermissionsService {
     }
   }
 
+  /** Roles currently known in this tenant's role_permissions table, union'd with the
+   *  fixed built-ins (so a built-in role missing all its rows still shows up). */
+  private async knownRoles(client: import('pg').PoolClient): Promise<Set<string>> {
+    const roles = new Set<string>(ROLE);
+    const res = await client.query<{ role: string }>(`SELECT DISTINCT role FROM role_permissions`);
+    for (const row of res.rows) roles.add(row.role);
+    return roles;
+  }
+
+  private async buildMatrix(client: import('pg').PoolClient): Promise<PermissionMatrix> {
+    const roles = await this.knownRoles(client);
+    const res = await client.query<{ role: string; permission_key: PermissionKey; value: string }>(
+      `SELECT role, permission_key, value FROM role_permissions`,
+    );
+
+    const matrix = {} as PermissionMatrix;
+    for (const role of roles) {
+      matrix[role] = {} as Record<PermissionKey, string>;
+      for (const key of PERMISSION_KEYS) {
+        // Most-restrictive fallback if a role/key pair is somehow missing a row.
+        matrix[role][key] = ALLOWED_VALUES[key][ALLOWED_VALUES[key].length - 1];
+      }
+    }
+    for (const row of res.rows) {
+      if (matrix[row.role]) matrix[row.role][row.permission_key] = row.value;
+    }
+    return matrix;
+  }
+
   async getMatrix(user: TenantJwtPayload): Promise<PermissionMatrix> {
     this.assertAdmin(user);
-    return this.withSchema(user.schemaName, async (client) => {
-      const res = await client.query<{ role: UserRole; permission_key: PermissionKey; value: string }>(
-        `SELECT role, permission_key, value FROM role_permissions`,
-      );
-
-      const matrix = {} as PermissionMatrix;
-      for (const role of ROLE) {
-        matrix[role] = {} as Record<PermissionKey, string>;
-        for (const key of PERMISSION_KEYS) {
-          // Most-restrictive fallback if a role/key pair is somehow missing a row.
-          matrix[role][key] = ALLOWED_VALUES[key][ALLOWED_VALUES[key].length - 1];
-        }
-      }
-      for (const row of res.rows) {
-        if (matrix[row.role]) matrix[row.role][row.permission_key] = row.value;
-      }
-      return matrix;
-    });
+    return this.withSchema(user.schemaName, (client) => this.buildMatrix(client));
   }
 
   async updateMatrix(user: TenantJwtPayload, updates: PermissionUpdate[]) {
@@ -95,7 +113,6 @@ export class TenantPermissionsService {
     }
 
     for (const u of updates) {
-      if (!ROLE.includes(u.role)) throw new BadRequestException(`Invalid role: ${u.role}`);
       if (!PERMISSION_KEYS.includes(u.permissionKey)) {
         throw new BadRequestException(`Invalid permission key: ${u.permissionKey}`);
       }
@@ -110,6 +127,11 @@ export class TenantPermissionsService {
     }
 
     return this.withSchema(user.schemaName, async (client) => {
+      const roles = await this.knownRoles(client);
+      for (const u of updates) {
+        if (!roles.has(u.role)) throw new BadRequestException(`Invalid role: ${u.role}`);
+      }
+
       for (const u of updates) {
         await client.query(
           `INSERT INTO role_permissions (role, permission_key, value, updated_at)
@@ -127,6 +149,53 @@ export class TenantPermissionsService {
       });
 
       return { message: 'Permission matrix updated' };
+    });
+  }
+
+  /** Tenant-defined custom role. Matrix-only: this role gets a row in role_permissions
+   *  and can be assigned to users, but route guards elsewhere (loans, customers,
+   *  collections, branches, ledger, dashboard) check the fixed built-in role lists in
+   *  common/roles.ts, not this table — so a custom role is treated as unprivileged
+   *  (STAFF-like or more restrictive) by every feature outside this settings page
+   *  until those guards are migrated to read role_permissions dynamically. */
+  async addRole(user: TenantJwtPayload, roleKeyRaw: string): Promise<PermissionMatrix> {
+    this.assertAdmin(user);
+    const roleKey = (roleKeyRaw ?? '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+    if (!ROLE_KEY_RE.test(roleKey)) {
+      throw new BadRequestException(
+        'Role name must be 2-30 characters: letters, numbers, underscores, starting with a letter.',
+      );
+    }
+
+    return this.withSchema(user.schemaName, async (client) => {
+      const roles = await this.knownRoles(client);
+      if (roles.has(roleKey)) {
+        throw new BadRequestException(`Role "${roleKey}" already exists`);
+      }
+
+      // Postgres enum values, once added, can't be removed (only renamed) — this is
+      // effectively a one-way operation per tenant schema. Safe from injection: roleKey
+      // is validated by ROLE_KEY_RE above (uppercase letters/digits/underscore only).
+      await client.query(`ALTER TYPE user_role ADD VALUE IF NOT EXISTS '${roleKey}'`);
+
+      for (const key of PERMISSION_KEYS) {
+        const mostRestrictive = ALLOWED_VALUES[key][ALLOWED_VALUES[key].length - 1];
+        await client.query(
+          `INSERT INTO role_permissions (role, permission_key, value, updated_at)
+           VALUES ($1, $2, $3, NOW())
+           ON CONFLICT (role, permission_key) DO NOTHING`,
+          [roleKey, key, mostRestrictive],
+        );
+      }
+
+      await this.activity.record(client, user, {
+        action: 'permissions.role_added',
+        entityType: 'role_permissions',
+        entityLabel: `Role "${roleKey}" added`,
+        metadata: { role: roleKey },
+      });
+
+      return this.buildMatrix(client);
     });
   }
 }

@@ -1088,7 +1088,7 @@ export interface TenantTeamMember {
   firstName: string;
   lastName: string;
   phone: string | null;
-  role: UserRole;
+  role: string; // built-in role or a tenant-defined custom role
   isActive: boolean;
   createdAt: string;
   branchId: string | null;
@@ -1134,12 +1134,12 @@ export function getUserLoans(id: string, page = 1, limit = 20, status?: string) 
 export function createTenantUser(dto: {
   email: string; password: string;
   firstName: string; lastName: string;
-  phone: string; role: UserRole; branchId?: string;
+  phone: string; role: string; branchId?: string;
 }) {
   return tenantFetch<TenantTeamMember>('/api/v1/tenant/users', { method: 'POST', body: JSON.stringify(dto) });
 }
 
-export function updateTenantUser(id: string, dto: { firstName?: string; lastName?: string; phone?: string; role?: UserRole; branchId?: string | null }) {
+export function updateTenantUser(id: string, dto: { firstName?: string; lastName?: string; phone?: string; role?: string; branchId?: string | null }) {
   return tenantFetch<TenantTeamMember>(`/api/v1/tenant/users/${id}`, { method: 'PATCH', body: JSON.stringify(dto) });
 }
 
@@ -1258,10 +1258,12 @@ export const PERMISSION_VALUE_OPTIONS: Record<PermissionKey, { value: string; la
   add_collection: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }],
 };
 
-export type PermissionMatrix = Record<UserRole, Record<PermissionKey, string>>;
+// Keyed by role name — built-in (UserRole) or a tenant-defined custom role, so this
+// isn't narrowed to UserRole.
+export type PermissionMatrix = Record<string, Record<PermissionKey, string>>;
 
 export interface PermissionUpdate {
-  role: UserRole;
+  role: string;
   permissionKey: PermissionKey;
   value: string;
 }
@@ -1274,6 +1276,15 @@ export function updatePermissionMatrix(updates: PermissionUpdate[]) {
   return tenantFetch<{ message: string }>('/api/v1/tenant/permissions', {
     method: 'PUT',
     body: JSON.stringify({ updates }),
+  });
+}
+
+/** Adds a tenant-defined custom role (matrix-only — see backend addRole doc comment
+ *  for what this does and doesn't control) and returns the updated matrix. */
+export function addPermissionRole(roleKey: string) {
+  return tenantFetch<PermissionMatrix>('/api/v1/tenant/permissions/roles', {
+    method: 'POST',
+    body: JSON.stringify({ roleKey }),
   });
 }
 

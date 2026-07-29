@@ -11,7 +11,9 @@ export interface CreateUserDto {
   firstName: string;
   lastName: string;
   phone: string;
-  role: Extract<UserRole, 'ADMIN' | 'MANAGER' | 'AGENT' | 'STAFF'>;
+  // Built-in role, or a tenant-defined custom role (see tenant/permissions) — validated
+  // against role_permissions at runtime, not narrowed to a literal type.
+  role: string;
   branchId?: string;
 }
 
@@ -19,11 +21,13 @@ export interface UpdateUserDto {
   firstName?: string;
   lastName?: string;
   phone?: string;
-  role?: Extract<UserRole, 'ADMIN' | 'MANAGER' | 'AGENT' | 'STAFF'>;
+  role?: string;
   branchId?: string | null;
 }
 
-// Roles an Owner/Admin can assign when creating or editing a user (excludes OWNER and CUSTOMER)
+// Built-in roles an Owner/Admin can assign when creating or editing a user (excludes
+// OWNER and CUSTOMER). Tenant-defined custom roles (see tenant/permissions) are also
+// assignable — checked dynamically against role_permissions in create()/update().
 const VALID_ROLES = ['ADMIN', 'MANAGER', 'AGENT', 'STAFF'];
 
 @Injectable()
@@ -181,14 +185,23 @@ export class TenantUsersService {
     });
   }
 
+  private async assertAssignableRole(client: import('pg').PoolClient, role: string) {
+    if (VALID_ROLES.includes(role)) return;
+    const res = await client.query(
+      `SELECT 1 FROM role_permissions WHERE role = $1 AND role NOT IN ('OWNER', 'CUSTOMER') LIMIT 1`,
+      [role],
+    );
+    if (res.rows.length === 0) throw new BadRequestException('Invalid role');
+  }
+
   async create(user: TenantJwtPayload, dto: CreateUserDto) {
     this.assertManager(user);
-    if (!VALID_ROLES.includes(dto.role)) throw new BadRequestException('Invalid role');
     if (!dto.phone?.trim()) throw new BadRequestException('Phone number is required');
 
     const hashed = await bcrypt.hash(dto.password, 10);
 
     return this.withSchema(user.schemaName, async (client) => {
+      await this.assertAssignableRole(client, dto.role);
       const existing = await client.query(`SELECT id FROM users WHERE LOWER(email) = LOWER($1)`, [dto.email]);
       if (existing.rows.length > 0) throw new ConflictException('Email already in use');
 
@@ -218,9 +231,9 @@ export class TenantUsersService {
 
   async update(user: TenantJwtPayload, id: string, dto: UpdateUserDto) {
     this.assertManager(user);
-    if (dto.role && !VALID_ROLES.includes(dto.role)) throw new BadRequestException('Invalid role');
 
     return this.withSchema(user.schemaName, async (client) => {
+      if (dto.role) await this.assertAssignableRole(client, dto.role);
       const existing = await client.query(`SELECT id FROM users WHERE id = $1`, [id]);
       if (!existing.rows[0]) throw new NotFoundException('User not found');
 

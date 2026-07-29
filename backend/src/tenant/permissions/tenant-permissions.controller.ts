@@ -1,4 +1,4 @@
-import { Controller, Get, Put, Body, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Put, Post, Body, UseGuards, Request } from '@nestjs/common';
 import { TenantPermissionsService, PermissionUpdate } from './tenant-permissions.service';
 import { TenantJwtGuard } from '../auth/guards/tenant-jwt.guard';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
@@ -19,5 +19,10 @@ export class TenantPermissionsController {
     @Body() body: { updates: PermissionUpdate[] },
   ) {
     return this.svc.updateMatrix(req.user, body.updates);
+  }
+
+  @Post('roles')
+  addRole(@Request() req: { user: TenantJwtPayload }, @Body() body: { roleKey: string }) {
+    return this.svc.addRole(req.user, body.roleKey);
   }
 }

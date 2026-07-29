@@ -8,7 +8,7 @@ import {
   getSmsConfig, updateSmsConfig, SmsConfig,
   getLoanTypes, createLoanType, updateLoanType, deleteLoanType, LoanType,
   getWhatsAppConfig, updateWhatsAppConfig, WhatsAppConfig,
-  getPermissionMatrix, updatePermissionMatrix, PermissionMatrix, PermissionKey, PermissionUpdate,
+  getPermissionMatrix, updatePermissionMatrix, addPermissionRole, PermissionMatrix, PermissionKey, PermissionUpdate,
   PERMISSION_KEYS, PERMISSION_LABELS, PERMISSION_VALUE_OPTIONS,
   ROLE_LABELS, UserRole, USER_ADMIN_ROLES, getTenantSession,
 } from '@/services/tenant-api';
@@ -784,6 +784,14 @@ function WhatsAppConfigTab() {
 }
 
 // ── Permissions Tab (role matrix) ─────────────────────────────────────────────
+
+/** Built-in roles get their friendly label; a tenant-defined custom role falls back
+ *  to a title-cased rendering of its key (e.g. FIELD_SUPERVISOR -> Field Supervisor). */
+function roleLabel(role: string): string {
+  if (role in ROLE_LABELS) return ROLE_LABELS[role as UserRole];
+  return role.toLowerCase().replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 function PermissionsTab() {
   const [matrix, setMatrix] = useState<PermissionMatrix | null>(null);
   const [dirty, setDirty] = useState<Map<string, PermissionUpdate>>(new Map());
@@ -791,8 +799,14 @@ function PermissionsTab() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
+  const [newRoleName, setNewRoleName] = useState('');
+  const [addingRole, setAddingRole] = useState(false);
+  const [addRoleError, setAddRoleError] = useState('');
 
-  const roles = Object.keys(ROLE_LABELS) as UserRole[];
+  const builtIns = Object.keys(ROLE_LABELS);
+  const roles = matrix
+    ? [...builtIns.filter((r) => r in matrix), ...Object.keys(matrix).filter((r) => !builtIns.includes(r)).sort()]
+    : [];
 
   useEffect(() => {
     getPermissionMatrix()
@@ -801,18 +815,33 @@ function PermissionsTab() {
       .finally(() => setLoading(false));
   }, []);
 
-  function cellValue(role: UserRole, key: PermissionKey): string {
+  function cellValue(role: string, key: PermissionKey): string {
     const dirtyKey = `${role}:${key}`;
     return dirty.get(dirtyKey)?.value ?? matrix?.[role]?.[key] ?? '';
   }
 
-  function setCell(role: UserRole, key: PermissionKey, value: string) {
+  function setCell(role: string, key: PermissionKey, value: string) {
     setDirty((prev) => {
       const next = new Map(prev);
       next.set(`${role}:${key}`, { role, permissionKey: key, value });
       return next;
     });
     setSaved(false);
+  }
+
+  async function addRole() {
+    const name = newRoleName.trim();
+    if (!name) return;
+    setAddingRole(true); setAddRoleError('');
+    try {
+      const updated = await addPermissionRole(name);
+      setMatrix(updated);
+      setNewRoleName('');
+    } catch (e: unknown) {
+      setAddRoleError(e instanceof Error ? e.message : 'Failed to add role');
+    } finally {
+      setAddingRole(false);
+    }
   }
 
   async function save() {
@@ -852,6 +881,36 @@ function PermissionsTab() {
         </p>
       </div>
 
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 flex flex-wrap items-end gap-3">
+        <div className="flex-1 min-w-[220px]">
+          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+            Add a custom role
+          </label>
+          <input
+            type="text"
+            value={newRoleName}
+            onChange={(e) => setNewRoleName(e.target.value)}
+            placeholder="e.g. Field Supervisor"
+            maxLength={30}
+            className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+        <button
+          onClick={addRole}
+          disabled={addingRole || !newRoleName.trim()}
+          className="px-4 py-2 rounded-lg font-semibold text-white text-sm disabled:opacity-40"
+          style={{ backgroundColor: BRAND }}
+        >
+          {addingRole ? 'Adding…' : 'Add Role'}
+        </button>
+        {addRoleError && <p className="text-sm text-red-600 font-medium w-full">{addRoleError}</p>}
+        <p className="text-xs text-gray-400 w-full">
+          A new role starts with the most restrictive value for every permission below, and can be
+          assigned to users. It only controls what shows in this matrix &mdash; other areas of the app
+          (loans, collections, etc.) treat it like Staff until it&rsquo;s wired into those checks.
+        </p>
+      </div>
+
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-gray-50">
@@ -870,8 +929,9 @@ function PermissionsTab() {
               return (
                 <tr key={role} className={isOwner ? 'bg-gray-50/60' : 'hover:bg-gray-50'}>
                   <td className="px-4 py-3">
-                    <span className="font-semibold text-gray-900">{ROLE_LABELS[role]}</span>
+                    <span className="font-semibold text-gray-900">{roleLabel(role)}</span>
                     {isOwner && <span className="ml-2 text-xs text-gray-400">(fixed)</span>}
+                    {!(role in ROLE_LABELS) && <span className="ml-2 text-xs text-blue-500">(custom)</span>}
                   </td>
                   {PERMISSION_KEYS.map((key) => (
                     <td key={key} className="px-3 py-2.5">
