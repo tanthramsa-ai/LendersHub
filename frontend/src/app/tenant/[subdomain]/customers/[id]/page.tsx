@@ -76,6 +76,12 @@ export default function CustomerDetailPage() {
   const [toggling, setToggling] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [loanFilter, setLoanFilter] = useState<'all' | 'active'>('all');
+
+  function goToLoans(filter: 'all' | 'active') {
+    setLoanFilter(filter);
+    document.getElementById('customer-loans')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 
   const [form, setForm] = useState({
     firstName: '', lastName: '', phone: '', email: '',
@@ -200,6 +206,10 @@ export default function CustomerDetailPage() {
       </div>
     );
   }
+
+  const visibleLoans = loanFilter === 'active'
+    ? loans.filter((l) => ['DISBURSED', 'APPROVED'].includes(l.status))
+    : loans;
 
   if (editing) {
     return (
@@ -362,14 +372,19 @@ export default function CustomerDetailPage() {
       {/* Stats */}
       <div className="grid grid-cols-3 gap-4">
         {[
-          { label: 'Total Loans', value: customer.totalLoans, color: 'text-blue-700' },
-          { label: 'Active Loans', value: customer.activeLoans, color: 'text-green-700' },
-          { label: 'Total Repaid', value: `₹${customer.totalPaid.toLocaleString('en-IN')}`, color: 'text-purple-700' },
+          { label: 'Total Loans', value: customer.totalLoans, color: 'text-blue-700', onClick: () => goToLoans('all') },
+          { label: 'Active Loans', value: customer.activeLoans, color: 'text-green-700', onClick: () => goToLoans('active') },
+          { label: 'Total Repaid', value: `₹${customer.totalPaid.toLocaleString('en-IN')}`, color: 'text-purple-700', onClick: undefined },
         ].map((s) => (
-          <div key={s.label} className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 text-center">
+          <button
+            key={s.label}
+            onClick={s.onClick}
+            disabled={!s.onClick}
+            className={`bg-white rounded-xl shadow-sm border border-gray-100 p-4 text-center ${s.onClick ? 'hover:border-blue-200 hover:shadow-md transition-shadow cursor-pointer' : 'cursor-default'}`}
+          >
             <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
             <p className="text-xs text-gray-500 mt-1">{s.label}</p>
-          </div>
+          </button>
         ))}
       </div>
 
@@ -449,13 +464,22 @@ export default function CustomerDetailPage() {
       </div>
 
       {/* Loans — every loan type this customer has, not just one product */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 space-y-3">
-        <h2 className="text-sm font-semibold text-gray-700">Loans ({loans.length})</h2>
-        {loans.length === 0 ? (
-          <p className="text-sm text-gray-400">No loans yet.</p>
+      <div id="customer-loans" className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 space-y-3 scroll-mt-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-gray-700">
+            {loanFilter === 'active' ? 'Active Loans' : 'Loans'} ({visibleLoans.length})
+          </h2>
+          {loanFilter === 'active' && (
+            <button onClick={() => setLoanFilter('all')} className="text-xs text-blue-600 hover:underline">
+              Show all {loans.length}
+            </button>
+          )}
+        </div>
+        {visibleLoans.length === 0 ? (
+          <p className="text-sm text-gray-400">{loanFilter === 'active' ? 'No active loans.' : 'No loans yet.'}</p>
         ) : (
           <div className="divide-y divide-gray-100">
-            {loans.map((l) => (
+            {visibleLoans.map((l) => (
               <Link
                 key={l.id}
                 href={`/${subdomain}/${loanDetailPath(l.cycleType, l.id)}`}
