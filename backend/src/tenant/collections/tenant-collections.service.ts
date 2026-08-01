@@ -208,6 +208,140 @@ export class TenantCollectionsService {
     });
   }
 
+  async getCalendar(user: TenantJwtPayload, month: string) {
+    if (!/^\d{4}-\d{2}$/.test(month)) throw new BadRequestException('month must be YYYY-MM');
+    await this.ensureAssignedTo(user.schemaName);
+    return this.withSchema(user.schemaName, async (client) => {
+      const start = `${month}-01`;
+      const dueParams: unknown[] = [start];
+      let dueSelfFilter = '';
+      if (user.role === 'AGENT') {
+        dueParams.push(user.sub);
+        const p = `$${dueParams.length}`;
+        dueSelfFilter = `AND (i.assigned_to = ${p} OR l.loan_officer_id = ${p})`;
+      }
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const dueRes = await client.query<{
+        due_date: string; due_count: string; overdue_count: string; paid_count: string; due_amount: string;
+      }>(
+        `SELECT i.due_date::text AS due_date,
+                COUNT(*) FILTER (WHERE i.status IN ('PENDING','PARTIALLY_PAID')) AS due_count,
+                COUNT(*) FILTER (WHERE i.status = 'OVERDUE') AS overdue_count,
+                COUNT(*) FILTER (WHERE i.status = 'PAID') AS paid_count,
+                COALESCE(SUM(i.total_amount - i.paid_amount) FILTER (WHERE i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE')), 0) AS due_amount
+         FROM installments i
+         JOIN loans l ON l.id = i.loan_id
+         WHERE date_trunc('month', i.due_date) = $1::date
+         ${dueSelfFilter}
+         GROUP BY i.due_date`,
+        dueParams,
+      );
+
+      const collectedParams: unknown[] = [start];
+      let collectedSelfFilter = '';
+      if (user.role === 'AGENT') {
+        collectedParams.push(user.sub);
+        const p = `$${collectedParams.length}`;
+        collectedSelfFilter = `AND (i.assigned_to = ${p} OR l.loan_officer_id = ${p})`;
+      }
+      const collectedRes = await client.query<{ payment_date: string; collected_amount: string }>(
+        `SELECT p.payment_date::text AS payment_date,
+                COALESCE(SUM(p.amount), 0) AS collected_amount
+         FROM payments p
+         JOIN loans l ON l.id = p.loan_id
+         LEFT JOIN installments i ON i.id = p.installment_id
+         WHERE date_trunc('month', p.payment_date) = $1::date
+         ${collectedSelfFilter}
+         GROUP BY p.payment_date`,
+        collectedParams,
+      );
+
+      const byDate = new Map<string, { date: string; dueCount: number; overdueCount: number; paidCount: number; dueAmount: number; collectedAmount: number }>();
+      for (const r of dueRes.rows) {
+        byDate.set(r.due_date, {
+          date: r.due_date,
+          dueCount: parseInt(r.due_count),
+          overdueCount: parseInt(r.overdue_count),
+          paidCount: parseInt(r.paid_count),
+          dueAmount: parseFloat(r.due_amount),
+          collectedAmount: 0,
+        });
+      }
+      for (const r of collectedRes.rows) {
+        const existing = byDate.get(r.payment_date);
+        if (existing) existing.collectedAmount = parseFloat(r.collected_amount);
+        else byDate.set(r.payment_date, {
+          date: r.payment_date, dueCount: 0, overdueCount: 0, paidCount: 0, dueAmount: 0,
+          collectedAmount: parseFloat(r.collected_amount),
+        });
+      }
+
+      return { month, days: [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date)) };
+    });
+  }
+
+  async getByDate(user: TenantJwtPayload, date: string, page: number, limit: number, search?: string) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new BadRequestException('date must be YYYY-MM-DD');
+    await this.ensureAssignedTo(user.schemaName);
+    return this.withSchema(user.schemaName, async (client) => {
+      const offset = (page - 1) * limit;
+      const dataParams: unknown[] = [date, limit, offset];
+      let selfFilter = '';
+      if (user.role === 'AGENT') {
+        dataParams.push(user.sub);
+        const p = `$${dataParams.length}`;
+        selfFilter = `AND (i.assigned_to = ${p} OR l.loan_officer_id = ${p})`;
+      }
+      let searchFilter = '';
+      if (search) {
+        dataParams.push(`%${search}%`);
+        const p = `$${dataParams.length}`;
+        searchFilter = `AND (c.first_name || ' ' || c.last_name ILIKE ${p} OR l.loan_number ILIKE ${p} OR c.phone ILIKE ${p})`;
+      }
+      const countParams: unknown[] = [date];
+      let countSelf = '';
+      if (user.role === 'AGENT') {
+        countParams.push(user.sub);
+        const p = `$${countParams.length}`;
+        countSelf = `AND (i.assigned_to = ${p} OR l.loan_officer_id = ${p})`;
+      }
+      let countFilter = '';
+      if (search) {
+        countParams.push(`%${search}%`);
+        const p = `$${countParams.length}`;
+        countFilter = `AND (c.first_name || ' ' || c.last_name ILIKE ${p} OR l.loan_number ILIKE ${p} OR c.phone ILIKE ${p})`;
+      }
+
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const dataRes = await client.query(
+        `SELECT i.id, i.installment_number, i.due_date, i.total_amount, i.paid_amount,
+                  i.total_amount - i.paid_amount AS balance, i.status, i.assigned_to,
+                  l.id AS loan_id, l.loan_number,
+                  c.id AS customer_id, c.first_name || ' ' || c.last_name AS customer_name, c.phone,
+                  u.first_name || ' ' || u.last_name AS agent_name
+           FROM installments i
+           JOIN loans l ON l.id = i.loan_id
+           JOIN customers c ON c.id = l.customer_id
+           LEFT JOIN users u ON u.id = i.assigned_to
+           WHERE i.due_date = $1
+           ${selfFilter} ${searchFilter}
+           ORDER BY c.first_name, l.loan_number
+           LIMIT $2 OFFSET $3`,
+        dataParams,
+      );
+      const countRes = await client.query<{ total: string }>(
+        `SELECT COUNT(*) AS total FROM installments i
+           JOIN loans l ON l.id = i.loan_id
+           JOIN customers c ON c.id = l.customer_id
+           WHERE i.due_date = $1
+           ${countSelf} ${countFilter}`,
+        countParams,
+      );
+
+      return { data: dataRes.rows.map(this.mapRow), total: parseInt(countRes.rows[0].total), page, limit };
+    });
+  }
+
   async getAgents(user: TenantJwtPayload) {
     return this.withSchema(user.schemaName, async (client) => {
       const res = await client.query(

@@ -5,8 +5,8 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   getDailyLoan, recordPayment, undoInstallmentPayment, closeLoan, reopenLoan, resolveMissedInstallment,
-  approveLoan, rejectLoan, approveCloseLoan,
-  DailyLoanDetail, DailyInstallment, MissResolution,
+  approveLoan, rejectLoan, approveCloseLoan, assignLoanAgent, getOfficers,
+  DailyLoanDetail, DailyInstallment, MissResolution, Officer,
   getTenantSession, COLLECTION_ROLES, MANAGER_ROLES,
 } from '@/services/tenant-api';
 import { CloseLoanModal, CloseCommentBanner, ReopenLoanModal } from '@/components/CloseLoanModal';
@@ -146,6 +146,10 @@ export default function DailyLoanDetailPage() {
   const [rejecting, setRejecting] = useState(false);
   const [approvingClose, setApprovingClose] = useState(false);
   const [actionError, setActionError] = useState('');
+  const [officers, setOfficers] = useState<Officer[]>([]);
+  const [showAssignAgent, setShowAssignAgent] = useState(false);
+  const [selectedOfficerId, setSelectedOfficerId] = useState('');
+  const [assigningAgent, setAssigningAgent] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true); setError('');
@@ -155,6 +159,22 @@ export default function DailyLoanDetailPage() {
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (canClose) getOfficers().then(setOfficers).catch(() => setOfficers([]));
+  }, [canClose]);
+
+  async function handleAssignAgent() {
+    if (!selectedOfficerId) return;
+    setAssigningAgent(true); setActionError('');
+    try {
+      await assignLoanAgent(id, selectedOfficerId);
+      setShowAssignAgent(false);
+      await load();
+    } catch (e: unknown) {
+      setActionError((e as Error).message);
+    } finally { setAssigningAgent(false); }
+  }
 
   function openPay(inst: DailyInstallment) {
     const remaining = Math.max(0, inst.total - inst.paid);
@@ -374,6 +394,17 @@ export default function DailyLoanDetailPage() {
           <div>
             <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">Branch</p>
             <p className="text-sm font-semibold text-gray-900">{loan.branchName ?? '—'}</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">Loan Agent</p>
+            <p className="text-sm font-semibold text-gray-900">{loan.loanOfficerName ?? '—'}</p>
+            {canClose && (
+              <button
+                onClick={() => { setSelectedOfficerId(loan.loanOfficerId ?? ''); setActionError(''); setShowAssignAgent(true); }}
+                className="text-xs text-blue-600 hover:underline mt-0.5">
+                {loan.loanOfficerName ? 'Reassign Agent' : 'Assign Agent'}
+              </button>
+            )}
           </div>
           {loan.purpose && (
             <div className="col-span-2 sm:col-span-3 lg:col-span-4">
@@ -776,6 +807,31 @@ export default function DailyLoanDetailPage() {
               <button onClick={handleUndo} disabled={undoing}
                 className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded-lg disabled:opacity-60 transition-colors">
                 {undoing ? 'Undoing…' : 'Undo Payment'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Assign/reassign agent */}
+      {showAssignAgent && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4">
+            <h2 className="text-lg font-bold text-gray-900">{loan.loanOfficerName ? 'Reassign Agent' : 'Assign Agent'}</h2>
+            {actionError && <p className="text-sm text-red-600">{actionError}</p>}
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Loan Agent</label>
+              <select value={selectedOfficerId} onChange={(e) => setSelectedOfficerId(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="">Select agent…</option>
+                {officers.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+              </select>
+            </div>
+            <div className="flex gap-3 pt-2">
+              <button onClick={() => { setShowAssignAgent(false); setActionError(''); }} className="flex-1 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
+              <button disabled={assigningAgent || !selectedOfficerId || selectedOfficerId === loan.loanOfficerId} onClick={handleAssignAgent}
+                className="flex-1 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg disabled:opacity-40">
+                {assigningAgent ? 'Saving…' : 'Save'}
               </button>
             </div>
           </div>

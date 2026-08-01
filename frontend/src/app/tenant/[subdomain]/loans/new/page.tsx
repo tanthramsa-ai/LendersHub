@@ -223,6 +223,17 @@ export default function NewTermLoanPage() {
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 space-y-5">
           <h2 className="font-semibold text-gray-900">Loan Details</h2>
 
+          {loanTypes.length > 0 && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Loan Type</label>
+              <select value={loanTypeId} onChange={(e) => setLoanTypeId(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="">Select (optional)</option>
+                {loanTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </div>
+          )}
+
           {/* Branch (optional) */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Branch</label>
@@ -272,16 +283,6 @@ export default function NewTermLoanPage() {
                 {ROUNDING_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
             </div>
-            {loanTypes.length > 0 && (
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Loan Type</label>
-                <select value={loanTypeId} onChange={(e) => setLoanTypeId(e.target.value)}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                  <option value="">Select (optional)</option>
-                  {loanTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-                </select>
-              </div>
-            )}
             <div className="sm:col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-1">Purpose</label>
               <input value={purpose} onChange={(e) => setPurpose(sanitizeLoanPurposeInput(e.target.value))}

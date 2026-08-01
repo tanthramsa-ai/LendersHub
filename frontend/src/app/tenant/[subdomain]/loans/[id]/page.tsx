@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { getTermLoan, closeLoan, reopenLoan, recordPayment, undoInstallmentPayment, approveLoan, rejectLoan, approveCloseLoan, getTenantSession, MANAGER_ROLES, COLLECTION_ROLES, TermLoanDetail, TermInstallment } from '@/services/tenant-api';
+import { getTermLoan, closeLoan, reopenLoan, recordPayment, undoInstallmentPayment, approveLoan, rejectLoan, approveCloseLoan, assignLoanAgent, getOfficers, getTenantSession, MANAGER_ROLES, COLLECTION_ROLES, TermLoanDetail, TermInstallment, Officer } from '@/services/tenant-api';
 import { CloseLoanModal, CloseCommentBanner, ReopenLoanModal } from '@/components/CloseLoanModal';
 import { refreshNotificationBell } from '@/lib/notifications-bus';
 
@@ -81,6 +81,10 @@ export default function TermLoanDetailPage() {
   const [approving, setApproving] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [approvingClose, setApprovingClose] = useState(false);
+  const [officers, setOfficers] = useState<Officer[]>([]);
+  const [showAssignAgent, setShowAssignAgent] = useState(false);
+  const [selectedOfficerId, setSelectedOfficerId] = useState('');
+  const [assigningAgent, setAssigningAgent] = useState(false);
 
   async function load() {
     try {
@@ -90,6 +94,22 @@ export default function TermLoanDetailPage() {
   }
 
   useEffect(() => { load(); }, [id]);
+
+  useEffect(() => {
+    if (canClose) getOfficers().then(setOfficers).catch(() => setOfficers([]));
+  }, [canClose]);
+
+  async function handleAssignAgent() {
+    if (!selectedOfficerId) return;
+    setAssigningAgent(true); setErr('');
+    try {
+      await assignLoanAgent(id, selectedOfficerId);
+      setShowAssignAgent(false);
+      await load();
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Failed to reassign agent');
+    } finally { setAssigningAgent(false); }
+  }
 
   function openPayModal(inst?: TermInstallment) {
     setSelectedInstallment(inst ?? null);
@@ -377,7 +397,16 @@ export default function TermLoanDetailPage() {
 
       {/* Loan details */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
-        <p className="text-sm font-semibold text-gray-900 mb-3">Loan Details</p>
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-sm font-semibold text-gray-900">Loan Details</p>
+          {canClose && (
+            <button
+              onClick={() => { setSelectedOfficerId(loan.loanOfficerId ?? ''); setErr(''); setShowAssignAgent(true); }}
+              className="text-xs text-blue-600 hover:underline">
+              {loan.loanOfficerName ? 'Reassign Agent' : 'Assign Agent'}
+            </button>
+          )}
+        </div>
         <dl className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-3 text-sm">
           <div><dt className="text-xs text-gray-500">Interest Rate</dt><dd className="font-medium">{loan.interestRate}% p.a.</dd></div>
           <div><dt className="text-xs text-gray-500">Tenure</dt><dd className="font-medium">{loan.termMonths} months</dd></div>
@@ -385,6 +414,7 @@ export default function TermLoanDetailPage() {
           <div><dt className="text-xs text-gray-500">Disbursed</dt><dd className="font-medium">{fmtDate(loan.disbursedAt)}</dd></div>
           {loan.purpose && <div><dt className="text-xs text-gray-500">Purpose</dt><dd className="font-medium">{loan.purpose}</dd></div>}
           <div><dt className="text-xs text-gray-500">Phone</dt><dd className="font-medium">{loan.customerPhone}</dd></div>
+          <div><dt className="text-xs text-gray-500">Loan Agent</dt><dd className="font-medium">{loan.loanOfficerName ?? '—'}</dd></div>
         </dl>
         {(loan.securityDocUrl || loan.promissoryNoteUrl) && (
           <div className="flex gap-4 mt-4 pt-4 border-t border-gray-100">
@@ -492,6 +522,31 @@ export default function TermLoanDetailPage() {
               <button disabled={undoing} onClick={handleUndo}
                 className="flex-1 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg disabled:opacity-40">
                 {undoing ? 'Undoing…' : 'Undo Payment'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Assign/reassign agent */}
+      {showAssignAgent && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4">
+            <h2 className="text-lg font-bold text-gray-900">{loan.loanOfficerName ? 'Reassign Agent' : 'Assign Agent'}</h2>
+            {err && <p className="text-sm text-red-600">{err}</p>}
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Loan Agent</label>
+              <select value={selectedOfficerId} onChange={(e) => setSelectedOfficerId(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="">Select agent…</option>
+                {officers.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+              </select>
+            </div>
+            <div className="flex gap-3 pt-2">
+              <button onClick={() => { setShowAssignAgent(false); setErr(''); }} className="flex-1 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
+              <button disabled={assigningAgent || !selectedOfficerId || selectedOfficerId === loan.loanOfficerId} onClick={handleAssignAgent}
+                className="flex-1 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg disabled:opacity-40">
+                {assigningAgent ? 'Saving…' : 'Save'}
               </button>
             </div>
           </div>

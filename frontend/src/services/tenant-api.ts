@@ -512,6 +512,8 @@ export interface WeeklyLoanDetail extends WeeklyLoan {
   promissoryNoteUrl?: string | null;
   loanTypeId?: string | null;
   customerPhone: string;
+  loanOfficerId?: string | null;
+  loanOfficerName?: string | null;
   closedAt?: string | null;
   closeComment?: string | null;
   reopenComment?: string | null;
@@ -685,6 +687,8 @@ export interface DailyLoanDetail extends DailyLoan {
   promissoryNoteUrl?: string | null;
   loanTypeId?: string | null;
   customerPhone: string;
+  loanOfficerId?: string | null;
+  loanOfficerName?: string | null;
   closedAt?: string | null;
   closeComment?: string | null;
   reopenComment?: string | null;
@@ -784,6 +788,8 @@ export interface MonthlyLoanDetail extends MonthlyLoan {
   promissoryNoteUrl?: string | null;
   loanTypeId?: string | null;
   customerPhone: string;
+  loanOfficerId?: string | null;
+  loanOfficerName?: string | null;
   closedAt?: string | null;
   closeComment?: string | null;
   reopenComment?: string | null;
@@ -854,6 +860,8 @@ export interface AgentRiskLoanDetail extends AgentRiskLoan {
   purpose?: string | null; emiAmount: number | null;
   securityDocUrl?: string | null; promissoryNoteUrl?: string | null;
   loanTypeId?: string | null; customerPhone: string;
+  loanOfficerId?: string | null;
+  loanOfficerName?: string | null;
   closedAt?: string | null;
   closeComment?: string | null;
   reopenComment?: string | null;
@@ -912,6 +920,8 @@ export interface TermLoanDetail extends TermLoan {
   closeComment?: string | null;
   reopenComment?: string | null;
   pendingClosure?: boolean;
+  loanOfficerId?: string | null;
+  loanOfficerName?: string | null;
   installments: TermInstallment[];
   payments: Array<{ id: string; amount: number; method: string; referenceNumber?: string; paymentDate: string; createdAt: string }>;
 }
@@ -1080,6 +1090,29 @@ export function assignCollectionAgent(installmentId: string, agentId: string | n
   });
 }
 
+export interface CollectionCalendarDay {
+  date: string;
+  dueCount: number;
+  overdueCount: number;
+  paidCount: number;
+  dueAmount: number;
+  collectedAmount: number;
+}
+
+export function getCollectionsCalendar(month: string) {
+  return tenantFetch<{ month: string; days: CollectionCalendarDay[] }>(
+    `/api/v1/tenant/collections/calendar?month=${month}`,
+  );
+}
+
+export function getCollectionsByDate(date: string, page = 1, limit = 20, search?: string) {
+  const params = new URLSearchParams({ date, page: String(page), limit: String(limit) });
+  if (search) params.set('search', search);
+  return tenantFetch<{ data: CollectionItem[]; total: number; page: number; limit: number }>(
+    `/api/v1/tenant/collections/by-date?${params}`,
+  );
+}
+
 // ── Tenant Users ──────────────────────────────────────────────────────────────
 
 export interface TenantTeamMember {
@@ -1199,6 +1232,13 @@ export function rejectLoan(id: string, reason?: string) {
 export function approveCloseLoan(id: string) {
   return tenantFetch<{ id: string; status: string; pendingClosure: boolean }>(`/api/v1/tenant/loans/${id}/approve-close`, {
     method: 'PATCH',
+  });
+}
+
+export function assignLoanAgent(id: string, loanOfficerId: string) {
+  return tenantFetch<{ id: string; loanOfficerId: string; loanOfficerName?: string }>(`/api/v1/tenant/loans/${id}/agent`, {
+    method: 'PATCH',
+    body: JSON.stringify({ loanOfficerId }),
   });
 }
 
