@@ -91,6 +91,17 @@ export default function NewTermLoanPage() {
     return () => clearTimeout(t);
   }, [customerSearch, searchCustomers]);
 
+  const selectedLoanType = loanTypes.find((t) => t.id === loanTypeId) ?? null;
+
+  function handleLoanTypeChange(id: string) {
+    setLoanTypeId(id);
+    const t = loanTypes.find((lt) => lt.id === id);
+    if (!t) return;
+    if (t.minAmount != null) setPrincipal(String(t.minAmount));
+    if (t.minInterestRate != null) setInterestRate(String(t.minInterestRate));
+    if (t.minTermMonths != null) setTermMonths(String(t.minTermMonths));
+  }
+
   const canPreview = !!(principal && interestRate && termMonths && firstDueDate);
 
   async function loadPreview() {
@@ -226,11 +237,16 @@ export default function NewTermLoanPage() {
           {loanTypes.length > 0 && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Loan Type</label>
-              <select value={loanTypeId} onChange={(e) => setLoanTypeId(e.target.value)}
+              <select value={loanTypeId} onChange={(e) => handleLoanTypeChange(e.target.value)}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
                 <option value="">Select (optional)</option>
                 {loanTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
               </select>
+              {selectedLoanType && (
+                <p className="mt-1 text-xs text-gray-400">
+                  Principal, interest rate and tenure below have been pre-filled from this loan type — adjust as needed.
+                </p>
+              )}
             </div>
           )}
 
@@ -248,20 +264,29 @@ export default function NewTermLoanPage() {
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Principal Amount (₹) <span className="text-red-500">*</span></label>
               <input type="number" value={principal} onChange={(e) => setPrincipal(e.target.value)}
-                placeholder="e.g. 100000" min="1"
+                placeholder="e.g. 100000" min={selectedLoanType?.minAmount ?? 1} max={selectedLoanType?.maxAmount ?? undefined}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              {selectedLoanType && (selectedLoanType.minAmount != null || selectedLoanType.maxAmount != null) && (
+                <p className="mt-1 text-xs text-gray-400">Allowed range: {fmt(selectedLoanType.minAmount ?? 0)} – {selectedLoanType.maxAmount != null ? fmt(selectedLoanType.maxAmount) : 'no limit'}</p>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Interest Rate (% p.a.) <span className="text-red-500">*</span></label>
               <input type="number" value={interestRate} onChange={(e) => setInterestRate(e.target.value)}
-                placeholder="e.g. 18" step="0.1" min="0" max="100"
+                placeholder="e.g. 18" step="0.1" min={selectedLoanType?.minInterestRate ?? 0} max={selectedLoanType?.maxInterestRate ?? 100}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              {selectedLoanType && (selectedLoanType.minInterestRate != null || selectedLoanType.maxInterestRate != null) && (
+                <p className="mt-1 text-xs text-gray-400">Allowed range: {selectedLoanType.minInterestRate ?? 0}% – {selectedLoanType.maxInterestRate ?? 100}%</p>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Tenure (months) <span className="text-red-500">*</span></label>
               <input type="number" value={termMonths} onChange={(e) => setTermMonths(e.target.value)}
-                placeholder="e.g. 12" min="1" max="360"
+                placeholder="e.g. 12" min={selectedLoanType?.minTermMonths ?? 1} max={selectedLoanType?.maxTermMonths ?? 360}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              {selectedLoanType && (selectedLoanType.minTermMonths != null || selectedLoanType.maxTermMonths != null) && (
+                <p className="mt-1 text-xs text-gray-400">Allowed range: {selectedLoanType.minTermMonths ?? 1} – {selectedLoanType.maxTermMonths ?? 360} months</p>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">First Due Date <span className="text-red-500">*</span></label>
