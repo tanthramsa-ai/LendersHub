@@ -181,7 +181,7 @@ export default function CollectionsCalendarPage() {
                         item.status === 'PARTIALLY_PAID' ? 'bg-blue-100 text-blue-700' : 'bg-yellow-100 text-yellow-700'
                       }`}>{item.status}</span>
                     </div>
-                    {item.status !== 'PAID' && (
+                    {item.status !== 'PAID' && item.status !== 'WAIVED' && (
                       <button
                         onClick={() => { setPayTarget(item); setPayAmount(String(item.balance)); setErr(''); }}
                         className="text-xs px-2.5 py-1.5 text-white rounded-lg hover:opacity-90 flex-shrink-0"
