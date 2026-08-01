@@ -187,6 +187,15 @@ export class TenantLoansController {
     return this.svc.approveCloseLoan(req.user, id);
   }
 
+  @Patch(':id/agent')
+  assignLoanAgent(
+    @Request() req: { user: TenantJwtPayload },
+    @Param('id') id: string,
+    @Body() dto: { loanOfficerId: string },
+  ) {
+    return this.svc.assignLoanAgent(req.user, id, dto);
+  }
+
   @Post(':id/installments')
   addInstallment(
     @Request() req: { user: TenantJwtPayload },

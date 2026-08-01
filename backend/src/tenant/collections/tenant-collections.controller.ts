@@ -38,6 +38,22 @@ export class TenantCollectionsController {
     return this.svc.getAgents(req.user);
   }
 
+  @Get('calendar')
+  calendar(@Req() req: { user: TenantJwtPayload }, @Query('month') month: string) {
+    return this.svc.getCalendar(req.user, month);
+  }
+
+  @Get('by-date')
+  byDate(
+    @Req() req: { user: TenantJwtPayload },
+    @Query('date') date: string,
+    @Query('page') page = '1',
+    @Query('limit') limit = '20',
+    @Query('search') search?: string,
+  ) {
+    return this.svc.getByDate(req.user, date, parseInt(page), parseInt(limit), search);
+  }
+
   @Post(':installmentId/payment')
   @HttpCode(HttpStatus.OK)
   recordPayment(

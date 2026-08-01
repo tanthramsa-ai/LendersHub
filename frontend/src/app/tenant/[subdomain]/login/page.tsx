@@ -202,7 +202,7 @@ export default function TenantLoginPage() {
                         type={identifierIsEmail ? 'email' : 'tel'}
                         value={identifier}
                         onChange={(e) => handleIdentifierChange(e.target.value)}
-                        placeholder="9876543210 or user@example.com"
+                        placeholder="user@example.com or 9876543210"
                         required
                         autoComplete="username"
                         className="w-full flex-1 rounded-xl bg-transparent px-3 py-3 text-gray-900 placeholder-gray-400 focus:outline-none"
@@ -213,7 +213,7 @@ export default function TenantLoginPage() {
                         ? 'Logging in with email'
                         : hasPhoneDigits
                           ? 'Logging in with mobile number'
-                          : 'Enter mobile number (10 digits) or email address'}
+                          : 'Enter email or mobile number (10 digits)'}
                     </p>
                   </div>
 

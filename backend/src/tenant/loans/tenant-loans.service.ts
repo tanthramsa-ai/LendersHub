@@ -890,10 +890,12 @@ export class TenantLoansService {
       const loanRes = await client.query(`
           SELECT l.*, c.first_name || ' ' || c.last_name AS customer_name,
                  c.phone AS customer_phone, c.id AS customer_id_ref,
-                 b.name AS branch_name
+                 b.name AS branch_name,
+                 o.first_name || ' ' || o.last_name AS officer_name
           FROM loans l
           JOIN customers c ON c.id = l.customer_id
           LEFT JOIN branches b ON b.id = l.branch_id
+          LEFT JOIN users o ON o.id = l.loan_officer_id
           WHERE l.id = $1
         `, [id]);
       const installmentsRes = await client.query(`SELECT * FROM installments WHERE loan_id = $1 ORDER BY installment_number`, [id]);
@@ -926,6 +928,7 @@ export class TenantLoansService {
         reopenComment: l.reopen_comment ?? null,
         pendingClosure: l.pending_closure ?? false,
         loanOfficerId: l.loan_officer_id ?? null,
+        loanOfficerName: l.officer_name ?? null,
         createdAt: l.created_at, updatedAt: l.updated_at,
         projection: buildPer1000Projection(l, installmentsRes.rows),
         installments: installmentsRes.rows.map((i) => ({
@@ -1232,6 +1235,62 @@ export class TenantLoansService {
         metadata: { reason },
       });
       return { id: loanId, status: 'REJECTED', reason };
+    });
+  }
+
+  async assignLoanAgent(user: TenantJwtPayload, loanId: string, dto: { loanOfficerId: string }) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) {
+      throw new ForbiddenException('Only Owner, Manager or Admin can reassign the loan agent');
+    }
+    if (!dto.loanOfficerId) throw new BadRequestException('loanOfficerId is required');
+
+    return this.withSchema(user.schemaName, async (client) => {
+      const loanRes = await client.query<{ id: string; loan_number: string; loan_officer_id: string | null }>(
+        `SELECT id, loan_number, loan_officer_id FROM loans WHERE id = $1 AND deleted_at IS NULL`,
+        [loanId],
+      );
+      if (!loanRes.rows[0]) throw new NotFoundException('Loan not found');
+      const loan = loanRes.rows[0];
+
+      const officerRes = await client.query<{ id: string; first_name: string; last_name: string }>(
+        `SELECT id, first_name, last_name FROM users WHERE id = $1 AND is_active = TRUE`,
+        [dto.loanOfficerId],
+      );
+      if (!officerRes.rows[0]) throw new NotFoundException('Agent not found');
+      const newOfficer = officerRes.rows[0];
+
+      if (loan.loan_officer_id === dto.loanOfficerId) {
+        return { id: loanId, loanOfficerId: dto.loanOfficerId };
+      }
+
+      await client.query(
+        `UPDATE loans SET loan_officer_id = $2, updated_at = NOW() WHERE id = $1`,
+        [loanId, dto.loanOfficerId],
+      );
+
+      await this.activity.record(client, user, {
+        action: 'loan.agent_reassigned',
+        entityType: 'loan',
+        entityId: loanId,
+        entityLabel: loan.loan_number,
+        metadata: { fromOfficerId: loan.loan_officer_id, toOfficerId: dto.loanOfficerId },
+      });
+
+      await TenantNotificationsService.insertNotification(client, {
+        userId: dto.loanOfficerId,
+        title: `Loan assigned — ${loan.loan_number}`,
+        body: `You have been assigned as the agent for this loan.`,
+        type: 'loan',
+        entityType: 'loan',
+        entityId: loanId,
+        link: `/loans/${loanId}`,
+      });
+
+      return {
+        id: loanId,
+        loanOfficerId: dto.loanOfficerId,
+        loanOfficerName: `${newOfficer.first_name} ${newOfficer.last_name}`,
+      };
     });
   }
 
