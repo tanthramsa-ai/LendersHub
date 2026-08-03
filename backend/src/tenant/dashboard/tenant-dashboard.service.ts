@@ -22,9 +22,14 @@ export class TenantDashboardService {
         // NOTE: queries run sequentially — a single pg connection can only
         // execute one query at a time (concurrent client.query() on one client
         // is deprecated and races). Serial has no cost here: one connection.
+        // Same ownership rule as the Collections page: an installment counts as the
+        // agent's if it is assigned to them, or if they are the loan's officer.
         const assignedRes = await client.query<{ total: string; amount: string }>(
-          `SELECT COUNT(*) AS total, COALESCE(SUM(total_amount - paid_amount), 0) AS amount
-             FROM installments WHERE assigned_to = $1 AND status IN ('PENDING','PARTIALLY_PAID','OVERDUE')`,
+          `SELECT COUNT(*) AS total, COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS amount
+             FROM installments i JOIN loans l ON l.id = i.loan_id
+             WHERE (i.assigned_to = $1 OR l.loan_officer_id = $1)
+               AND l.deleted_at IS NULL
+               AND i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE')`,
           [user.sub],
         );
         const todayCollectedRes = await client.query<{ total: string }>(
@@ -33,7 +38,9 @@ export class TenantDashboardService {
           [user.sub, today],
         );
         const overdueRes = await client.query<{ total: string }>(
-          `SELECT COUNT(*) AS total FROM installments WHERE assigned_to = $1 AND status = 'OVERDUE'`,
+          `SELECT COUNT(*) AS total FROM installments i JOIN loans l ON l.id = i.loan_id
+             WHERE (i.assigned_to = $1 OR l.loan_officer_id = $1)
+               AND l.deleted_at IS NULL AND i.status = 'OVERDUE'`,
           [user.sub],
         );
         return {
@@ -148,8 +155,9 @@ export class TenantDashboardService {
       let countParams: unknown[];
 
       if (isCollector) {
-        whereClause = `WHERE l.id IN (SELECT DISTINCT loan_id FROM installments WHERE assigned_to = $3 AND status IN ('PENDING','PARTIALLY_PAID','OVERDUE')) AND l.status = 'DISBURSED' AND l.deleted_at IS NULL`;
-        countWhere = `WHERE l.id IN (SELECT DISTINCT loan_id FROM installments WHERE assigned_to = $1 AND status IN ('PENDING','PARTIALLY_PAID','OVERDUE')) AND l.status = 'DISBURSED' AND l.deleted_at IS NULL`;
+        // Assigned installments OR loan-officer ownership — matches the Collections rule.
+        whereClause = `WHERE (l.loan_officer_id = $3 OR l.id IN (SELECT DISTINCT loan_id FROM installments WHERE assigned_to = $3 AND status IN ('PENDING','PARTIALLY_PAID','OVERDUE'))) AND l.status = 'DISBURSED' AND l.deleted_at IS NULL`;
+        countWhere = `WHERE (l.loan_officer_id = $1 OR l.id IN (SELECT DISTINCT loan_id FROM installments WHERE assigned_to = $1 AND status IN ('PENDING','PARTIALLY_PAID','OVERDUE'))) AND l.status = 'DISBURSED' AND l.deleted_at IS NULL`;
         params = [limit, offset, user.sub];
         countParams = [user.sub];
       } else if (isManager) {

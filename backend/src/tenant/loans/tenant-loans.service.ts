@@ -1268,6 +1268,18 @@ export class TenantLoansService {
         [loanId, dto.loanOfficerId],
       );
 
+      // Collections/dashboard for an AGENT key off installments.assigned_to, so the
+      // loan-level reassignment has to cascade to the outstanding installments.
+      // Explicit per-installment overrides to a *different* agent are preserved.
+      await client.query(`ALTER TABLE installments ADD COLUMN IF NOT EXISTS assigned_to UUID`);
+      await client.query(
+        `UPDATE installments SET assigned_to = $2
+           WHERE loan_id = $1
+             AND status IN ('PENDING','PARTIALLY_PAID','OVERDUE')
+             AND (assigned_to IS NULL OR assigned_to IS NOT DISTINCT FROM $3)`,
+        [loanId, dto.loanOfficerId, loan.loan_officer_id],
+      );
+
       await this.activity.record(client, user, {
         action: 'loan.agent_reassigned',
         entityType: 'loan',
