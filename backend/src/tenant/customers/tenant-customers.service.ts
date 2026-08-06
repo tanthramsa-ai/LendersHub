@@ -1,4 +1,11 @@
 import { Injectable, ConflictException, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+
+/** Quotes a CSV field only when it needs it, doubling any embedded quotes per RFC 4180. */
+function csvField(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  const s = String(value);
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { sanitizeStrings } from '../../common/utils/sanitize';
@@ -217,6 +224,46 @@ export class TenantCustomersService {
         npaLoans: parseInt(r.npa_loans),
         totalPaid: parseFloat(r.total_paid),
       };
+    });
+  }
+
+  /** CSV export for an explicit set of customer IDs — the caller (Export Selected) picks the scope, not a filter re-query. */
+  async exportCsv(user: TenantJwtPayload, ids: string[]): Promise<string> {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) throw new ForbiddenException('Only Owner, Manager or Admin can export customers');
+    if (!ids.length) throw new BadRequestException('No customers selected');
+    if (ids.length > 1000) throw new BadRequestException('Cannot export more than 1000 customers at once');
+
+    return this.withSchema(user.schemaName, async (client) => {
+      const conditions = [`c.id = ANY($1)`];
+      const params: unknown[] = [ids];
+      if (user.role === 'AGENT') {
+        conditions.push(`c.id IN (SELECT DISTINCT customer_id FROM loans WHERE loan_officer_id = $2)`);
+        params.push(user.sub);
+      }
+      const res = await client.query(`
+          SELECT c.customer_code, c.first_name, c.last_name, c.phone, c.email, c.pan_number,
+                 c.credit_score, c.locality, c.city, c.state, c.is_active, c.created_at,
+                 b.name AS branch_name,
+                 (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status = 'DISBURSED') AS active_loans,
+                 (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status = 'CLOSED') AS closed_loans
+          FROM customers c
+          LEFT JOIN branches b ON b.id = c.branch_id
+          WHERE ${conditions.join(' AND ')}
+          ORDER BY LOWER(c.first_name) ASC, LOWER(c.last_name) ASC
+        `, params);
+
+      const header = [
+        'Customer Code', 'First Name', 'Last Name', 'Phone', 'Email', 'PAN Number',
+        'Credit Score', 'Locality', 'City', 'State', 'Branch', 'Active Loans', 'Closed Loans',
+        'Status', 'Created',
+      ];
+      const rows = res.rows.map((r) => [
+        r.customer_code, r.first_name, r.last_name, r.phone, r.email ?? '', r.pan_number ?? '',
+        r.credit_score ?? '', r.locality ?? '', r.city ?? '', r.state ?? '', r.branch_name ?? '',
+        r.active_loans, r.closed_loans, r.is_active ? 'Active' : 'Inactive',
+        new Date(r.created_at).toISOString().slice(0, 10),
+      ]);
+      return [header, ...rows].map((row) => row.map(csvField).join(',')).join('\r\n');
     });
   }
 

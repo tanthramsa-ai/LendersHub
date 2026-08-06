@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { getCustomers, getBranches, Customer, TenantBranch, getTenantSession, CUSTOMER_ROLES } from '@/services/tenant-api';
+import { getCustomers, getBranches, exportCustomersCsv, Customer, TenantBranch, getTenantSession, CUSTOMER_ROLES, MANAGER_ROLES } from '@/services/tenant-api';
 
 export default function CustomersPage() {
   const params = useParams<{ subdomain: string }>();
@@ -11,6 +11,7 @@ export default function CustomersPage() {
   const router = useRouter();
   const session = getTenantSession();
   const canAddCustomer = CUSTOMER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
+  const canExport = MANAGER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [total, setTotal] = useState(0);
@@ -21,6 +22,9 @@ export default function CustomersPage() {
   const [npaOnly, setNpaOnly] = useState(false);
   const [branches, setBranches] = useState<TenantBranch[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState('');
 
   const limit = 20;
 
@@ -30,6 +34,7 @@ export default function CustomersPage() {
 
   const load = useCallback(async (p: number, s: string, b: string, npa: boolean) => {
     setLoading(true);
+    setSelected(new Set());
     try {
       const res = await getCustomers(p, limit, s || undefined, b || undefined, npa);
       setCustomers(res.data);
@@ -51,6 +56,29 @@ export default function CustomersPage() {
     setSearch(searchInput);
   }
 
+  function toggleSelected(id: string) {
+    setSelected((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    setSelected((s) => (s.size === customers.length ? new Set() : new Set(customers.map((c) => c.id))));
+  }
+
+  async function handleExport() {
+    setExporting(true); setExportError('');
+    try {
+      await exportCustomersCsv([...selected]);
+    } catch (e) {
+      setExportError((e as Error).message);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <div className="p-6 space-y-5">
       {/* Header */}
@@ -59,15 +87,30 @@ export default function CustomersPage() {
           <h1 className="text-xl font-bold text-gray-900">Customers</h1>
           <p className="text-sm text-gray-500">{total} total records</p>
         </div>
-        {canAddCustomer && (
-          <Link
-            href={`/${subdomain}/customers/new`}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
-          >
-            + Add Customer
-          </Link>
-        )}
+        <div className="flex items-center gap-2">
+          {canExport && selected.size > 0 && (
+            <button
+              onClick={handleExport}
+              disabled={exporting}
+              className="inline-flex items-center gap-2 px-4 py-2 border border-gray-300 hover:bg-gray-50 disabled:opacity-60 text-gray-700 text-sm font-medium rounded-lg transition-colors"
+            >
+              {exporting ? 'Exporting…' : `Export Selected (${selected.size})`}
+            </button>
+          )}
+          {canAddCustomer && (
+            <Link
+              href={`/${subdomain}/customers/new`}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              + Add Customer
+            </Link>
+          )}
+        </div>
       </div>
+
+      {exportError && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{exportError}</div>
+      )}
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3">
@@ -143,6 +186,17 @@ export default function CustomersPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50">
                   <tr>
+                    {canExport && (
+                      <th scope="col" className="px-4 py-3 text-left w-8">
+                        <input
+                          type="checkbox"
+                          aria-label="Select all customers on this page"
+                          checked={customers.length > 0 && selected.size === customers.length}
+                          onChange={toggleSelectAll}
+                          className="rounded border-gray-300"
+                        />
+                      </th>
+                    )}
                     {['Code', 'Name', 'Phone', 'Locality', 'Active Loans', 'Closed Loans', 'Branch', 'NPA', 'Status'].map((h) => (
                       <th key={h} scope="col" className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
                         {h}
@@ -163,6 +217,17 @@ export default function CustomersPage() {
                       className="hover:bg-gray-50 focus:bg-blue-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 transition-colors cursor-pointer"
                       title="Double-click, or press Enter, to open"
                     >
+                      {canExport && (
+                        <td className="px-4 py-3" onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${c.firstName} ${c.lastName}`.trim()}
+                            checked={selected.has(c.id)}
+                            onChange={() => toggleSelected(c.id)}
+                            className="rounded border-gray-300"
+                          />
+                        </td>
+                      )}
                       <td className="px-4 py-3">
                         <Link
                           href={`/${subdomain}/customers/${c.id}`}

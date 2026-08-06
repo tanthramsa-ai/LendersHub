@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Put, Patch, Delete, Param, Body, Query, UseGuards, Request, ParseIntPipe, DefaultValuePipe } from '@nestjs/common';
+import { Controller, Get, Post, Put, Patch, Delete, Param, Body, Query, UseGuards, Request, Res, ParseIntPipe, DefaultValuePipe } from '@nestjs/common';
+import { Response } from 'express';
 import { TenantCustomersService, CreateCustomerDto, UpdateCustomerDto } from './tenant-customers.service';
 import { TenantJwtGuard } from '../auth/guards/tenant-jwt.guard';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
@@ -18,6 +19,19 @@ export class TenantCustomersController {
     @Query('npaOnly') npaOnly?: string,
   ) {
     return this.svc.list(req.user, page, Math.min(limit, 100), search, branchId, npaOnly === 'true');
+  }
+
+  @Get('export')
+  async export(
+    @Request() req: { user: TenantJwtPayload },
+    @Query('ids') ids: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const idList = (ids ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+    const csv = await this.svc.exportCsv(req.user, idList);
+    res.header('Content-Type', 'text/csv; charset=utf-8');
+    res.header('Content-Disposition', `attachment; filename="customers-${new Date().toISOString().slice(0, 10)}.csv"`);
+    return csv;
   }
 
   @Get(':id')
