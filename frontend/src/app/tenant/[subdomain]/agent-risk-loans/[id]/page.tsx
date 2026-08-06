@@ -1,5 +1,6 @@
 'use client';
 
+import { NpaBadge } from '@/components/NpaBadge';
 import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
@@ -244,7 +245,6 @@ export default function AgentRiskLoanDetailPage() {
   if (!loan) return null;
 
   const fin = computeFinancials(loan.installments, loan.principal);
-  const isNpa = loan.status === 'DEFAULTED' || fin.overdueCount > 2;
   const today = new Date(); today.setHours(0, 0, 0, 0);
 
   return (
@@ -255,7 +255,7 @@ export default function AgentRiskLoanDetailPage() {
         <span className="text-gray-300">|</span>
         <h1 className="text-lg font-bold text-gray-900 font-mono">{loan.loanNumber}</h1>
         <span className={`px-2 py-0.5 rounded text-xs font-semibold ${LOAN_STATUS_COLORS[loan.status] ?? 'bg-gray-100 text-gray-500'}`}>{loan.status}</span>
-        {isNpa && <span className="px-2 py-0.5 bg-red-200 text-red-800 rounded text-xs font-bold">NPA</span>}
+        <NpaBadge loan={loan} canManage={canClose} onChanged={load} />
         <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-medium">Agent Risk</span>
         {loan.pendingClosure && (
           <span className="px-2 py-0.5 bg-amber-100 text-amber-800 rounded text-xs font-semibold">Closure pending approval</span>

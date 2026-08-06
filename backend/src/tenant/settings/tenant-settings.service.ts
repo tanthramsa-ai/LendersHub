@@ -1,8 +1,9 @@
-import { Injectable, ForbiddenException } from '@nestjs/common';
+import { Injectable, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
 import { USER_ADMIN_ROLES, UserRole } from '../common/roles';
+import { NPA_DEFAULT_THRESHOLD, NPA_THRESHOLD_SETTING_KEY, parseNpaThreshold } from '../common/npa';
 
 export interface SmsConfigDto {
   provider: 'fast2sms' | 'msg91' | 'console';
@@ -19,6 +20,11 @@ export interface WhatsAppConfigDto {
   accessToken?: string;
   apiUrl?: string;
   apiKey?: string;
+}
+
+export interface NpaConfigDto {
+  /** Overdue installments at which a loan is classified NPA. */
+  overdueThreshold: number;
 }
 
 @Injectable()
@@ -88,6 +94,43 @@ export class TenantSettingsService {
       });
 
       return { message: 'SMS configuration updated' };
+    });
+  }
+
+  async getNpaConfig(user: TenantJwtPayload) {
+    this.assertAdmin(user);
+    return this.withSchema(user.schemaName, async (client) => {
+      const res = await client.query<{ value: string }>(
+        `SELECT value FROM settings WHERE key = $1`,
+        [NPA_THRESHOLD_SETTING_KEY],
+      );
+      return {
+        overdueThreshold: parseNpaThreshold(res.rows[0]?.value),
+        defaultThreshold: NPA_DEFAULT_THRESHOLD,
+        isCustom: res.rows[0]?.value != null,
+      };
+    });
+  }
+
+  async updateNpaConfig(user: TenantJwtPayload, dto: NpaConfigDto) {
+    this.assertAdmin(user);
+    const threshold = Number(dto.overdueThreshold);
+    if (!Number.isInteger(threshold) || threshold < 1 || threshold > 60) {
+      throw new BadRequestException('NPA threshold must be a whole number between 1 and 60 installments');
+    }
+    return this.withSchema(user.schemaName, async (client) => {
+      await client.query(
+        `INSERT INTO settings (key, value, updated_at) VALUES ($1,$2,NOW())
+         ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
+        [NPA_THRESHOLD_SETTING_KEY, String(threshold)],
+      );
+      await this.activity.record(client, user, {
+        action: 'settings.npa_updated',
+        entityType: 'settings',
+        entityLabel: 'NPA classification',
+        metadata: { overdueThreshold: threshold },
+      });
+      return { message: 'NPA rule updated', overdueThreshold: threshold };
     });
   }
 

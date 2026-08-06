@@ -1,5 +1,6 @@
 'use client';
 
+import { NpaBadge } from '@/components/NpaBadge';
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -217,7 +218,8 @@ export default function TermLoanDetailPage() {
   if (!loan) return <div className="p-10 text-center text-red-400 text-sm">Loan not found</div>;
 
   const { totalPaid, outstanding, overdueAmt } = computeFinancials(loan.installments);
-  const isNpa = loan.isNpa ?? (loan.overdueCount > 2);
+  // Server-side: applies the tenant NPA threshold and any manual override.
+  const isNpa = loan.isNpa;
   const isActive = ['DISBURSED', 'APPROVED'].includes(loan.status);
 
   return (
@@ -231,7 +233,7 @@ export default function TermLoanDetailPage() {
               <h1 className="text-xl font-bold text-gray-900 font-mono">{loan.loanNumber}</h1>
               <span className={`px-2 py-0.5 rounded text-xs font-medium ${LOAN_STATUS_COLORS[loan.status] ?? 'bg-gray-100 text-gray-500'}`}>{loan.status}</span>
               <span className="px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">Term Loan</span>
-              {isNpa && <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-200 text-red-800">NPA</span>}
+              <NpaBadge loan={loan} canManage={canClose} onChanged={load} />
               {loan.pendingClosure && (
                 <span className="px-2 py-0.5 bg-amber-100 text-amber-800 rounded text-xs font-semibold">Closure pending approval</span>
               )}

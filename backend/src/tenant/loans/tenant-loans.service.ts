@@ -6,6 +6,7 @@ import { TenantActivityLogService } from '../activity-log/tenant-activity-log.se
 import { safePagination } from '../../common/utils/pagination';
 import { MANAGER_ROLES, FIELD_ROLES, UserRole } from '../common/roles';
 import { assertNoDigitsOrSpecialChars } from '../customers/customer-validation';
+import { NPA_THRESHOLD_SETTING_KEY, parseNpaThreshold } from '../common/npa';
 
 export interface CreateLoanDto {
   customerId: string;
@@ -800,6 +801,12 @@ export class TenantLoansService {
     await client.query(`ALTER TABLE loans ADD COLUMN IF NOT EXISTS interest_per_1000_per_day NUMERIC(6,2)`).catch(() => undefined);
     await client.query(`ALTER TABLE installments ADD COLUMN IF NOT EXISTS miss_resolution TEXT`).catch(() => undefined);
     await client.query(`ALTER TABLE loans ADD COLUMN IF NOT EXISTS pending_closure BOOLEAN NOT NULL DEFAULT FALSE`).catch(() => undefined);
+    // Manual NPA override. Deliberately separate from loans.status: writing 'DEFAULTED'
+    // would drop the loan out of every `status = 'DISBURSED'` filter (dashboard, collections,
+    // overdue ageing), so a loan flagged NPA would vanish from the lists agents work from.
+    await client.query(`ALTER TABLE loans ADD COLUMN IF NOT EXISTS npa_marked_at TIMESTAMPTZ`).catch(() => undefined);
+    await client.query(`ALTER TABLE loans ADD COLUMN IF NOT EXISTS npa_marked_by UUID`).catch(() => undefined);
+    await client.query(`ALTER TABLE loans ADD COLUMN IF NOT EXISTS npa_reason TEXT`).catch(() => undefined);
     // Belt-and-braces on a column that drives money maths — the service validates too, but the
     // DB should reject a stray value even if something reaches it another way.
     await client.query(
@@ -807,6 +814,23 @@ export class TenantLoansService {
        CHECK (miss_resolution IS NULL OR miss_resolution IN ('PAY_EXTRA_NEXT','EXTEND_EMI','DEFER_TO_END'))`,
     ).catch(() => undefined);
     this.widenedInterestSchemas.add(schemaName);
+  }
+
+  /**
+   * Number of overdue installments at which a loan is classified NPA.
+   * Tenant-configurable via Settings; falls back to 4 when unset.
+   */
+  private async getNpaThreshold(client: import('pg').PoolClient): Promise<number> {
+    const res = await client.query<{ value: string }>(
+      `SELECT value FROM settings WHERE key = $1`,
+      [NPA_THRESHOLD_SETTING_KEY],
+    );
+    return parseNpaThreshold(res.rows[0]?.value);
+  }
+
+  /** A loan is NPA when an admin has flagged it, or it has hit the overdue threshold. */
+  private isNpa(row: { npa_marked_at?: Date | null; overdue_count: string }, threshold: number): boolean {
+    return !!row.npa_marked_at || parseInt(row.overdue_count) >= threshold;
   }
 
   async list(user: TenantJwtPayload, page: number, limit: number, opts: {
@@ -891,11 +915,13 @@ export class TenantLoansService {
           SELECT l.*, c.first_name || ' ' || c.last_name AS customer_name,
                  c.phone AS customer_phone, c.id AS customer_id_ref,
                  b.name AS branch_name,
-                 o.first_name || ' ' || o.last_name AS officer_name
+                 o.first_name || ' ' || o.last_name AS officer_name,
+                 n.first_name || ' ' || n.last_name AS npa_marked_by_name
           FROM loans l
           JOIN customers c ON c.id = l.customer_id
           LEFT JOIN branches b ON b.id = l.branch_id
           LEFT JOIN users o ON o.id = l.loan_officer_id
+          LEFT JOIN users n ON n.id = l.npa_marked_by
           WHERE l.id = $1
         `, [id]);
       const installmentsRes = await client.query(`SELECT * FROM installments WHERE loan_id = $1 ORDER BY installment_number`, [id]);
@@ -906,6 +932,8 @@ export class TenantLoansService {
       if (user.role === 'AGENT' && l.loan_officer_id !== user.sub) {
         throw new ForbiddenException('You can only view loans assigned to you');
       }
+      const npaThreshold = await this.getNpaThreshold(client);
+      const overdueCount = installmentsRes.rows.filter((i) => i.status === 'OVERDUE').length;
       return {
         id: l.id, loanNumber: l.loan_number,
         customerId: l.customer_id_ref, customerName: l.customer_name, customerPhone: l.customer_phone,
@@ -929,6 +957,12 @@ export class TenantLoansService {
         pendingClosure: l.pending_closure ?? false,
         loanOfficerId: l.loan_officer_id ?? null,
         loanOfficerName: l.officer_name ?? null,
+        overdueCount,
+        npaThreshold,
+        isNpa: !!l.npa_marked_at || overdueCount >= npaThreshold,
+        npaMarkedAt: l.npa_marked_at ?? null,
+        npaMarkedByName: l.npa_marked_by_name ?? null,
+        npaReason: l.npa_reason ?? null,
         createdAt: l.created_at, updatedAt: l.updated_at,
         projection: buildPer1000Projection(l, installmentsRes.rows),
         installments: installmentsRes.rows.map((i) => ({
@@ -1235,6 +1269,82 @@ export class TenantLoansService {
         metadata: { reason },
       });
       return { id: loanId, status: 'REJECTED', reason };
+    });
+  }
+
+  /**
+   * Flags a loan NPA regardless of its overdue count — for write-offs, absconded
+   * borrowers or legal cases the automatic threshold will never catch.
+   * Sets a dedicated column rather than loans.status so the loan stays visible in
+   * the collection lists agents work from.
+   */
+  async markNpa(user: TenantJwtPayload, loanId: string, dto: { reason?: string } = {}) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) {
+      throw new ForbiddenException('Only Owner, Manager or Admin can mark a loan NPA');
+    }
+    const reason = dto.reason?.trim();
+    if (!reason) throw new BadRequestException('A reason is required to mark a loan NPA');
+
+    return this.withSchema(user.schemaName, async (client) => {
+      const res = await client.query<{ loan_number: string; npa_marked_at: Date | null }>(
+        `SELECT loan_number, npa_marked_at FROM loans WHERE id = $1 AND deleted_at IS NULL`,
+        [loanId],
+      );
+      if (!res.rows[0]) throw new NotFoundException('Loan not found');
+      if (res.rows[0].npa_marked_at) throw new BadRequestException('Loan is already marked NPA');
+
+      await client.query(
+        `UPDATE loans SET npa_marked_at = NOW(), npa_marked_by = $2, npa_reason = $3, updated_at = NOW()
+          WHERE id = $1`,
+        [loanId, user.sub, reason],
+      );
+      await this.activity.record(client, user, {
+        action: 'loan.npa_marked',
+        entityType: 'loan',
+        entityId: loanId,
+        entityLabel: res.rows[0].loan_number,
+        metadata: { reason },
+      });
+      return { id: loanId, isNpa: true, reason };
+    });
+  }
+
+  /**
+   * Removes a manual NPA flag. The loan can still show as NPA afterwards if it is
+   * over the overdue threshold — this clears the override, it does not suppress the rule.
+   */
+  async clearNpa(user: TenantJwtPayload, loanId: string, dto: { reason?: string } = {}) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) {
+      throw new ForbiddenException('Only Owner, Manager or Admin can clear an NPA flag');
+    }
+    return this.withSchema(user.schemaName, async (client) => {
+      const res = await client.query<{ loan_number: string; npa_marked_at: Date | null }>(
+        `SELECT loan_number, npa_marked_at FROM loans WHERE id = $1 AND deleted_at IS NULL`,
+        [loanId],
+      );
+      if (!res.rows[0]) throw new NotFoundException('Loan not found');
+      if (!res.rows[0].npa_marked_at) throw new BadRequestException('Loan is not manually marked NPA');
+
+      await client.query(
+        `UPDATE loans SET npa_marked_at = NULL, npa_marked_by = NULL, npa_reason = NULL, updated_at = NOW()
+          WHERE id = $1`,
+        [loanId],
+      );
+      await this.activity.record(client, user, {
+        action: 'loan.npa_cleared',
+        entityType: 'loan',
+        entityId: loanId,
+        entityLabel: res.rows[0].loan_number,
+        metadata: { reason: dto.reason?.trim() ?? null },
+      });
+
+      const threshold = await this.getNpaThreshold(client);
+      const overdueRes = await client.query<{ n: string }>(
+        `SELECT COUNT(*) AS n FROM installments WHERE loan_id = $1 AND status = 'OVERDUE'`,
+        [loanId],
+      );
+      const overdueCount = parseInt(overdueRes.rows[0].n);
+      return { id: loanId, isNpa: overdueCount >= threshold, overdueCount, npaThreshold: threshold };
     });
   }
 
@@ -1587,7 +1697,7 @@ export class TenantLoansService {
           SELECT l.id, l.loan_number, l.principal, l.interest_rate,
                  l.term_months AS term_weeks, l.emi_amount, l.status,
                  l.cycle_type, l.calculation_type,
-                 l.disbursed_at, l.first_due_date, l.created_at,
+                 l.disbursed_at, l.first_due_date, l.created_at, l.npa_marked_at,
                  l.branch_id, b.name AS branch_name,
                  c.id AS customer_id, c.first_name||' '||c.last_name AS customer_name, c.phone,
                  -- Financial breakdown
@@ -1618,6 +1728,7 @@ export class TenantLoansService {
           filterParams,
         );
 
+      const npaThreshold = await this.getNpaThreshold(client);
       return {
         data: dataRes.rows.map((r) => ({
           id: r.id, loanNumber: r.loan_number,
@@ -1635,7 +1746,8 @@ export class TenantLoansService {
           totalInstallments: parseInt(r.total_installments),
           paidInstallments: parseInt(r.paid_installments),
           overdueCount: parseInt(r.overdue_count),
-          isNpa: r.status === 'DEFAULTED' || parseInt(r.overdue_count) > 2,
+          isNpa: this.isNpa(r, npaThreshold),
+          npaMarkedAt: r.npa_marked_at ?? null,
         })),
         total: parseInt(countRes.rows[0].total),
         page, limit,
@@ -1774,7 +1886,7 @@ export class TenantLoansService {
           SELECT l.id, l.loan_number, l.principal, l.interest_rate,
                  l.term_months AS term_days, l.emi_amount, l.status,
                  l.cycle_type, l.calculation_type,
-                 l.disbursed_at, l.first_due_date, l.created_at,
+                 l.disbursed_at, l.first_due_date, l.created_at, l.npa_marked_at,
                  l.branch_id, b.name AS branch_name,
                  c.id AS customer_id, c.first_name||' '||c.last_name AS customer_name, c.phone,
                  COALESCE(SUM(CASE WHEN i.status='PAID' THEN i.principal_amount ELSE 0 END)
@@ -1804,6 +1916,7 @@ export class TenantLoansService {
           filterParams,
         );
 
+      const npaThreshold = await this.getNpaThreshold(client);
       return {
         data: dataRes.rows.map((r) => ({
           id: r.id, loanNumber: r.loan_number,
@@ -1821,7 +1934,8 @@ export class TenantLoansService {
           totalInstallments: parseInt(r.total_installments),
           paidInstallments: parseInt(r.paid_installments),
           overdueCount: parseInt(r.overdue_count),
-          isNpa: r.status === 'DEFAULTED' || parseInt(r.overdue_count) > 2,
+          isNpa: this.isNpa(r, npaThreshold),
+          npaMarkedAt: r.npa_marked_at ?? null,
         })),
         total: parseInt(countRes.rows[0].total),
         page, limit,
@@ -1953,7 +2067,7 @@ export class TenantLoansService {
       const dataRes = await client.query(`
           SELECT l.id, l.loan_number, l.principal, l.interest_rate,
                  l.term_months, l.emi_amount, l.status,
-                 l.disbursed_at, l.first_due_date, l.created_at,
+                 l.disbursed_at, l.first_due_date, l.created_at, l.npa_marked_at,
                  l.branch_id, b.name AS branch_name,
                  c.id AS customer_id, c.first_name||' '||c.last_name AS customer_name, c.phone,
                  COALESCE(SUM(CASE WHEN i.status='PAID' THEN i.interest_amount ELSE 0 END)
@@ -1978,6 +2092,7 @@ export class TenantLoansService {
           filterParams,
         );
 
+      const npaThreshold = await this.getNpaThreshold(client);
       return {
         data: dataRes.rows.map((r) => ({
           id: r.id, loanNumber: r.loan_number,
@@ -1995,7 +2110,8 @@ export class TenantLoansService {
           totalInstallments: parseInt(r.total_installments),
           paidInstallments: parseInt(r.paid_installments),
           overdueCount: parseInt(r.overdue_count),
-          isNpa: r.status === 'DEFAULTED' || parseInt(r.overdue_count) > 2,
+          isNpa: this.isNpa(r, npaThreshold),
+          npaMarkedAt: r.npa_marked_at ?? null,
         })),
         total: parseInt(countRes.rows[0].total),
         page, limit,
@@ -2124,7 +2240,7 @@ export class TenantLoansService {
       const dataRes = await client.query(`
           SELECT l.id, l.loan_number, l.principal, l.interest_rate,
                  l.term_months, l.emi_amount, l.status,
-                 l.disbursed_at, l.first_due_date, l.created_at,
+                 l.disbursed_at, l.first_due_date, l.created_at, l.npa_marked_at,
                  l.branch_id, b.name AS branch_name,
                  c.id AS customer_id, c.first_name||' '||c.last_name AS customer_name, c.phone,
                  COALESCE(SUM(CASE WHEN i.status='PAID' THEN i.interest_amount ELSE 0 END)
@@ -2149,6 +2265,7 @@ export class TenantLoansService {
           filterParams,
         );
 
+      const npaThreshold = await this.getNpaThreshold(client);
       return {
         data: dataRes.rows.map((r) => ({
           id: r.id, loanNumber: r.loan_number,
@@ -2166,7 +2283,8 @@ export class TenantLoansService {
           totalInstallments: parseInt(r.total_installments),
           paidInstallments: parseInt(r.paid_installments),
           overdueCount: parseInt(r.overdue_count),
-          isNpa: r.status === 'DEFAULTED' || parseInt(r.overdue_count) > 2,
+          isNpa: this.isNpa(r, npaThreshold),
+          npaMarkedAt: r.npa_marked_at ?? null,
         })),
         total: parseInt(countRes.rows[0].total),
         page, limit,
@@ -2290,7 +2408,7 @@ export class TenantLoansService {
       const dataRes = await client.query(`
           SELECT l.id, l.loan_number, l.customer_id, l.principal, l.interest_rate,
                  l.term_months, l.emi_amount, l.status, l.disbursed_at, l.first_due_date,
-                 l.calculation_type, l.branch_id, l.created_at,
+                 l.calculation_type, l.branch_id, l.created_at, l.npa_marked_at,
                  c.first_name || ' ' || c.last_name AS customer_name, c.phone,
                  b.name AS branch_name,
                  COALESCE(SUM(CASE WHEN i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE') THEN i.total_amount - i.paid_amount ELSE 0 END), 0) AS outstanding,
@@ -2312,6 +2430,7 @@ export class TenantLoansService {
           ${where}
         `, filterParams);
 
+      const npaThreshold = await this.getNpaThreshold(client);
       return {
         data: dataRes.rows.map((r) => ({
           id: r.id, loanNumber: r.loan_number, customerId: r.customer_id,
@@ -2323,7 +2442,8 @@ export class TenantLoansService {
           outstanding: parseFloat(r.outstanding),
           paidInstallments: parseInt(r.paid_count), totalInstallments: parseInt(r.total_count),
           overdueCount: parseInt(r.overdue_count),
-          isNpa: r.status === 'DEFAULTED' || parseInt(r.overdue_count) > 2,
+          isNpa: this.isNpa(r, npaThreshold),
+          npaMarkedAt: r.npa_marked_at ?? null,
           disbursedAt: r.disbursed_at, firstDueDate: r.first_due_date, createdAt: r.created_at,
         })),
         total: parseInt(countRes.rows[0].total),
