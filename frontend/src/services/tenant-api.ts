@@ -225,6 +225,8 @@ export interface Customer {
   isActive: boolean;
   activeLoans: number;
   closedLoans: number;
+  /** True if any of this customer's active loans is NPA (auto-threshold or manually flagged). */
+  hasNpaLoan: boolean;
   createdAt: string;
 }
 
@@ -243,13 +245,16 @@ export interface CustomerDetail extends Customer {
   updatedAt: string;
   totalLoans: number;
   activeLoans: number;
+  /** Count of this customer's loans currently classified NPA. */
+  npaLoans: number;
   totalPaid: number;
 }
 
-export function getCustomers(page = 1, limit = 20, search?: string, branchId?: string) {
+export function getCustomers(page = 1, limit = 20, search?: string, branchId?: string, npaOnly?: boolean) {
   const params = new URLSearchParams({ page: String(page), limit: String(limit) });
   if (search) params.set('search', search);
   if (branchId) params.set('branchId', branchId);
+  if (npaOnly) params.set('npaOnly', 'true');
   return tenantFetch<{ data: Customer[]; total: number; page: number; limit: number }>(
     `/api/v1/tenant/customers?${params}`,
   );
@@ -333,6 +338,8 @@ export interface Loan {
   firstDueDate: string | null;
   createdAt: string;
   cycleType: string | null;
+  isNpa: boolean;
+  npaMarkedAt: string | null;
 }
 
 /** Route prefix for a loan's type-specific detail page, mirroring the backend's loanDetailLink(). */
