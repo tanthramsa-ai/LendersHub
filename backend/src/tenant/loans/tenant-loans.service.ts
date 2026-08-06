@@ -6,7 +6,7 @@ import { TenantActivityLogService } from '../activity-log/tenant-activity-log.se
 import { safePagination } from '../../common/utils/pagination';
 import { MANAGER_ROLES, FIELD_ROLES, UserRole } from '../common/roles';
 import { assertNoDigitsOrSpecialChars } from '../customers/customer-validation';
-import { NPA_THRESHOLD_SETTING_KEY, NPA_OVERDUE_COUNT_SQL, parseNpaThreshold } from '../common/npa';
+import { NPA_THRESHOLD_SETTING_KEY, npaConsecutiveOverdueRunSql, parseNpaThreshold } from '../common/npa';
 
 export interface CreateLoanDto {
   customerId: string;
@@ -837,12 +837,19 @@ export class TenantLoansService {
     return parseNpaThreshold(res.rows[0]?.value);
   }
 
-  /** A loan is NPA when an admin has flagged it, or it has hit the overdue threshold. */
+  /**
+   * A loan is NPA when it currently has at least one overdue installment AND either
+   * an admin has flagged it or it has hit the overdue threshold. Requiring a nonzero
+   * overdue count means NPA tracks live delinquency: it clears itself once the
+   * borrower catches up or the loan is fully paid, even if it was manually marked —
+   * see npa.ts's npaLoanPredicateSql for the equivalent SQL-side rule.
+   */
   private isNpa(
     row: { npa_marked_at?: Date | null; npa_overdue_count: string },
     threshold: number,
   ): boolean {
-    return !!row.npa_marked_at || parseInt(row.npa_overdue_count) >= threshold;
+    const overdueCount = parseInt(row.npa_overdue_count);
+    return overdueCount > 0 && (!!row.npa_marked_at || overdueCount >= threshold);
   }
 
   /**
@@ -930,7 +937,7 @@ export class TenantLoansService {
                  l.npa_marked_at,
                  c.first_name || ' ' || c.last_name AS customer_name, c.phone AS customer_phone,
                  COALESCE(SUM(CASE WHEN i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE') THEN i.total_amount - i.paid_amount ELSE 0 END), 0) AS outstanding,
-                 ${NPA_OVERDUE_COUNT_SQL} AS npa_overdue_count
+                 ${npaConsecutiveOverdueRunSql('l')} AS npa_overdue_count
           FROM loans l
           JOIN customers c ON c.id = l.customer_id
           LEFT JOIN installments i ON i.loan_id = l.id
@@ -996,7 +1003,7 @@ export class TenantLoansService {
       // installment due today would wrongly count as overdue. Postgres's own
       // `due_date < CURRENT_DATE` has no such conversion to get wrong.
       const overdueRes = await client.query(
-        `SELECT ${NPA_OVERDUE_COUNT_SQL} AS n FROM installments i WHERE i.loan_id = $1`,
+        `SELECT ${npaConsecutiveOverdueRunSql('l')} AS n FROM loans l WHERE l.id = $1`,
         [id],
       );
 
@@ -1032,7 +1039,7 @@ export class TenantLoansService {
         loanOfficerName: l.officer_name ?? null,
         overdueCount,
         npaThreshold,
-        isNpa: !!l.npa_marked_at || overdueCount >= npaThreshold,
+        isNpa: overdueCount > 0 && (!!l.npa_marked_at || overdueCount >= npaThreshold),
         npaMarkedAt: l.npa_marked_at ?? null,
         npaMarkedByName: l.npa_marked_by_name ?? null,
         npaReason: l.npa_reason ?? null,
@@ -1413,7 +1420,7 @@ export class TenantLoansService {
 
       const threshold = await this.getNpaThreshold(client);
       const overdueRes = await client.query<{ n: string }>(
-        `SELECT ${NPA_OVERDUE_COUNT_SQL} AS n FROM installments i WHERE i.loan_id = $1`,
+        `SELECT ${npaConsecutiveOverdueRunSql('l')} AS n FROM loans l WHERE l.id = $1`,
         [loanId],
       );
       const overdueCount = parseInt(overdueRes.rows[0].n);
@@ -1874,7 +1881,7 @@ export class TenantLoansService {
                  COUNT(i.id) AS total_installments,
                  COUNT(i.id) FILTER (WHERE i.status='PAID') AS paid_installments,
                  COUNT(i.id) FILTER (WHERE i.status='OVERDUE') AS overdue_count,
-                 ${NPA_OVERDUE_COUNT_SQL} AS npa_overdue_count
+                 ${npaConsecutiveOverdueRunSql('l')} AS npa_overdue_count
           FROM loans l
           JOIN customers c ON c.id = l.customer_id
           LEFT JOIN branches b ON b.id = l.branch_id
@@ -2121,7 +2128,7 @@ export class TenantLoansService {
                  COUNT(i.id) AS total_installments,
                  COUNT(i.id) FILTER (WHERE i.status='PAID') AS paid_installments,
                  COUNT(i.id) FILTER (WHERE i.status='OVERDUE') AS overdue_count,
-                 ${NPA_OVERDUE_COUNT_SQL} AS npa_overdue_count
+                 ${npaConsecutiveOverdueRunSql('l')} AS npa_overdue_count
           FROM loans l
           JOIN customers c ON c.id = l.customer_id
           LEFT JOIN branches b ON b.id = l.branch_id
@@ -2359,7 +2366,7 @@ export class TenantLoansService {
                  COUNT(i.id) AS total_installments,
                  COUNT(i.id) FILTER (WHERE i.status='PAID') AS paid_installments,
                  COUNT(i.id) FILTER (WHERE i.status='OVERDUE') AS overdue_count,
-                 ${NPA_OVERDUE_COUNT_SQL} AS npa_overdue_count
+                 ${npaConsecutiveOverdueRunSql('l')} AS npa_overdue_count
           FROM loans l
           JOIN customers c ON c.id = l.customer_id
           LEFT JOIN branches b ON b.id = l.branch_id
@@ -2589,7 +2596,7 @@ export class TenantLoansService {
                  COUNT(i.id) AS total_installments,
                  COUNT(i.id) FILTER (WHERE i.status='PAID') AS paid_installments,
                  COUNT(i.id) FILTER (WHERE i.status='OVERDUE') AS overdue_count,
-                 ${NPA_OVERDUE_COUNT_SQL} AS npa_overdue_count
+                 ${npaConsecutiveOverdueRunSql('l')} AS npa_overdue_count
           FROM loans l
           JOIN customers c ON c.id = l.customer_id
           LEFT JOIN branches b ON b.id = l.branch_id
@@ -2809,7 +2816,7 @@ export class TenantLoansService {
                  COUNT(CASE WHEN i.status IN ('PAID','PARTIALLY_PAID') AND i.paid_amount >= i.total_amount THEN 1 END) AS paid_count,
                  COUNT(i.id) AS total_count,
                  COUNT(CASE WHEN i.status = 'OVERDUE' THEN 1 END) AS overdue_count,
-                 ${NPA_OVERDUE_COUNT_SQL} AS npa_overdue_count
+                 ${npaConsecutiveOverdueRunSql('l')} AS npa_overdue_count
           FROM loans l
           JOIN customers c ON c.id = l.customer_id
           LEFT JOIN branches b ON b.id = l.branch_id
