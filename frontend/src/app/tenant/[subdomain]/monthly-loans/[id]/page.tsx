@@ -599,6 +599,9 @@ export default function MonthlyLoanDetailPage() {
                 <input type="number" value={payForm.amount} min="1"
                   onChange={(e) => setPayForm(f => ({ ...f, amount: e.target.value }))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                {payInst && parseFloat(payForm.amount || '0') > Math.max(0, payInst.total - payInst.paid) && (
+                  <p className="text-xs text-gray-500 mt-1">Extra amount will apply to the next installment(s).</p>
+                )}
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Payment Method</label>
