@@ -6,13 +6,14 @@ import { useParams, useSearchParams, useRouter, usePathname } from 'next/navigat
 import Link from 'next/link';
 import {
   getDailyLoan, recordPayment, undoInstallmentPayment, deleteInstallment, closeLoan, reopenLoan, resolveMissedInstallment,
-  approveLoan, rejectLoan, approveCloseLoan, assignLoanAgent, getOfficers,
-  DailyLoanDetail, DailyInstallment, MissResolution, Officer,
+  approveLoan, rejectLoan, approveCloseLoan, assignLoanAgent, getOfficers, updateDailyLoan, getBranches,
+  DailyLoanDetail, DailyInstallment, MissResolution, Officer, TenantBranch,
   getTenantSession, COLLECTION_ROLES, MANAGER_ROLES,
 } from '@/services/tenant-api';
 import { CloseLoanModal, CloseCommentBanner, ReopenLoanModal } from '@/components/CloseLoanModal';
 import { MissedPaymentModal } from '@/components/MissedPaymentModal';
 import { AddInstallmentModal } from '@/components/AddInstallmentModal';
+import { EditLoanModal } from '@/components/EditLoanModal';
 import { refreshNotificationBell } from '@/lib/notifications-bus';
 
 function fmt(n: number) {
@@ -154,6 +155,10 @@ export default function DailyLoanDetailPage() {
   const [showAssignAgent, setShowAssignAgent] = useState(false);
   const [selectedOfficerId, setSelectedOfficerId] = useState('');
   const [assigningAgent, setAssigningAgent] = useState(false);
+  const [branches, setBranches] = useState<TenantBranch[]>([]);
+  const [showEditLoan, setShowEditLoan] = useState(false);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editError, setEditError] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true); setError('');
@@ -166,7 +171,19 @@ export default function DailyLoanDetailPage() {
 
   useEffect(() => {
     if (canClose) getOfficers().then(setOfficers).catch(() => setOfficers([]));
+    getBranches().then((b) => setBranches(b.filter((br) => br.isActive))).catch(() => setBranches([]));
   }, [canClose]);
+
+  async function handleSaveEdit(dto: Record<string, unknown>) {
+    setSavingEdit(true); setEditError('');
+    try {
+      await updateDailyLoan(id, dto as Parameters<typeof updateDailyLoan>[1]);
+      setShowEditLoan(false);
+      await load();
+    } catch (e: unknown) {
+      setEditError((e as Error).message);
+    } finally { setSavingEdit(false); }
+  }
 
   async function handleAssignAgent() {
     if (!selectedOfficerId) return;
@@ -342,6 +359,14 @@ export default function DailyLoanDetailPage() {
         <NpaBadge loan={loan} canManage={canClose} onChanged={load} />
         {loan.pendingClosure && (
           <span className="px-2 py-0.5 bg-amber-100 text-amber-800 rounded text-xs font-semibold">Closure pending approval</span>
+        )}
+        {canClose && ['APPROVED', 'DISBURSED'].includes(loan.status) && loan.payments.length === 0 && !loan.pendingClosure && (
+          <button
+            onClick={() => { setEditError(''); setShowEditLoan(true); }}
+            className="px-3 py-1 border border-gray-300 text-gray-700 hover:bg-gray-50 text-xs font-medium rounded-lg transition-colors"
+          >
+            Edit Loan
+          </button>
         )}
         {canClose && loan.status === 'PENDING' && (
           <span className="flex gap-2 ml-2">
@@ -750,6 +775,29 @@ export default function DailyLoanDetailPage() {
           loanId={id}
           onCancel={() => setShowAddInstallment(false)}
           onAdded={() => { setShowAddInstallment(false); load(); }}
+        />
+      )}
+
+      {showEditLoan && (
+        <EditLoanModal
+          cycleType="DAILY"
+          loanNumber={loan.loanNumber}
+          branches={branches}
+          saving={savingEdit}
+          error={editError}
+          initial={{
+            principal: loan.principal,
+            interestRate: loan.interestRate,
+            term: loan.termDays,
+            firstDueDate: loan.firstDueDate ?? '',
+            purpose: loan.purpose,
+            branchId: loan.branchId,
+            calculationType: loan.calculationType,
+            interestPerDay: loan.interestPerDay,
+            dailyCycleType: loan.cycleType as 'DAILY_NO_SUNDAY' | 'DAILY_WITH_SUNDAY',
+          }}
+          onCancel={() => { setShowEditLoan(false); setEditError(''); }}
+          onSave={handleSaveEdit}
         />
       )}
 

@@ -6,11 +6,12 @@ import { useParams, useSearchParams, useRouter, usePathname } from 'next/navigat
 import Link from 'next/link';
 import {
   getAgentRiskLoan, recordPayment, undoInstallmentPayment, deleteInstallment, closeLoan, reopenLoan,
-  approveLoan, rejectLoan, approveCloseLoan, assignLoanAgent, getOfficers,
-  AgentRiskLoanDetail, MonthlyInstallment, Officer,
+  approveLoan, rejectLoan, approveCloseLoan, assignLoanAgent, getOfficers, updateAgentRiskLoan, getBranches,
+  AgentRiskLoanDetail, MonthlyInstallment, Officer, TenantBranch,
   getTenantSession, COLLECTION_ROLES, MANAGER_ROLES,
 } from '@/services/tenant-api';
 import { CloseLoanModal, CloseCommentBanner, ReopenLoanModal } from '@/components/CloseLoanModal';
+import { EditLoanModal } from '@/components/EditLoanModal';
 import { refreshNotificationBell } from '@/lib/notifications-bus';
 
 function fmt(n: number) {
@@ -117,6 +118,10 @@ export default function AgentRiskLoanDetailPage() {
   const [showAssignAgent, setShowAssignAgent] = useState(false);
   const [selectedOfficerId, setSelectedOfficerId] = useState('');
   const [assigningAgent, setAssigningAgent] = useState(false);
+  const [branches, setBranches] = useState<TenantBranch[]>([]);
+  const [showEditLoan, setShowEditLoan] = useState(false);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editError, setEditError] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true); setError('');
@@ -129,7 +134,19 @@ export default function AgentRiskLoanDetailPage() {
 
   useEffect(() => {
     if (canClose) getOfficers().then(setOfficers).catch(() => setOfficers([]));
+    getBranches().then((b) => setBranches(b.filter((br) => br.isActive))).catch(() => setBranches([]));
   }, [canClose]);
+
+  async function handleSaveEdit(dto: Record<string, unknown>) {
+    setSavingEdit(true); setEditError('');
+    try {
+      await updateAgentRiskLoan(id, dto as Parameters<typeof updateAgentRiskLoan>[1]);
+      setShowEditLoan(false);
+      await load();
+    } catch (e: unknown) {
+      setEditError((e as Error).message);
+    } finally { setSavingEdit(false); }
+  }
 
   async function handleAssignAgent() {
     if (!selectedOfficerId) return;
@@ -291,6 +308,14 @@ export default function AgentRiskLoanDetailPage() {
         <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-medium">Agent Risk</span>
         {loan.pendingClosure && (
           <span className="px-2 py-0.5 bg-amber-100 text-amber-800 rounded text-xs font-semibold">Closure pending approval</span>
+        )}
+        {canClose && ['APPROVED', 'DISBURSED'].includes(loan.status) && loan.payments.length === 0 && !loan.pendingClosure && (
+          <button
+            onClick={() => { setEditError(''); setShowEditLoan(true); }}
+            className="px-3 py-1 border border-gray-300 text-gray-700 hover:bg-gray-50 text-xs font-medium rounded-lg transition-colors"
+          >
+            Edit Loan
+          </button>
         )}
         {canClose && loan.status === 'PENDING' && (
           <span className="flex gap-2 ml-2">
@@ -552,6 +577,26 @@ export default function AgentRiskLoanDetailPage() {
           error={reopenError}
           onCancel={() => { setShowReopenConfirm(false); setReopenError(''); }}
           onConfirm={handleReopen}
+        />
+      )}
+
+      {showEditLoan && (
+        <EditLoanModal
+          cycleType="AGENT_RISK"
+          loanNumber={loan.loanNumber}
+          branches={branches}
+          saving={savingEdit}
+          error={editError}
+          initial={{
+            principal: loan.principal,
+            interestRate: loan.interestRate,
+            term: loan.termMonths,
+            firstDueDate: loan.firstDueDate ?? '',
+            purpose: loan.purpose,
+            branchId: loan.branchId,
+          }}
+          onCancel={() => { setShowEditLoan(false); setEditError(''); }}
+          onSave={handleSaveEdit}
         />
       )}
 
