@@ -856,11 +856,16 @@ export class TenantLoansService {
   private async assertLoanEditable(
     client: import('pg').PoolClient,
     loanId: string,
-  ): Promise<{ loan_number: string; cycle_type: string }> {
+  ): Promise<{
+    loan_number: string; cycle_type: string;
+    loan_type_id: string | null; security_doc_url: string | null; promissory_note_url: string | null;
+  }> {
     const loanRes = await client.query<{
       loan_number: string; status: string; cycle_type: string; pending_closure: boolean;
+      loan_type_id: string | null; security_doc_url: string | null; promissory_note_url: string | null;
     }>(
-      `SELECT loan_number, status, cycle_type, pending_closure FROM loans WHERE id = $1 AND deleted_at IS NULL`,
+      `SELECT loan_number, status, cycle_type, pending_closure, loan_type_id, security_doc_url, promissory_note_url
+       FROM loans WHERE id = $1 AND deleted_at IS NULL`,
       [loanId],
     );
     if (!loanRes.rows[0]) throw new NotFoundException('Loan not found');
@@ -1993,9 +1998,9 @@ export class TenantLoansService {
           interest_per_1000_per_day = $12, updated_at = NOW()
         WHERE id = $13
       `, [
-        dto.branchId ?? null, dto.loanTypeId ?? null, dto.principal, storedRate,
+        dto.branchId ?? null, dto.loanTypeId ?? loan.loan_type_id, dto.principal, storedRate,
         dto.termWeeks, dto.purpose ?? null, dto.firstDueDate, dto.calculationType,
-        emi, dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null,
+        emi, dto.securityDocUrl ?? loan.security_doc_url, dto.promissoryNoteUrl ?? loan.promissory_note_url,
         isPerDay ? dto.interestPerDay : null, loanId,
       ]);
 
@@ -2243,9 +2248,9 @@ export class TenantLoansService {
           promissory_note_url = $12, interest_per_1000_per_day = $13, updated_at = NOW()
         WHERE id = $14
       `, [
-        dto.branchId ?? null, dto.loanTypeId ?? null, dto.principal, storedRate,
+        dto.branchId ?? null, dto.loanTypeId ?? loan.loan_type_id, dto.principal, storedRate,
         dto.termDays, dto.purpose ?? null, dto.firstDueDate, dto.cycleType,
-        dto.calculationType, emi, dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null,
+        dto.calculationType, emi, dto.securityDocUrl ?? loan.security_doc_url, dto.promissoryNoteUrl ?? loan.promissory_note_url,
         isPerDay ? dto.interestPerDay : null, loanId,
       ]);
 
@@ -2477,9 +2482,9 @@ export class TenantLoansService {
           security_doc_url = $9, promissory_note_url = $10, updated_at = NOW()
         WHERE id = $11
       `, [
-        dto.branchId || null, dto.loanTypeId ?? null, dto.principal, dto.interestRate,
+        dto.branchId || null, dto.loanTypeId ?? loan.loan_type_id, dto.principal, dto.interestRate,
         dto.termMonths, monthlyInterest, dto.purpose ?? null, dto.firstDueDate,
-        dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null, loanId,
+        dto.securityDocUrl ?? loan.security_doc_url, dto.promissoryNoteUrl ?? loan.promissory_note_url, loanId,
       ]);
 
       await client.query(`DELETE FROM installments WHERE loan_id = $1`, [loanId]);
@@ -2705,9 +2710,9 @@ export class TenantLoansService {
           security_doc_url = $9, promissory_note_url = $10, updated_at = NOW()
         WHERE id = $11
       `, [
-        dto.branchId || null, dto.loanTypeId ?? null, dto.principal, dto.interestRate,
+        dto.branchId || null, dto.loanTypeId ?? loan.loan_type_id, dto.principal, dto.interestRate,
         dto.termMonths, monthlyInterest, dto.purpose ?? null, dto.firstDueDate,
-        dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null, loanId,
+        dto.securityDocUrl ?? loan.security_doc_url, dto.promissoryNoteUrl ?? loan.promissory_note_url, loanId,
       ]);
 
       await client.query(`DELETE FROM installments WHERE loan_id = $1`, [loanId]);
@@ -2922,9 +2927,9 @@ export class TenantLoansService {
           updated_at = NOW()
         WHERE id = $12
       `, [
-        dto.branchId || null, dto.loanTypeId ?? null, dto.principal, dto.interestRate,
+        dto.branchId || null, dto.loanTypeId ?? loan.loan_type_id, dto.principal, dto.interestRate,
         dto.termMonths, emi, dto.purpose ?? null, dto.firstDueDate, dto.calculationType,
-        dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null, loanId,
+        dto.securityDocUrl ?? loan.security_doc_url, dto.promissoryNoteUrl ?? loan.promissory_note_url, loanId,
       ]);
 
       await client.query(`DELETE FROM installments WHERE loan_id = $1`, [loanId]);
