@@ -108,6 +108,15 @@ export interface CreateTermLoanDto {
   loanOfficerId?: string;
 }
 
+// Editing a loan is not re-creating it: the borrower and assigned agent stay put
+// (agent reassignment already has its own dedicated endpoint), so every Update*Dto
+// is its matching Create*Dto minus those two fields.
+export type UpdateWeeklyLoanDto = Omit<CreateWeeklyLoanDto, 'customerId' | 'loanOfficerId'>;
+export type UpdateDailyLoanDto = Omit<CreateDailyLoanDto, 'customerId' | 'loanOfficerId'>;
+export type UpdateMonthlyLoanDto = Omit<CreateMonthlyLoanDto, 'customerId' | 'loanOfficerId'>;
+export type UpdateAgentRiskLoanDto = Omit<CreateAgentRiskLoanDto, 'customerId' | 'loanOfficerId'>;
+export type UpdateTermLoanDto = Omit<CreateTermLoanDto, 'customerId' | 'loanOfficerId'>;
+
 function roundUp(amount: number, nearest: number): number {
   if (nearest === 0) return Math.round(amount * 100) / 100;
   return Math.ceil(amount / nearest) * nearest;
@@ -834,6 +843,41 @@ export class TenantLoansService {
     threshold: number,
   ): boolean {
     return !!row.npa_marked_at || parseInt(row.npa_overdue_count) >= threshold;
+  }
+
+  /**
+   * Loans can only be edited (principal/rate/term/etc — anything that requires
+   * rebuilding the installment schedule) before any money has moved. Once a
+   * payment exists, deleting installments to regenerate the schedule would
+   * orphan that payment's row. Closed loans and loans pending closure approval
+   * are excluded too — those are terminal/in-flight states, not something to
+   * quietly rewrite underneath.
+   */
+  private async assertLoanEditable(
+    client: import('pg').PoolClient,
+    loanId: string,
+  ): Promise<{ loan_number: string; cycle_type: string }> {
+    const loanRes = await client.query<{
+      loan_number: string; status: string; cycle_type: string; pending_closure: boolean;
+    }>(
+      `SELECT loan_number, status, cycle_type, pending_closure FROM loans WHERE id = $1 AND deleted_at IS NULL`,
+      [loanId],
+    );
+    if (!loanRes.rows[0]) throw new NotFoundException('Loan not found');
+    const loan = loanRes.rows[0];
+    if (!['APPROVED', 'DISBURSED'].includes(loan.status)) {
+      throw new BadRequestException(`Cannot edit a loan with status ${loan.status}`);
+    }
+    if (loan.pending_closure) throw new BadRequestException('Cannot edit a loan pending closure approval');
+
+    const paymentsRes = await client.query<{ n: string }>(
+      `SELECT COUNT(*) AS n FROM payments WHERE loan_id = $1`,
+      [loanId],
+    );
+    if (parseInt(paymentsRes.rows[0].n) > 0) {
+      throw new BadRequestException('Cannot edit a loan that already has payments recorded');
+    }
+    return loan;
   }
 
   async list(user: TenantJwtPayload, page: number, limit: number, opts: {
@@ -1920,6 +1964,64 @@ export class TenantLoansService {
     });
   }
 
+  /** Edits principal/rate/term/etc on a weekly loan with no payments yet, rebuilding the schedule. */
+  async updateWeeklyLoan(user: TenantJwtPayload, loanId: string, dto: UpdateWeeklyLoanDto) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) throw new ForbiddenException('Only Owner, Manager or Admin can edit a loan');
+    if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
+    if (dto.termWeeks < 1 || dto.termWeeks > 99) throw new BadRequestException('Term must be 1–99 weeks');
+    if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
+    assertWeeklyRateInput(dto.calculationType, dto.interestRate, dto.interestPerDay);
+    assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
+
+    const isPerDay = dto.calculationType === 'PER_1000_PER_DAY';
+    const storedRate = isPerDay ? perDayRateToAnnualPct(dto.interestPerDay!) : dto.interestRate;
+
+    return this.withSchema(user.schemaName, async (client) => {
+      const loan = await this.assertLoanEditable(client, loanId);
+      if (loan.cycle_type !== 'WEEKLY') throw new BadRequestException('Loan is not a weekly loan');
+
+      const { schedule, emi } = computeWeeklySchedule(
+        dto.principal, dto.interestRate, dto.termWeeks,
+        dto.firstDueDate, dto.calculationType, dto.emiRounding, dto.interestPerDay,
+      );
+
+      await client.query(`
+        UPDATE loans SET
+          branch_id = $1, loan_type_id = $2, principal = $3, interest_rate = $4,
+          term_months = $5, purpose = $6, first_due_date = $7, calculation_type = $8,
+          emi_amount = $9, security_doc_url = $10, promissory_note_url = $11,
+          interest_per_1000_per_day = $12, updated_at = NOW()
+        WHERE id = $13
+      `, [
+        dto.branchId ?? null, dto.loanTypeId ?? null, dto.principal, storedRate,
+        dto.termWeeks, dto.purpose ?? null, dto.firstDueDate, dto.calculationType,
+        emi, dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null,
+        isPerDay ? dto.interestPerDay : null, loanId,
+      ]);
+
+      await client.query(`DELETE FROM installments WHERE loan_id = $1`, [loanId]);
+      for (const inst of schedule) {
+        await client.query(`
+          INSERT INTO installments (loan_id, installment_number, due_date, principal_amount, interest_amount, total_amount)
+          VALUES ($1,$2,$3,$4,$5,$6)
+        `, [loanId, inst.number, inst.dueDate, inst.principalAmount, inst.interestAmount, inst.totalAmount]);
+      }
+
+      await this.activity.record(client, user, {
+        action: 'loan.edited',
+        entityType: 'loan',
+        entityId: loanId,
+        entityLabel: loan.loan_number,
+        metadata: { cycleType: 'WEEKLY', principal: dto.principal, termWeeks: dto.termWeeks },
+      });
+
+      return {
+        id: loanId, loanNumber: loan.loan_number, principal: dto.principal,
+        emi, termWeeks: dto.termWeeks, installmentCount: schedule.length,
+      };
+    });
+  }
+
   // ── DAILY LOANS ──────────────────────────────────────────────────────────────
 
   previewDailySchedule(dto: Pick<CreateDailyLoanDto, 'principal' | 'interestRate' | 'termDays' | 'firstDueDate' | 'calculationType' | 'emiRounding' | 'cycleType' | 'interestPerDay'>) {
@@ -2109,6 +2211,67 @@ export class TenantLoansService {
     });
   }
 
+  /** Edits principal/rate/term/cycle/etc on a daily loan with no payments yet, rebuilding the schedule. */
+  async updateDailyLoan(user: TenantJwtPayload, loanId: string, dto: UpdateDailyLoanDto) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) throw new ForbiddenException('Only Owner, Manager or Admin can edit a loan');
+    if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
+    if (dto.termDays < 1 || dto.termDays > 3650) throw new BadRequestException('Term must be 1–3650 days');
+    if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
+    assertWeeklyRateInput(dto.calculationType, dto.interestRate, dto.interestPerDay);
+    if (!['DAILY_NO_SUNDAY', 'DAILY_WITH_SUNDAY'].includes(dto.cycleType)) throw new BadRequestException('cycleType must be DAILY_NO_SUNDAY or DAILY_WITH_SUNDAY');
+    assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
+
+    const isPerDay = dto.calculationType === 'PER_1000_PER_DAY';
+    const storedRate = isPerDay ? Math.round(dto.interestPerDay! * 36.5 * 10000) / 10000 : dto.interestRate;
+
+    return this.withSchema(user.schemaName, async (client) => {
+      const loan = await this.assertLoanEditable(client, loanId);
+      if (loan.cycle_type !== 'DAILY_NO_SUNDAY' && loan.cycle_type !== 'DAILY_WITH_SUNDAY') {
+        throw new BadRequestException('Loan is not a daily loan');
+      }
+
+      const { schedule, emi } = computeDailySchedule(
+        dto.principal, dto.interestRate, dto.termDays,
+        dto.firstDueDate, dto.calculationType, dto.emiRounding, dto.cycleType, dto.interestPerDay,
+      );
+
+      await client.query(`
+        UPDATE loans SET
+          branch_id = $1, loan_type_id = $2, principal = $3, interest_rate = $4,
+          term_months = $5, purpose = $6, first_due_date = $7, cycle_type = $8,
+          calculation_type = $9, emi_amount = $10, security_doc_url = $11,
+          promissory_note_url = $12, interest_per_1000_per_day = $13, updated_at = NOW()
+        WHERE id = $14
+      `, [
+        dto.branchId ?? null, dto.loanTypeId ?? null, dto.principal, storedRate,
+        dto.termDays, dto.purpose ?? null, dto.firstDueDate, dto.cycleType,
+        dto.calculationType, emi, dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null,
+        isPerDay ? dto.interestPerDay : null, loanId,
+      ]);
+
+      await client.query(`DELETE FROM installments WHERE loan_id = $1`, [loanId]);
+      for (const inst of schedule) {
+        await client.query(`
+          INSERT INTO installments (loan_id, installment_number, due_date, principal_amount, interest_amount, total_amount)
+          VALUES ($1,$2,$3,$4,$5,$6)
+        `, [loanId, inst.number, inst.dueDate, inst.principalAmount, inst.interestAmount, inst.totalAmount]);
+      }
+
+      await this.activity.record(client, user, {
+        action: 'loan.edited',
+        entityType: 'loan',
+        entityId: loanId,
+        entityLabel: loan.loan_number,
+        metadata: { cycleType: dto.cycleType, principal: dto.principal, termDays: dto.termDays },
+      });
+
+      return {
+        id: loanId, loanNumber: loan.loan_number, principal: dto.principal,
+        emi, termDays: dto.termDays, installmentCount: schedule.length,
+      };
+    });
+  }
+
   // ── MONTHLY LOANS ─────────────────────────────────────────────────────────────
 
   previewMonthlySchedule(dto: Pick<CreateMonthlyLoanDto, 'principal' | 'interestRate' | 'termMonths' | 'firstDueDate'>) {
@@ -2286,6 +2449,62 @@ export class TenantLoansService {
     });
   }
 
+  /** Edits principal/rate/term/etc on a monthly loan with no payments yet, rebuilding the schedule. */
+  async updateMonthlyLoan(user: TenantJwtPayload, loanId: string, dto: UpdateMonthlyLoanDto) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) throw new ForbiddenException('Only Owner, Manager or Admin can edit a loan');
+    if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
+    if (dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
+    if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
+    if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
+    assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
+
+    return this.withSchema(user.schemaName, async (client) => {
+      const loan = await this.assertLoanEditable(client, loanId);
+      if (loan.cycle_type !== 'MONTHLY') throw new BadRequestException('Loan is not a monthly loan');
+      if (dto.branchId) {
+        const brRes = await client.query(`SELECT id FROM branches WHERE id = $1 AND is_active = TRUE`, [dto.branchId]);
+        if (!brRes.rows[0]) throw new NotFoundException('Branch not found');
+      }
+
+      const { schedule, monthlyInterest } = computeMonthlySchedule(
+        dto.principal, dto.interestRate, dto.termMonths, dto.firstDueDate,
+      );
+
+      await client.query(`
+        UPDATE loans SET
+          branch_id = $1, loan_type_id = $2, principal = $3, interest_rate = $4,
+          term_months = $5, emi_amount = $6, purpose = $7, first_due_date = $8,
+          security_doc_url = $9, promissory_note_url = $10, updated_at = NOW()
+        WHERE id = $11
+      `, [
+        dto.branchId || null, dto.loanTypeId ?? null, dto.principal, dto.interestRate,
+        dto.termMonths, monthlyInterest, dto.purpose ?? null, dto.firstDueDate,
+        dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null, loanId,
+      ]);
+
+      await client.query(`DELETE FROM installments WHERE loan_id = $1`, [loanId]);
+      for (const inst of schedule) {
+        await client.query(`
+          INSERT INTO installments (loan_id, installment_number, due_date, principal_amount, interest_amount, total_amount)
+          VALUES ($1,$2,$3,$4,$5,$6)
+        `, [loanId, inst.number, inst.dueDate, inst.principalAmount, inst.interestAmount, inst.totalAmount]);
+      }
+
+      await this.activity.record(client, user, {
+        action: 'loan.edited',
+        entityType: 'loan',
+        entityId: loanId,
+        entityLabel: loan.loan_number,
+        metadata: { cycleType: 'MONTHLY', principal: dto.principal, termMonths: dto.termMonths },
+      });
+
+      return {
+        id: loanId, loanNumber: loan.loan_number, principal: dto.principal,
+        monthlyInterest, termMonths: dto.termMonths, installmentCount: schedule.length,
+      };
+    });
+  }
+
   // ── AGENT RISK LOANS ──────────────────────────────────────────────────────────
 
   previewAgentRiskSchedule(dto: Pick<CreateAgentRiskLoanDto, 'principal' | 'interestRate' | 'termMonths' | 'firstDueDate'>) {
@@ -2459,6 +2678,61 @@ export class TenantLoansService {
     });
   }
 
+  /** Edits principal/rate/term/etc on an agent risk loan with no payments yet, rebuilding the schedule. */
+  async updateAgentRiskLoan(user: TenantJwtPayload, loanId: string, dto: UpdateAgentRiskLoanDto) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) throw new ForbiddenException('Only Owner, Manager or Admin can edit a loan');
+    if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
+    if (dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
+    if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
+    assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
+
+    return this.withSchema(user.schemaName, async (client) => {
+      const loan = await this.assertLoanEditable(client, loanId);
+      if (loan.cycle_type !== 'AGENT_RISK') throw new BadRequestException('Loan is not an agent risk loan');
+      if (dto.branchId) {
+        const brRes = await client.query(`SELECT id FROM branches WHERE id = $1 AND is_active = TRUE`, [dto.branchId]);
+        if (!brRes.rows[0]) throw new NotFoundException('Branch not found');
+      }
+
+      const { schedule, monthlyInterest } = computeMonthlySchedule(
+        dto.principal, dto.interestRate, dto.termMonths, dto.firstDueDate,
+      );
+
+      await client.query(`
+        UPDATE loans SET
+          branch_id = $1, loan_type_id = $2, principal = $3, interest_rate = $4,
+          term_months = $5, emi_amount = $6, purpose = $7, first_due_date = $8,
+          security_doc_url = $9, promissory_note_url = $10, updated_at = NOW()
+        WHERE id = $11
+      `, [
+        dto.branchId || null, dto.loanTypeId ?? null, dto.principal, dto.interestRate,
+        dto.termMonths, monthlyInterest, dto.purpose ?? null, dto.firstDueDate,
+        dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null, loanId,
+      ]);
+
+      await client.query(`DELETE FROM installments WHERE loan_id = $1`, [loanId]);
+      for (const inst of schedule) {
+        await client.query(`
+          INSERT INTO installments (loan_id, installment_number, due_date, principal_amount, interest_amount, total_amount)
+          VALUES ($1,$2,$3,$4,$5,$6)
+        `, [loanId, inst.number, inst.dueDate, inst.principalAmount, inst.interestAmount, inst.totalAmount]);
+      }
+
+      await this.activity.record(client, user, {
+        action: 'loan.edited',
+        entityType: 'loan',
+        entityId: loanId,
+        entityLabel: loan.loan_number,
+        metadata: { cycleType: 'AGENT_RISK', principal: dto.principal, termMonths: dto.termMonths },
+      });
+
+      return {
+        id: loanId, loanNumber: loan.loan_number, principal: dto.principal,
+        monthlyInterest, termMonths: dto.termMonths, installmentCount: schedule.length,
+      };
+    });
+  }
+
   previewTermLoanSchedule(dto: Pick<CreateTermLoanDto, 'principal' | 'interestRate' | 'termMonths' | 'firstDueDate' | 'calculationType' | 'emiRounding'>) {
     const { schedule, emi } = computeTermLoanSchedule(
       dto.principal, dto.interestRate, dto.termMonths, dto.firstDueDate, dto.calculationType, dto.emiRounding,
@@ -2616,6 +2890,62 @@ export class TenantLoansService {
         id: loan.id, loanNumber, principal: dto.principal, emi,
         termMonths: dto.termMonths, installmentCount: schedule.length,
         firstDueDate: dto.firstDueDate, status: 'DISBURSED',
+      };
+    });
+  }
+
+  /** Edits principal/rate/term/etc on a term loan with no payments yet, rebuilding the schedule. */
+  async updateTermLoan(user: TenantJwtPayload, loanId: string, dto: UpdateTermLoanDto) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) throw new ForbiddenException('Only Owner, Manager or Admin can edit a loan');
+    if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
+    if (dto.interestRate < 0 || dto.interestRate > 100) throw new BadRequestException('Invalid interest rate');
+    if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
+    assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
+
+    return this.withSchema(user.schemaName, async (client) => {
+      const loan = await this.assertLoanEditable(client, loanId);
+      if (loan.cycle_type !== 'TERM_LOAN') throw new BadRequestException('Loan is not a term loan');
+      if (dto.branchId) {
+        const brRes = await client.query(`SELECT id FROM branches WHERE id = $1 AND is_active = TRUE`, [dto.branchId]);
+        if (!brRes.rows[0]) throw new NotFoundException('Branch not found');
+      }
+
+      const { schedule, emi } = computeTermLoanSchedule(
+        dto.principal, dto.interestRate, dto.termMonths, dto.firstDueDate, dto.calculationType, dto.emiRounding,
+      );
+
+      await client.query(`
+        UPDATE loans SET
+          branch_id = $1, loan_type_id = $2, principal = $3, interest_rate = $4,
+          term_months = $5, emi_amount = $6, purpose = $7, first_due_date = $8,
+          calculation_type = $9, security_doc_url = $10, promissory_note_url = $11,
+          updated_at = NOW()
+        WHERE id = $12
+      `, [
+        dto.branchId || null, dto.loanTypeId ?? null, dto.principal, dto.interestRate,
+        dto.termMonths, emi, dto.purpose ?? null, dto.firstDueDate, dto.calculationType,
+        dto.securityDocUrl ?? null, dto.promissoryNoteUrl ?? null, loanId,
+      ]);
+
+      await client.query(`DELETE FROM installments WHERE loan_id = $1`, [loanId]);
+      for (const inst of schedule) {
+        await client.query(`
+          INSERT INTO installments (loan_id, installment_number, due_date, principal_amount, interest_amount, total_amount)
+          VALUES ($1,$2,$3,$4,$5,$6)
+        `, [loanId, inst.number, inst.dueDate, inst.principalAmount, inst.interestAmount, inst.totalAmount]);
+      }
+
+      await this.activity.record(client, user, {
+        action: 'loan.edited',
+        entityType: 'loan',
+        entityId: loanId,
+        entityLabel: loan.loan_number,
+        metadata: { cycleType: 'TERM_LOAN', principal: dto.principal, termMonths: dto.termMonths },
+      });
+
+      return {
+        id: loanId, loanNumber: loan.loan_number, principal: dto.principal, emi,
+        termMonths: dto.termMonths, installmentCount: schedule.length,
       };
     });
   }
