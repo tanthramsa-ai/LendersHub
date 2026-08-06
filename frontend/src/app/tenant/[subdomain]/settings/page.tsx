@@ -35,6 +35,57 @@ type BranchForm = {
 };
 const emptyForm: BranchForm = { name: '', code: '', address: '', city: '', state: '', phone: '', email: '', managerName: '' };
 
+type BranchFieldErrors = Partial<Record<keyof BranchForm, string>>;
+
+// Mirrors backend/src/tenant/branches/branch-validation.ts exactly, so the button's
+// enabled state and the inline messages the user sees never disagree with what the
+// API would actually accept.
+const BRANCH_NAME_MIN = 4;
+const BRANCH_NAME_MAX = 100;
+const BRANCH_CODE_MIN = 2;
+const BRANCH_CODE_MAX = 20;
+const MANAGER_NAME_MAX = 100;
+const ADDRESS_MAX = 200;
+const CITY_MAX = 100;
+const PHONE_RE = /^\d{10}$/;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Validates every field at once (not stop-at-first) so all problems can be shown together. */
+function validateBranchForm(form: BranchForm, isEdit: boolean): BranchFieldErrors {
+  const errors: BranchFieldErrors = {};
+
+  const name = form.name.trim();
+  if (!name) errors.name = 'Branch name is required';
+  else if (isOnlySpecialChars(form.name)) errors.name = 'Branch name cannot consist of only special characters';
+  else if (name.length < BRANCH_NAME_MIN) errors.name = `Branch name must be at least ${BRANCH_NAME_MIN} characters`;
+  else if (name.length > BRANCH_NAME_MAX) errors.name = `Branch name must be ${BRANCH_NAME_MAX} characters or fewer`;
+
+  if (!isEdit) {
+    const code = form.code.trim();
+    if (!code) errors.code = 'Branch code is required';
+    else if (isOnlySpecialChars(form.code)) errors.code = 'Branch code cannot consist of only special characters';
+    else if (code.length < BRANCH_CODE_MIN) errors.code = `Branch code must be at least ${BRANCH_CODE_MIN} characters`;
+    else if (code.length > BRANCH_CODE_MAX) errors.code = `Branch code must be ${BRANCH_CODE_MAX} characters or fewer`;
+  }
+
+  if (form.managerName.trim()) {
+    if (isOnlySpecialChars(form.managerName)) errors.managerName = 'Manager name cannot consist of only special characters';
+    else if (form.managerName.trim().length > MANAGER_NAME_MAX) errors.managerName = `Manager name must be ${MANAGER_NAME_MAX} characters or fewer`;
+  }
+
+  if (form.address.trim().length > ADDRESS_MAX) errors.address = `Address must be ${ADDRESS_MAX} characters or fewer`;
+
+  if (form.city.trim()) {
+    if (isOnlySpecialChars(form.city)) errors.city = 'City cannot consist of only special characters';
+    else if (form.city.trim().length > CITY_MAX) errors.city = `City must be ${CITY_MAX} characters or fewer`;
+  }
+
+  if (form.phone.trim() && !PHONE_RE.test(form.phone.trim())) errors.phone = 'Phone number must be exactly 10 digits';
+  if (form.email.trim() && !EMAIL_RE.test(form.email.trim())) errors.email = 'Email address is invalid';
+
+  return errors;
+}
+
 function BranchModal({ branch, onClose, onSuccess }: { branch?: TenantBranch; onClose: () => void; onSuccess: () => void }) {
   const isEdit = !!branch;
   const [form, setForm] = useState<BranchForm>(
@@ -44,21 +95,32 @@ function BranchModal({ branch, onClose, onSuccess }: { branch?: TenantBranch; on
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [nameError, setNameError] = useState('');
-  const [codeError, setCodeError] = useState('');
+  const [touched, setTouched] = useState<Partial<Record<keyof BranchForm, boolean>>>({});
+  const [submitErrors, setSubmitErrors] = useState<BranchFieldErrors>({});
+
+  const liveErrors = validateBranchForm(form, isEdit);
+  const canSubmit = Object.keys(liveErrors).length === 0;
+  // A field shows its error once the user has left it (blur) or after a submit was
+  // attempted -- not from the very first render, so an untouched empty form doesn't
+  // greet the user with every "required" message before they've typed anything.
+  const shown: BranchFieldErrors = {};
+  (Object.keys(liveErrors) as (keyof BranchForm)[]).forEach((k) => {
+    if (touched[k] || submitErrors[k]) shown[k] = liveErrors[k];
+  });
 
   function set(k: keyof BranchForm, v: string) {
     setForm((f) => ({ ...f, [k]: v }));
-    if (k === 'name' && nameError) setNameError('');
-    if (k === 'code' && codeError) setCodeError('');
+  }
+  function blur(k: keyof BranchForm) {
+    setTouched((t) => ({ ...t, [k]: true }));
   }
 
   async function submit() {
-    setError(''); setNameError(''); setCodeError('');
-    if (!form.name.trim()) { setNameError('Branch name is required'); return; }
-    if (isOnlySpecialChars(form.name)) { setNameError('Branch name cannot consist of only special characters'); return; }
-    if (!isEdit && !form.code.trim()) { setCodeError('Branch code is required'); return; }
-    if (!isEdit && isOnlySpecialChars(form.code)) { setCodeError('Branch code cannot consist of only special characters'); return; }
+    const errors = validateBranchForm(form, isEdit);
+    setSubmitErrors(errors);
+    setTouched({ name: true, code: true, managerName: true, address: true, city: true, phone: true, email: true });
+    setError('');
+    if (Object.keys(errors).length > 0) return;
     setLoading(true);
     try {
       if (isEdit) {
@@ -73,8 +135,13 @@ function BranchModal({ branch, onClose, onSuccess }: { branch?: TenantBranch; on
       // same wording, so routing by which field the message names keeps a
       // duplicate-key API error or other backend rejection inline too, not just
       // the checks this form already does before ever calling the API.
-      if (/\bname\b/i.test(message)) setNameError(message);
-      else if (/\bcode\b/i.test(message)) setCodeError(message);
+      if (/manager name/i.test(message)) setSubmitErrors((fe) => ({ ...fe, managerName: message }));
+      else if (/branch name/i.test(message)) setSubmitErrors((fe) => ({ ...fe, name: message }));
+      else if (/branch code/i.test(message)) setSubmitErrors((fe) => ({ ...fe, code: message }));
+      else if (/\bcity\b/i.test(message)) setSubmitErrors((fe) => ({ ...fe, city: message }));
+      else if (/\baddress\b/i.test(message)) setSubmitErrors((fe) => ({ ...fe, address: message }));
+      else if (/\bphone\b/i.test(message)) setSubmitErrors((fe) => ({ ...fe, phone: message }));
+      else if (/\bemail\b/i.test(message)) setSubmitErrors((fe) => ({ ...fe, email: message }));
       else setError(message);
     } finally { setLoading(false); }
   }
@@ -90,27 +157,30 @@ function BranchModal({ branch, onClose, onSuccess }: { branch?: TenantBranch; on
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1.5">Branch Name *</label>
-              <input value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="e.g. Chennai Main" className={`${inputCls} ${nameError ? 'border-red-400 focus:ring-red-400' : ''}`} />
-              {nameError && <p className="text-xs text-red-600 mt-1">{nameError}</p>}
+              <input value={form.name} onChange={(e) => set('name', e.target.value)} onBlur={() => blur('name')} placeholder="e.g. Chennai Main" className={`${inputCls} ${shown.name ? 'border-red-400 focus:ring-red-400' : ''}`} />
+              {shown.name && <p className="text-xs text-red-600 mt-1">{shown.name}</p>}
             </div>
             <div>
               <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1.5">Branch Code *</label>
-              <input value={form.code} onChange={(e) => set('code', e.target.value.toUpperCase())} placeholder="e.g. CHN-001" disabled={isEdit} className={`${inputCls} ${isEdit ? 'bg-gray-50 text-gray-400' : ''} ${codeError ? 'border-red-400 focus:ring-red-400' : ''}`} />
-              {codeError && <p className="text-xs text-red-600 mt-1">{codeError}</p>}
+              <input value={form.code} onChange={(e) => set('code', e.target.value.toUpperCase())} onBlur={() => blur('code')} placeholder="e.g. CHN-001" disabled={isEdit} className={`${inputCls} ${isEdit ? 'bg-gray-50 text-gray-400' : ''} ${shown.code ? 'border-red-400 focus:ring-red-400' : ''}`} />
+              {shown.code && <p className="text-xs text-red-600 mt-1">{shown.code}</p>}
             </div>
           </div>
           <div>
             <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1.5">Manager Name</label>
-            <input value={form.managerName} onChange={(e) => set('managerName', e.target.value)} placeholder="Branch manager full name" className={inputCls} />
+            <input value={form.managerName} onChange={(e) => set('managerName', e.target.value)} onBlur={() => blur('managerName')} placeholder="Branch manager full name" className={`${inputCls} ${shown.managerName ? 'border-red-400 focus:ring-red-400' : ''}`} />
+            {shown.managerName && <p className="text-xs text-red-600 mt-1">{shown.managerName}</p>}
           </div>
           <div>
             <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1.5">Address</label>
-            <input value={form.address} onChange={(e) => set('address', e.target.value)} placeholder="Street / building address" className={inputCls} />
+            <input value={form.address} onChange={(e) => set('address', e.target.value)} onBlur={() => blur('address')} placeholder="Street / building address" className={`${inputCls} ${shown.address ? 'border-red-400 focus:ring-red-400' : ''}`} />
+            {shown.address && <p className="text-xs text-red-600 mt-1">{shown.address}</p>}
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1.5">City</label>
-              <input value={form.city} onChange={(e) => set('city', e.target.value)} className={inputCls} />
+              <input value={form.city} onChange={(e) => set('city', e.target.value)} onBlur={() => blur('city')} className={`${inputCls} ${shown.city ? 'border-red-400 focus:ring-red-400' : ''}`} />
+              {shown.city && <p className="text-xs text-red-600 mt-1">{shown.city}</p>}
             </div>
             <div>
               <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1.5">State</label>
@@ -123,15 +193,23 @@ function BranchModal({ branch, onClose, onSuccess }: { branch?: TenantBranch; on
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1.5">Phone</label>
-              <input type="tel" value={form.phone} onChange={(e) => set('phone', e.target.value)} className={inputCls} />
+              <input type="tel" value={form.phone} onChange={(e) => set('phone', e.target.value)} onBlur={() => blur('phone')} className={`${inputCls} ${shown.phone ? 'border-red-400 focus:ring-red-400' : ''}`} />
+              {shown.phone && <p className="text-xs text-red-600 mt-1">{shown.phone}</p>}
             </div>
             <div>
               <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1.5">Email</label>
-              <input type="email" value={form.email} onChange={(e) => set('email', e.target.value)} className={inputCls} />
+              <input type="email" value={form.email} onChange={(e) => set('email', e.target.value)} onBlur={() => blur('email')} className={`${inputCls} ${shown.email ? 'border-red-400 focus:ring-red-400' : ''}`} />
+              {shown.email && <p className="text-xs text-red-600 mt-1">{shown.email}</p>}
             </div>
           </div>
           {error && <p className="text-sm text-red-600 font-medium">{error}</p>}
-          <button onClick={submit} disabled={loading} className="w-full py-3 rounded-xl font-bold text-white text-sm" style={{ backgroundColor: BRAND, opacity: loading ? 0.7 : 1 }}>
+          <button
+            onClick={submit}
+            disabled={loading || !canSubmit}
+            title={!canSubmit ? 'Fill in all required fields correctly to continue' : undefined}
+            className="w-full py-3 rounded-xl font-bold text-white text-sm disabled:cursor-not-allowed"
+            style={{ backgroundColor: BRAND, opacity: loading || !canSubmit ? 0.5 : 1 }}
+          >
             {loading ? 'Saving...' : isEdit ? 'Save Changes' : 'Create Branch'}
           </button>
         </div>
