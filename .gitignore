@@ -73,3 +73,6 @@ frontend/.gitignore-playwright
 
 # IDE
 mobile/.idea/
+
+# QA sheet watcher snapshots
+scripts/.sheet-watch/
