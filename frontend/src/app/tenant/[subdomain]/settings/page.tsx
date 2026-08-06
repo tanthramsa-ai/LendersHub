@@ -1167,7 +1167,7 @@ export default function SettingsPage() {
   const tabs: { key: SettingsTab; label: string }[] = [
     { key: 'branches', label: 'Branches' },
     { key: 'loanTypes', label: 'Loan Types' },
-    { key: 'npa', label: 'NPA Rule' },
+    ...(isAdmin ? [{ key: 'npa' as const, label: 'NPA Rule' }] : []),
     { key: 'sms', label: 'SMS / OTP' },
     { key: 'whatsapp', label: 'WhatsApp' },
     ...(isAdmin ? [{ key: 'permissions' as const, label: 'Permissions' }] : []),
@@ -1225,7 +1225,7 @@ export default function SettingsPage() {
       )}
 
       {tab === 'loanTypes' && <LoanTypesTab />}
-      {tab === 'npa' && <NpaConfigTab />}
+      {tab === 'npa' && isAdmin && <NpaConfigTab />}
       {tab === 'sms' && <SmsConfigTab />}
       {tab === 'whatsapp' && <WhatsAppConfigTab />}
       {tab === 'permissions' && isAdmin && <PermissionsTab />}

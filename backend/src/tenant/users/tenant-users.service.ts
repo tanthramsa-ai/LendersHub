@@ -4,6 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
 import { UserRole, USER_ADMIN_ROLES } from '../common/roles';
+import { NPA_THRESHOLD_SETTING_KEY, npaLoanPredicateSql, parseNpaThreshold } from '../common/npa';
 
 export interface CreateUserDto {
   email: string;
@@ -47,6 +48,19 @@ export class TenantUsersService {
     }
   }
 
+  /**
+   * Agent NPA figures previously counted `l.status = 'DEFAULTED'`, a status nothing in
+   * the codebase ever writes, so every agent showed 0 NPA loans regardless of their book.
+   * They now use the same rule as the loan lists.
+   */
+  private async getNpaThreshold(client: import('pg').PoolClient): Promise<number> {
+    const res = await client.query<{ value: string }>(
+      `SELECT value FROM settings WHERE key = $1`,
+      [NPA_THRESHOLD_SETTING_KEY],
+    );
+    return parseNpaThreshold(res.rows[0]?.value);
+  }
+
   private assertManager(user: TenantJwtPayload) {
     if (!USER_ADMIN_ROLES.includes(user.role as UserRole)) throw new ForbiddenException('Only Owner or Admin can manage users');
   }
@@ -57,7 +71,11 @@ export class TenantUsersService {
       const offset = (page - 1) * limit;
       const sp = search ? `%${search}%` : null;
       const searchCond = sp ? `AND (u.first_name ILIKE $3 OR u.last_name ILIKE $3 OR u.email ILIKE $3 OR u.phone ILIKE $3)` : '';
-      const dataParams = sp ? [limit, offset, sp] : [limit, offset];
+      const npaThreshold = await this.getNpaThreshold(client);
+      const dataParams = sp
+        ? [limit, offset, sp, npaThreshold]
+        : [limit, offset, npaThreshold];
+      const npaParam = sp ? '$4' : '$3';
       const countParams = sp ? [sp] : [];
       const countCond = sp ? `WHERE (u.first_name ILIKE $1 OR u.last_name ILIKE $1 OR u.email ILIKE $1 OR u.phone ILIKE $1)` : '';
 
@@ -67,7 +85,7 @@ export class TenantUsersService {
                  u.branch_id, b.name AS branch_name,
                  COUNT(DISTINCT l.id) FILTER (WHERE l.status IN ('APPROVED','DISBURSED') AND l.deleted_at IS NULL) AS active_loans,
                  COUNT(DISTINCT l.id) FILTER (WHERE l.status = 'CLOSED' AND l.deleted_at IS NULL) AS closed_loans,
-                 COUNT(DISTINCT l.id) FILTER (WHERE l.status = 'DEFAULTED' AND l.deleted_at IS NULL) AS npa_loans
+                 COUNT(DISTINCT l.id) FILTER (WHERE ${npaLoanPredicateSql('l', npaParam)} AND l.deleted_at IS NULL) AS npa_loans
           FROM users u
           LEFT JOIN branches b ON b.id = u.branch_id
           LEFT JOIN loans l ON l.loan_officer_id = u.id
@@ -107,16 +125,18 @@ export class TenantUsersService {
           FROM users u LEFT JOIN branches b ON b.id = u.branch_id
           WHERE u.id = $1
         `, [id]);
+      const npaThreshold = await this.getNpaThreshold(client);
+      const isNpaLoan = npaLoanPredicateSql('l', '$2');
       const statsRes = await client.query(`
           SELECT
             COUNT(*) FILTER (WHERE l.status IN ('APPROVED','DISBURSED') AND l.deleted_at IS NULL)  AS active_loans,
             COUNT(*) FILTER (WHERE l.status = 'CLOSED' AND l.deleted_at IS NULL)                   AS closed_loans,
-            COUNT(*) FILTER (WHERE l.status = 'DEFAULTED' AND l.deleted_at IS NULL)                AS npa_loans,
+            COUNT(*) FILTER (WHERE ${isNpaLoan} AND l.deleted_at IS NULL)                          AS npa_loans,
             COALESCE(SUM(l.principal) FILTER (WHERE l.status IN ('APPROVED','DISBURSED') AND l.deleted_at IS NULL), 0) AS active_principal,
-            COALESCE(SUM(l.principal) FILTER (WHERE l.status = 'DEFAULTED' AND l.deleted_at IS NULL), 0) AS npa_principal,
+            COALESCE(SUM(l.principal) FILTER (WHERE ${isNpaLoan} AND l.deleted_at IS NULL), 0)     AS npa_principal,
             COUNT(DISTINCT l.customer_id) FILTER (WHERE l.deleted_at IS NULL)                      AS total_customers
           FROM loans l WHERE l.loan_officer_id = $1
-        `, [id]);
+        `, [id, npaThreshold]);
 
       if (!userRes.rows[0]) throw new NotFoundException('User not found');
       const r = userRes.rows[0];

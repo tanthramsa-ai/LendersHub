@@ -6,7 +6,7 @@ import { TenantActivityLogService } from '../activity-log/tenant-activity-log.se
 import { safePagination } from '../../common/utils/pagination';
 import { MANAGER_ROLES, FIELD_ROLES, UserRole } from '../common/roles';
 import { assertNoDigitsOrSpecialChars } from '../customers/customer-validation';
-import { NPA_THRESHOLD_SETTING_KEY, parseNpaThreshold } from '../common/npa';
+import { NPA_THRESHOLD_SETTING_KEY, NPA_OVERDUE_COUNT_SQL, parseNpaThreshold } from '../common/npa';
 
 export interface CreateLoanDto {
   customerId: string;
@@ -829,8 +829,11 @@ export class TenantLoansService {
   }
 
   /** A loan is NPA when an admin has flagged it, or it has hit the overdue threshold. */
-  private isNpa(row: { npa_marked_at?: Date | null; overdue_count: string }, threshold: number): boolean {
-    return !!row.npa_marked_at || parseInt(row.overdue_count) >= threshold;
+  private isNpa(
+    row: { npa_marked_at?: Date | null; npa_overdue_count: string },
+    threshold: number,
+  ): boolean {
+    return !!row.npa_marked_at || parseInt(row.npa_overdue_count) >= threshold;
   }
 
   async list(user: TenantJwtPayload, page: number, limit: number, opts: {
@@ -933,7 +936,16 @@ export class TenantLoansService {
         throw new ForbiddenException('You can only view loans assigned to you');
       }
       const npaThreshold = await this.getNpaThreshold(client);
-      const overdueCount = installmentsRes.rows.filter((i) => i.status === 'OVERDUE').length;
+      const today = new Date().toISOString().slice(0, 10);
+      // Date-based, matching NPA_OVERDUE_COUNT_SQL — see the note there on why a
+      // partially-paid installment must still count as overdue for classification.
+      const overdueCount = installmentsRes.rows.filter(
+        (i) =>
+          i.due_date &&
+          String(i.due_date instanceof Date ? i.due_date.toISOString().slice(0, 10) : i.due_date).slice(0, 10) < today &&
+          !['PAID', 'WAIVED'].includes(i.status) &&
+          parseFloat(i.paid_amount) < parseFloat(i.total_amount),
+      ).length;
       return {
         id: l.id, loanNumber: l.loan_number,
         customerId: l.customer_id_ref, customerName: l.customer_name, customerPhone: l.customer_phone,
@@ -1340,7 +1352,7 @@ export class TenantLoansService {
 
       const threshold = await this.getNpaThreshold(client);
       const overdueRes = await client.query<{ n: string }>(
-        `SELECT COUNT(*) AS n FROM installments WHERE loan_id = $1 AND status = 'OVERDUE'`,
+        `SELECT ${NPA_OVERDUE_COUNT_SQL} AS n FROM installments i WHERE i.loan_id = $1`,
         [loanId],
       );
       const overdueCount = parseInt(overdueRes.rows[0].n);
@@ -1780,7 +1792,8 @@ export class TenantLoansService {
                    ELSE 0 END), 0) AS interest_outstanding,
                  COUNT(i.id) AS total_installments,
                  COUNT(i.id) FILTER (WHERE i.status='PAID') AS paid_installments,
-                 COUNT(i.id) FILTER (WHERE i.status='OVERDUE') AS overdue_count
+                 COUNT(i.id) FILTER (WHERE i.status='OVERDUE') AS overdue_count,
+                 ${NPA_OVERDUE_COUNT_SQL} AS npa_overdue_count
           FROM loans l
           JOIN customers c ON c.id = l.customer_id
           LEFT JOIN branches b ON b.id = l.branch_id
@@ -1968,7 +1981,8 @@ export class TenantLoansService {
                    ELSE 0 END), 0) AS interest_outstanding,
                  COUNT(i.id) AS total_installments,
                  COUNT(i.id) FILTER (WHERE i.status='PAID') AS paid_installments,
-                 COUNT(i.id) FILTER (WHERE i.status='OVERDUE') AS overdue_count
+                 COUNT(i.id) FILTER (WHERE i.status='OVERDUE') AS overdue_count,
+                 ${NPA_OVERDUE_COUNT_SQL} AS npa_overdue_count
           FROM loans l
           JOIN customers c ON c.id = l.customer_id
           LEFT JOIN branches b ON b.id = l.branch_id
@@ -2144,7 +2158,8 @@ export class TenantLoansService {
                    ELSE 0 END), 0) AS interest_outstanding,
                  COUNT(i.id) AS total_installments,
                  COUNT(i.id) FILTER (WHERE i.status='PAID') AS paid_installments,
-                 COUNT(i.id) FILTER (WHERE i.status='OVERDUE') AS overdue_count
+                 COUNT(i.id) FILTER (WHERE i.status='OVERDUE') AS overdue_count,
+                 ${NPA_OVERDUE_COUNT_SQL} AS npa_overdue_count
           FROM loans l
           JOIN customers c ON c.id = l.customer_id
           LEFT JOIN branches b ON b.id = l.branch_id
@@ -2317,7 +2332,8 @@ export class TenantLoansService {
                    ELSE 0 END), 0) AS interest_outstanding,
                  COUNT(i.id) AS total_installments,
                  COUNT(i.id) FILTER (WHERE i.status='PAID') AS paid_installments,
-                 COUNT(i.id) FILTER (WHERE i.status='OVERDUE') AS overdue_count
+                 COUNT(i.id) FILTER (WHERE i.status='OVERDUE') AS overdue_count,
+                 ${NPA_OVERDUE_COUNT_SQL} AS npa_overdue_count
           FROM loans l
           JOIN customers c ON c.id = l.customer_id
           LEFT JOIN branches b ON b.id = l.branch_id
@@ -2481,7 +2497,8 @@ export class TenantLoansService {
                  COALESCE(SUM(CASE WHEN i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE') THEN i.total_amount - i.paid_amount ELSE 0 END), 0) AS outstanding,
                  COUNT(CASE WHEN i.status IN ('PAID','PARTIALLY_PAID') AND i.paid_amount >= i.total_amount THEN 1 END) AS paid_count,
                  COUNT(i.id) AS total_count,
-                 COUNT(CASE WHEN i.status = 'OVERDUE' THEN 1 END) AS overdue_count
+                 COUNT(CASE WHEN i.status = 'OVERDUE' THEN 1 END) AS overdue_count,
+                 ${NPA_OVERDUE_COUNT_SQL} AS npa_overdue_count
           FROM loans l
           JOIN customers c ON c.id = l.customer_id
           LEFT JOIN branches b ON b.id = l.branch_id

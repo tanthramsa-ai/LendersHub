@@ -4,7 +4,7 @@ import { NpaBadge } from '@/components/NpaBadge';
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { getTermLoan, closeLoan, reopenLoan, recordPayment, undoInstallmentPayment, approveLoan, rejectLoan, approveCloseLoan, assignLoanAgent, getOfficers, getTenantSession, MANAGER_ROLES, COLLECTION_ROLES, TermLoanDetail, TermInstallment, Officer } from '@/services/tenant-api';
+import { getTermLoan, closeLoan, reopenLoan, recordPayment, undoInstallmentPayment, deleteInstallment, approveLoan, rejectLoan, approveCloseLoan, assignLoanAgent, getOfficers, getTenantSession, MANAGER_ROLES, COLLECTION_ROLES, TermLoanDetail, TermInstallment, Officer } from '@/services/tenant-api';
 import { CloseLoanModal, CloseCommentBanner, ReopenLoanModal } from '@/components/CloseLoanModal';
 import { refreshNotificationBell } from '@/lib/notifications-bus';
 
@@ -119,6 +119,22 @@ export default function TermLoanDetailPage() {
     setShowPayModal(true);
   }
 
+  /**
+   * Takes an extra installment back out of the schedule. Undoing a payment only
+   * reverses the payment — the row itself stays until it is removed here.
+   */
+  async function handleRemoveInstallment() {
+    if (!selectedInstallment) return;
+    setPaying(true); setErr('');
+    try {
+      await deleteInstallment(id, selectedInstallment.id);
+      setShowPayModal(false);
+      await load();
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Failed to remove installment');
+    } finally { setPaying(false); }
+  }
+
   async function submitPayment() {
     if (!payAmount || parseFloat(payAmount) <= 0) { setErr('Enter a valid amount'); return; }
     setPaying(true); setErr('');
@@ -220,6 +236,7 @@ export default function TermLoanDetailPage() {
   const { totalPaid, outstanding, overdueAmt } = computeFinancials(loan.installments);
   // Server-side: applies the tenant NPA threshold and any manual override.
   const isNpa = loan.isNpa;
+  const lastInstallmentNumber = Math.max(0, ...loan.installments.map((i) => i.number));
   const isActive = ['DISBURSED', 'APPROVED'].includes(loan.status);
 
   return (
@@ -327,11 +344,11 @@ export default function TermLoanDetailPage() {
               <button
                 onClick={() => {
                   if (canPay && isActive && inst.status !== 'PAID') openPayModal(inst);
-                  else if (canClose && isActive && inst.status === 'PAID') setUndoTarget(inst);
+                  else if (canClose && isActive && inst.paid > 0) setUndoTarget(inst);
                 }}
                 onMouseEnter={(e) => setTooltip({ num: inst.number, x: e.clientX, y: e.clientY })}
                 onMouseLeave={() => setTooltip(null)}
-                className={`w-full aspect-square rounded-lg border text-xs font-bold flex flex-col items-center justify-center transition-all hover:scale-105 ${tileColor(inst.status, isNpa)} ${(canPay && isActive && inst.status !== 'PAID') || (canClose && isActive && inst.status === 'PAID') ? 'cursor-pointer' : 'cursor-default'}`}
+                className={`w-full aspect-square rounded-lg border text-xs font-bold flex flex-col items-center justify-center transition-all hover:scale-105 ${tileColor(inst.status, isNpa)} ${(canPay && isActive && inst.status !== 'PAID') || (canClose && isActive && inst.paid > 0) ? 'cursor-pointer' : 'cursor-default'}`}
               >
                 <span>{inst.number}</span>
                 {inst.status === 'PARTIALLY_PAID' && <span className="text-[8px] leading-none opacity-80">P</span>}
@@ -386,7 +403,7 @@ export default function TermLoanDetailPage() {
                     {canPay && isActive && inst.status !== 'PAID' && (
                       <button onClick={() => openPayModal(inst)} className="text-xs text-blue-600 hover:underline whitespace-nowrap">Pay</button>
                     )}
-                    {canClose && isActive && inst.status === 'PAID' && (
+                    {canClose && isActive && inst.paid > 0 && (
                       <button onClick={() => setUndoTarget(inst)} className="text-xs text-red-600 hover:underline whitespace-nowrap">Undo</button>
                     )}
                   </td>
@@ -499,6 +516,23 @@ export default function TermLoanDetailPage() {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
             </div>
+            {selectedInstallment && selectedInstallment.paid > 0 && canClose && (
+              <button
+                onClick={() => { const t = selectedInstallment; setShowPayModal(false); setUndoTarget(t); }}
+                className="mt-4 w-full px-4 py-2 border border-amber-300 text-amber-700 text-sm rounded-lg hover:bg-amber-50 transition-colors"
+              >
+                Undo last payment ({fmt(selectedInstallment.paid)} recorded)
+              </button>
+            )}
+            {selectedInstallment && selectedInstallment.paid === 0 && canClose && selectedInstallment.number === lastInstallmentNumber && (
+              <button
+                onClick={handleRemoveInstallment}
+                disabled={paying}
+                className="mt-4 w-full px-4 py-2 border border-red-300 text-red-700 text-sm rounded-lg hover:bg-red-50 disabled:opacity-60 transition-colors"
+              >
+                Remove this installment from the schedule
+              </button>
+            )}
             <div className="flex gap-3 pt-2">
               <button onClick={() => setShowPayModal(false)} className="flex-1 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
               <button disabled={paying} onClick={submitPayment}
