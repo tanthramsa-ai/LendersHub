@@ -259,6 +259,28 @@ export function getCustomer(id: string) {
   return tenantFetch<CustomerDetail>(`/api/v1/tenant/customers/${id}`);
 }
 
+/** Downloads a CSV of the given customers via a synthetic link click — tenantFetch can't be reused since it always parses JSON. */
+export async function exportCustomersCsv(ids: string[]): Promise<void> {
+  const token = getToken();
+  const res = await fetch(`${BASE}/api/v1/tenant/customers/export?ids=${ids.map(encodeURIComponent).join(',')}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { message?: string | string[] };
+    const raw = body?.message;
+    throw new Error(Array.isArray(raw) ? raw.join('; ') : (raw ?? `Export failed: ${res.status}`));
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `customers-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 export interface CreateCustomerPayload {
   firstName: string;
   lastName: string;
