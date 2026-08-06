@@ -16,8 +16,9 @@ export class TenantCustomersController {
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
     @Query('search') search?: string,
     @Query('branchId') branchId?: string,
+    @Query('npaOnly') npaOnly?: string,
   ) {
-    return this.svc.list(req.user, page, Math.min(limit, 100), search, branchId);
+    return this.svc.list(req.user, page, Math.min(limit, 100), search, branchId, npaOnly === 'true');
   }
 
   @Get('export')

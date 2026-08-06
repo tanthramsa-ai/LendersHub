@@ -12,6 +12,7 @@ import { sanitizeStrings } from '../../common/utils/sanitize';
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
 import { validateCustomerFields } from './customer-validation';
 import { MANAGER_ROLES, UserRole } from '../common/roles';
+import { npaLoanPredicateSql, NPA_THRESHOLD_SETTING_KEY, parseNpaThreshold } from '../common/npa';
 
 export interface CreateCustomerDto {
   firstName: string;
@@ -77,7 +78,15 @@ export class TenantCustomersService {
     }
   }
 
-  async list(user: TenantJwtPayload, page: number, limit: number, search?: string, branchId?: string) {
+  private async getNpaThreshold(client: import('pg').PoolClient): Promise<number> {
+    const res = await client.query<{ value: string }>(
+      `SELECT value FROM settings WHERE key = $1`,
+      [NPA_THRESHOLD_SETTING_KEY],
+    );
+    return parseNpaThreshold(res.rows[0]?.value);
+  }
+
+  async list(user: TenantJwtPayload, page: number, limit: number, search?: string, branchId?: string, npaOnly?: boolean) {
     const safePage = Math.max(1, Math.floor(Number(page) || 1));
     const safeLimit = Math.min(Math.max(1, Math.floor(Number(limit) || 20)), 200);
     page = safePage; limit = safeLimit;
@@ -101,10 +110,34 @@ export class TenantCustomersService {
         idx++;
       }
 
+      const npaThreshold = await this.getNpaThreshold(client);
+
+      // Only bound into filterParams -- and so only appears in countRes's query --
+      // when npaOnly actually adds the EXISTS clause to `conditions`. Postgres
+      // requires the parameter count to exactly match the placeholders present in
+      // the executed query text; countRes has no SELECT-level use of the
+      // threshold, so binding it unconditionally here breaks the no-filter case
+      // (0 placeholders in the query, 1 value supplied).
+      const npaExistsSql = (idxPlaceholder: number) => `EXISTS (
+        SELECT 1 FROM loans l
+         WHERE l.customer_id = c.id AND l.deleted_at IS NULL
+           AND ${npaLoanPredicateSql('l', `$${idxPlaceholder}`)}
+      )`;
+      if (npaOnly) {
+        filterParams.push(npaThreshold);
+        conditions.push(npaExistsSql(idx++));
+      }
+
       const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
       const countWhere = whereClause;
       const countParams = filterParams;
-      const dataParams = [...filterParams, limit, offset];
+
+      // has_npa_loan in the SELECT always needs the threshold, independent of the
+      // WHERE clause above, so it gets its own placeholder appended after every
+      // filter param (and before limit/offset) rather than reusing npaOnly's index.
+      const npaSelectIdx = idx++;
+      const npaLoanExists = npaExistsSql(npaSelectIdx);
+      const dataParams = [...filterParams, npaThreshold, limit, offset];
       const limitIdx = idx; const offsetIdx = idx + 1;
 
       // Sequential: a single pg connection cannot run queries concurrently.
@@ -114,7 +147,8 @@ export class TenantCustomersService {
                  c.is_active, c.created_at,
                  b.name AS branch_name,
                  (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status = 'DISBURSED') AS active_loans,
-                 (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status = 'CLOSED') AS closed_loans
+                 (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status = 'CLOSED') AS closed_loans,
+                 ${npaLoanExists} AS has_npa_loan
           FROM customers c
           LEFT JOIN branches b ON b.id = c.branch_id
           ${whereClause}
@@ -141,6 +175,7 @@ export class TenantCustomersService {
           isActive: r.is_active,
           activeLoans: parseInt(r.active_loans),
           closedLoans: parseInt(r.closed_loans),
+          hasNpaLoan: r.has_npa_loan,
           createdAt: r.created_at,
         })),
         total: parseInt(countRes.rows[0].total),
@@ -152,17 +187,20 @@ export class TenantCustomersService {
 
   async findOne(user: TenantJwtPayload, id: string) {
     return this.withSchema(user.schemaName, async (client) => {
+      const npaThreshold = await this.getNpaThreshold(client);
       const res = await client.query(`
         SELECT c.*,
           b.name AS branch_name, b.code AS branch_code,
           (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL) AS total_loans,
           (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status = 'DISBURSED') AS active_loans,
           (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status = 'CLOSED') AS closed_loans,
-          (SELECT COALESCE(SUM(amount), 0) FROM payments p JOIN loans l ON l.id = p.loan_id WHERE l.customer_id = c.id) AS total_paid
+          (SELECT COALESCE(SUM(amount), 0) FROM payments p JOIN loans l ON l.id = p.loan_id WHERE l.customer_id = c.id) AS total_paid,
+          (SELECT COUNT(*) FROM loans l WHERE l.customer_id = c.id AND l.deleted_at IS NULL
+             AND ${npaLoanPredicateSql('l', '$2')}) AS npa_loans
         FROM customers c
         LEFT JOIN branches b ON b.id = c.branch_id
         WHERE c.id = $1
-      `, [id]);
+      `, [id, npaThreshold]);
 
       if (!res.rows[0]) throw new NotFoundException('Customer not found');
       const r = res.rows[0];
@@ -183,6 +221,7 @@ export class TenantCustomersService {
         totalLoans: parseInt(r.total_loans),
         activeLoans: parseInt(r.active_loans),
         closedLoans: parseInt(r.closed_loans),
+        npaLoans: parseInt(r.npa_loans),
         totalPaid: parseFloat(r.total_paid),
       };
     });

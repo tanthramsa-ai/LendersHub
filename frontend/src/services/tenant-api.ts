@@ -225,6 +225,8 @@ export interface Customer {
   isActive: boolean;
   activeLoans: number;
   closedLoans: number;
+  /** True if any of this customer's active loans is NPA (auto-threshold or manually flagged). */
+  hasNpaLoan: boolean;
   createdAt: string;
 }
 
@@ -243,13 +245,16 @@ export interface CustomerDetail extends Customer {
   updatedAt: string;
   totalLoans: number;
   activeLoans: number;
+  /** Count of this customer's loans currently classified NPA. */
+  npaLoans: number;
   totalPaid: number;
 }
 
-export function getCustomers(page = 1, limit = 20, search?: string, branchId?: string) {
+export function getCustomers(page = 1, limit = 20, search?: string, branchId?: string, npaOnly?: boolean) {
   const params = new URLSearchParams({ page: String(page), limit: String(limit) });
   if (search) params.set('search', search);
   if (branchId) params.set('branchId', branchId);
+  if (npaOnly) params.set('npaOnly', 'true');
   return tenantFetch<{ data: Customer[]; total: number; page: number; limit: number }>(
     `/api/v1/tenant/customers?${params}`,
   );
@@ -355,6 +360,8 @@ export interface Loan {
   firstDueDate: string | null;
   createdAt: string;
   cycleType: string | null;
+  isNpa: boolean;
+  npaMarkedAt: string | null;
 }
 
 /** Route prefix for a loan's type-specific detail page, mirroring the backend's loanDetailLink(). */
@@ -477,6 +484,18 @@ export function createWeeklyLoan(dto: {
 }) {
   return tenantFetch<{ id: string; loanNumber: string; emi: number; termWeeks: number }>(
     '/api/v1/tenant/loans/weekly', { method: 'POST', body: JSON.stringify(dto) },
+  );
+}
+
+export function updateWeeklyLoan(id: string, dto: {
+  principal: number; interestRate: number; termWeeks: number;
+  firstDueDate: string; calculationType: WeeklyCalculationType; emiRounding: number;
+  interestPerDay?: number;
+  purpose?: string; branchId?: string; loanTypeId?: string;
+  securityDocUrl?: string; promissoryNoteUrl?: string;
+}) {
+  return tenantFetch<{ id: string; loanNumber: string; emi: number; termWeeks: number }>(
+    `/api/v1/tenant/loans/weekly/${id}`, { method: 'PATCH', body: JSON.stringify(dto) },
   );
 }
 
@@ -786,6 +805,19 @@ export function createDailyLoan(dto: {
   );
 }
 
+export function updateDailyLoan(id: string, dto: {
+  principal: number; interestRate: number; termDays: number;
+  firstDueDate: string; calculationType: WeeklyCalculationType; emiRounding: number;
+  cycleType: 'DAILY_NO_SUNDAY' | 'DAILY_WITH_SUNDAY';
+  interestPerDay?: number;
+  purpose?: string; branchId?: string; loanTypeId?: string;
+  securityDocUrl?: string; promissoryNoteUrl?: string;
+}) {
+  return tenantFetch<{ id: string; loanNumber: string; emi: number; termDays: number }>(
+    `/api/v1/tenant/loans/daily/${id}`, { method: 'PATCH', body: JSON.stringify(dto) },
+  );
+}
+
 export function getDailyLoan(id: string) {
   return tenantFetch<DailyLoanDetail>(`/api/v1/tenant/loans/${id}`);
 }
@@ -890,6 +922,17 @@ export function createMonthlyLoan(dto: {
   );
 }
 
+export function updateMonthlyLoan(id: string, dto: {
+  principal: number; interestRate: number; termMonths: number;
+  firstDueDate: string; branchId?: string;
+  purpose?: string; loanTypeId?: string;
+  securityDocUrl?: string; promissoryNoteUrl?: string;
+}) {
+  return tenantFetch<{ id: string; loanNumber: string; monthlyInterest: number; termMonths: number }>(
+    `/api/v1/tenant/loans/monthly/${id}`, { method: 'PATCH', body: JSON.stringify(dto) },
+  );
+}
+
 export function getMonthlyLoan(id: string) {
   return tenantFetch<MonthlyLoanDetail>(`/api/v1/tenant/loans/${id}`);
 }
@@ -938,6 +981,16 @@ export function createAgentRiskLoan(dto: {
 }) {
   return tenantFetch<{ id: string; loanNumber: string; monthlyInterest: number; termMonths: number }>(
     '/api/v1/tenant/loans/agent-risk', { method: 'POST', body: JSON.stringify(dto) },
+  );
+}
+
+export function updateAgentRiskLoan(id: string, dto: {
+  principal: number; interestRate: number; termMonths: number;
+  firstDueDate: string; branchId?: string; purpose?: string; loanTypeId?: string;
+  securityDocUrl?: string; promissoryNoteUrl?: string;
+}) {
+  return tenantFetch<{ id: string; loanNumber: string; monthlyInterest: number; termMonths: number }>(
+    `/api/v1/tenant/loans/agent-risk/${id}`, { method: 'PATCH', body: JSON.stringify(dto) },
   );
 }
 
@@ -1005,6 +1058,17 @@ export function createTermLoan(dto: {
 }) {
   return tenantFetch<{ id: string; loanNumber: string; emi: number }>('/api/v1/tenant/loans/term-loan', {
     method: 'POST', body: JSON.stringify(dto),
+  });
+}
+
+export function updateTermLoan(id: string, dto: {
+  principal: number; interestRate: number; termMonths: number;
+  firstDueDate: string; calculationType: 'REDUCING' | 'FLAT'; emiRounding: number;
+  branchId?: string; purpose?: string; loanTypeId?: string;
+  securityDocUrl?: string; promissoryNoteUrl?: string;
+}) {
+  return tenantFetch<{ id: string; loanNumber: string; emi: number }>(`/api/v1/tenant/loans/term-loan/${id}`, {
+    method: 'PATCH', body: JSON.stringify(dto),
   });
 }
 

@@ -19,6 +19,7 @@ export default function CustomersPage() {
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [branchId, setBranchId] = useState('');
+  const [npaOnly, setNpaOnly] = useState(false);
   const [branches, setBranches] = useState<TenantBranch[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -31,11 +32,11 @@ export default function CustomersPage() {
     getBranches().then((b) => setBranches(b.filter((br) => br.isActive)));
   }, []);
 
-  const load = useCallback(async (p: number, s: string, b: string) => {
+  const load = useCallback(async (p: number, s: string, b: string, npa: boolean) => {
     setLoading(true);
     setSelected(new Set());
     try {
-      const res = await getCustomers(p, limit, s || undefined, b || undefined);
+      const res = await getCustomers(p, limit, s || undefined, b || undefined, npa);
       setCustomers(res.data);
       setTotal(res.total);
     } catch (e) {
@@ -46,8 +47,8 @@ export default function CustomersPage() {
   }, []);
 
   useEffect(() => {
-    load(page, search, branchId);
-  }, [page, search, branchId, load]);
+    load(page, search, branchId, npaOnly);
+  }, [page, search, branchId, npaOnly, load]);
 
   function handleSearch(e: React.FormEvent) {
     e.preventDefault();
@@ -154,6 +155,16 @@ export default function CustomersPage() {
           </select>
           </>
         )}
+
+        <label className="flex items-center gap-2 px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={npaOnly}
+            onChange={(e) => { setNpaOnly(e.target.checked); setPage(1); }}
+            className="rounded border-gray-300 text-red-600 focus:ring-red-500"
+          />
+          NPA only
+        </label>
       </div>
 
       {/* Table */}
@@ -186,7 +197,7 @@ export default function CustomersPage() {
                         />
                       </th>
                     )}
-                    {['Code', 'Name', 'Phone', 'Locality', 'Active Loans', 'Closed Loans', 'Branch', 'Status'].map((h) => (
+                    {['Code', 'Name', 'Phone', 'Locality', 'Active Loans', 'Closed Loans', 'Branch', 'NPA', 'Status'].map((h) => (
                       <th key={h} scope="col" className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
                         {h}
                       </th>
@@ -247,6 +258,11 @@ export default function CustomersPage() {
                       </td>
                       <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">
                         {c.branchName || '—'}
+                      </td>
+                      <td className="px-4 py-3">
+                        {c.hasNpaLoan ? (
+                          <span className="px-1.5 py-0.5 bg-red-200 text-red-800 rounded text-xs font-bold">NPA</span>
+                        ) : <span className="text-gray-300 text-xs">—</span>}
                       </td>
                       <td className="px-4 py-3">
                         <span className={`px-2 py-0.5 rounded text-xs font-medium ${c.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>

@@ -1,5 +1,5 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, Request, ParseIntPipe, DefaultValuePipe } from '@nestjs/common';
-import { TenantLoansService, CreateLoanDto, CreateWeeklyLoanDto, CreateDailyLoanDto, CreateMonthlyLoanDto, CreateAgentRiskLoanDto, CreateTermLoanDto, RecordPaymentDto, MissResolution } from './tenant-loans.service';
+import { TenantLoansService, CreateLoanDto, CreateWeeklyLoanDto, CreateDailyLoanDto, CreateMonthlyLoanDto, CreateAgentRiskLoanDto, CreateTermLoanDto, UpdateWeeklyLoanDto, UpdateDailyLoanDto, UpdateMonthlyLoanDto, UpdateAgentRiskLoanDto, UpdateTermLoanDto, RecordPaymentDto, MissResolution } from './tenant-loans.service';
 import { TenantJwtGuard } from '../auth/guards/tenant-jwt.guard';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 
@@ -48,6 +48,15 @@ export class TenantLoansController {
     return this.svc.createWeeklyLoan(req.user, dto);
   }
 
+  @Patch('weekly/:id')
+  updateWeekly(
+    @Request() req: { user: TenantJwtPayload },
+    @Param('id') id: string,
+    @Body() dto: UpdateWeeklyLoanDto,
+  ) {
+    return this.svc.updateWeeklyLoan(req.user, id, dto);
+  }
+
   @Get('daily')
   listDaily(
     @Request() req: { user: TenantJwtPayload },
@@ -72,6 +81,15 @@ export class TenantLoansController {
   @Post('daily')
   createDaily(@Request() req: { user: TenantJwtPayload }, @Body() dto: CreateDailyLoanDto) {
     return this.svc.createDailyLoan(req.user, dto);
+  }
+
+  @Patch('daily/:id')
+  updateDaily(
+    @Request() req: { user: TenantJwtPayload },
+    @Param('id') id: string,
+    @Body() dto: UpdateDailyLoanDto,
+  ) {
+    return this.svc.updateDailyLoan(req.user, id, dto);
   }
 
   @Get('agent-risk')
@@ -99,6 +117,15 @@ export class TenantLoansController {
     return this.svc.createAgentRiskLoan(req.user, dto);
   }
 
+  @Patch('agent-risk/:id')
+  updateAgentRisk(
+    @Request() req: { user: TenantJwtPayload },
+    @Param('id') id: string,
+    @Body() dto: UpdateAgentRiskLoanDto,
+  ) {
+    return this.svc.updateAgentRiskLoan(req.user, id, dto);
+  }
+
   @Get('monthly')
   listMonthly(
     @Request() req: { user: TenantJwtPayload },
@@ -124,6 +151,15 @@ export class TenantLoansController {
     return this.svc.createMonthlyLoan(req.user, dto);
   }
 
+  @Patch('monthly/:id')
+  updateMonthly(
+    @Request() req: { user: TenantJwtPayload },
+    @Param('id') id: string,
+    @Body() dto: UpdateMonthlyLoanDto,
+  ) {
+    return this.svc.updateMonthlyLoan(req.user, id, dto);
+  }
+
   @Get('term-loan')
   listTermLoans(
     @Request() req: { user: TenantJwtPayload },
@@ -147,6 +183,15 @@ export class TenantLoansController {
   @Post('term-loan')
   createTermLoan(@Request() req: { user: TenantJwtPayload }, @Body() dto: CreateTermLoanDto) {
     return this.svc.createTermLoan(req.user, dto);
+  }
+
+  @Patch('term-loan/:id')
+  updateTermLoan(
+    @Request() req: { user: TenantJwtPayload },
+    @Param('id') id: string,
+    @Body() dto: UpdateTermLoanDto,
+  ) {
+    return this.svc.updateTermLoan(req.user, id, dto);
   }
 
   @Get(':id')
