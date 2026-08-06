@@ -968,7 +968,12 @@ export class TenantLoansService {
                  c.phone AS customer_phone, c.id AS customer_id_ref,
                  b.name AS branch_name,
                  o.first_name || ' ' || o.last_name AS officer_name,
-                 n.first_name || ' ' || n.last_name AS npa_marked_by_name
+                 n.first_name || ' ' || n.last_name AS npa_marked_by_name,
+                 -- node-pg parses DATE columns into a JS Date, and Nest's default JSON
+                 -- serialization then calls toISOString() on it — which renders in UTC
+                 -- and silently shifts an IST calendar date back by a day. Format it as
+                 -- plain text in SQL so the API always returns the true YYYY-MM-DD.
+                 TO_CHAR(l.first_due_date, 'YYYY-MM-DD') AS first_due_date_str
           FROM loans l
           JOIN customers c ON c.id = l.customer_id
           LEFT JOIN branches b ON b.id = l.branch_id
@@ -1002,7 +1007,7 @@ export class TenantLoansService {
         customerId: l.customer_id_ref, customerName: l.customer_name, customerPhone: l.customer_phone,
         principal: parseFloat(l.principal),
         interestRate: parseFloat(l.interest_rate),
-        termMonths: l.term_months, termWeeks: l.term_months,
+        termMonths: l.term_months, termWeeks: l.term_months, termDays: l.term_months,
         status: l.status, purpose: l.purpose,
         cycleType: l.cycle_type,
         calculationType: l.calculation_type,
@@ -1013,7 +1018,7 @@ export class TenantLoansService {
         branchId: l.branch_id ?? null,
         branchName: l.branch_name ?? null,
         loanTypeId: l.loan_type_id ?? null,
-        disbursedAt: l.disbursed_at, firstDueDate: l.first_due_date,
+        disbursedAt: l.disbursed_at, firstDueDate: l.first_due_date_str,
         closedAt: l.closed_at ?? null,
         closeComment: l.close_comment ?? null,
         reopenComment: l.reopen_comment ?? null,
