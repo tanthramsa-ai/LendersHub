@@ -193,6 +193,7 @@ export interface ActiveLoan {
   interestRate: number;
   termMonths: number;
   status: string;
+  cycleType: string | null;
   outstanding: number;
   disbursedAt: string | null;
   firstDueDate: string | null;

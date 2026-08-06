@@ -2,7 +2,7 @@
 
 import { NpaBadge } from '@/components/NpaBadge';
 import { useEffect, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { getTermLoan, closeLoan, reopenLoan, recordPayment, undoInstallmentPayment, deleteInstallment, approveLoan, rejectLoan, approveCloseLoan, assignLoanAgent, getOfficers, getTenantSession, MANAGER_ROLES, COLLECTION_ROLES, TermLoanDetail, TermInstallment, Officer } from '@/services/tenant-api';
 import { CloseLoanModal, CloseCommentBanner, ReopenLoanModal } from '@/components/CloseLoanModal';
@@ -58,6 +58,8 @@ export default function TermLoanDetailPage() {
   const params = useParams<{ subdomain: string; id: string }>();
   const { subdomain, id } = params;
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
   const session = getTenantSession();
   const canClose = MANAGER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
   const canPay = COLLECTION_ROLES.includes(session?.user.role ?? 'CUSTOMER');
@@ -95,6 +97,18 @@ export default function TermLoanDetailPage() {
   }
 
   useEffect(() => { load(); }, [id]);
+
+  // Dashboard "Collect" deep-links here with ?collect=1 to jump straight to recording
+  // a payment on the earliest unpaid installment, instead of landing on a page with
+  // no way to act on it.
+  useEffect(() => {
+    if (!loan) return;
+    if (searchParams.get('collect') !== '1') return;
+    router.replace(pathname);
+    if (!canPay || !['DISBURSED', 'APPROVED'].includes(loan.status)) return;
+    const target = loan.installments.find((i) => !['PAID', 'WAIVED'].includes(i.status));
+    if (target) openPayModal(target);
+  }, [loan]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (canClose) getOfficers().then(setOfficers).catch(() => setOfficers([]));

@@ -2,7 +2,7 @@
 
 import { NpaBadge } from '@/components/NpaBadge';
 import { useEffect, useState, useCallback } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams, useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import {
   getMonthlyLoan, recordPayment, undoInstallmentPayment, deleteInstallment, closeLoan, reopenLoan,
@@ -90,6 +90,9 @@ const PAYMENT_METHODS = ['CASH', 'UPI', 'BANK_TRANSFER', 'CHEQUE', 'NEFT', 'RTGS
 export default function MonthlyLoanDetailPage() {
   const params = useParams<{ subdomain: string; id: string }>();
   const { subdomain, id } = params;
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const session = getTenantSession();
   const canRecord = COLLECTION_ROLES.includes(session?.user.role ?? 'CUSTOMER');
   const canClose = MANAGER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
@@ -152,6 +155,18 @@ export default function MonthlyLoanDetailPage() {
     setPayForm({ amount: String(Math.round(remaining)), method: 'CASH', ref: '', date: new Date().toISOString().slice(0, 10) });
     setPayError(''); setPaySuccess('');
   }
+
+  // Dashboard "Collect" deep-links here with ?collect=1 to jump straight to recording
+  // a payment on the earliest unpaid installment, instead of landing on a page with
+  // no way to act on it.
+  useEffect(() => {
+    if (!loan) return;
+    if (searchParams.get('collect') !== '1') return;
+    router.replace(pathname);
+    if (!canRecord || loan.status === 'CLOSED') return;
+    const target = loan.installments.find((i) => !['PAID', 'WAIVED'].includes(i.status));
+    if (target) openPay(target);
+  }, [loan]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function submitPay() {
     if (!payInst) return;
