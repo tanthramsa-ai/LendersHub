@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
+import { clampTenureInput } from '@/lib/numeric-input';
 import {
   getCustomers, createCustomer, updateCustomer, getCustomer, getBranches, getLoanTypes,
   previewMonthlySchedule, createMonthlyLoan, getOfficers,
@@ -403,7 +404,7 @@ export default function NewMonthlyLoanPage() {
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Tenure (months) <span className="text-red-500">*</span></label>
-                <input type="number" value={form.termMonths} onChange={(e) => setF('termMonths', e.target.value)} className={inputCls} placeholder="12" min={1} max={360} />
+                <input type="number" value={form.termMonths} onChange={(e) => setF('termMonths', clampTenureInput(e.target.value, 360))} className={inputCls} placeholder="12" min={1} max={360} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">First Interest Due Date <span className="text-red-500">*</span></label>

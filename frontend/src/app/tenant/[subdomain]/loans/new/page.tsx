@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
+import { clampTenureInput } from '@/lib/numeric-input';
 import {
   createTermLoan, previewTermLoanSchedule, getCustomers, getBranches, getLoanTypes, getOfficers,
   Customer, TenantBranch, LoanType, TermSchedulePreview, Officer,
@@ -281,7 +282,7 @@ export default function NewTermLoanPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Tenure (months) <span className="text-red-500">*</span></label>
-              <input type="number" value={termMonths} onChange={(e) => setTermMonths(e.target.value)}
+              <input type="number" value={termMonths} onChange={(e) => setTermMonths(clampTenureInput(e.target.value, selectedLoanType?.maxTermMonths ?? 360))}
                 placeholder="e.g. 12" min={selectedLoanType?.minTermMonths ?? 1} max={selectedLoanType?.maxTermMonths ?? 360}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
               {selectedLoanType && (selectedLoanType.minTermMonths != null || selectedLoanType.maxTermMonths != null) && (
