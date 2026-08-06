@@ -101,7 +101,7 @@ export default function MonthlyLoansPage() {
               <table className="w-full text-xs">
                 <thead className="bg-gray-50">
                   <tr>
-                    {['Loan ID','Customer','Branch','Principal','Monthly Interest','I.Received','I.Outstanding','P.Outstanding','Months','Overdue','NPA','Status',''].map((h) => (
+                    {['Loan ID','Customer','Branch','Principal','Monthly Interest','Interest Received','Interest Outstanding','Principal Outstanding','Months','Overdue','NPA','Status',''].map((h) => (
                       <th key={h} className="px-3 py-3 text-left font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                     ))}
                   </tr>

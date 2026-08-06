@@ -119,7 +119,7 @@ export default function DailyLoansPage() {
               <table className="w-full text-xs">
                 <thead className="bg-gray-50">
                   <tr>
-                    {['Loan ID','Customer','Branch','Cycle','Amount','EMI','P.Outstanding','I.Outstanding','P.Received','I.Received','Days','Overdue','NPA','Status',''].map((h) => (
+                    {['Loan ID','Customer','Branch','Cycle','Amount','EMI','Principal Outstanding','Interest Outstanding','Principal Received','Interest Received','Days','Overdue','NPA','Status',''].map((h) => (
                       <th key={h} className="px-3 py-3 text-left font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                     ))}
                   </tr>

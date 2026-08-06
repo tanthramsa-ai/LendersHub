@@ -594,16 +594,29 @@ export default function TenantLayout({ children }: { children: React.ReactNode }
               )}
             </div>
 
-            <Link
-              href={`/${subdomain}/loans/new`}
-              className="hidden sm:flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-lg transition-colors"
-              style={{ backgroundColor: BRAND }}
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              New Loan
-            </Link>
+            {pathname === `/${subdomain}/loans/new` ? (
+              <span
+                className="hidden sm:flex items-center gap-2 px-4 py-2 text-sm font-medium text-white/70 rounded-lg cursor-default"
+                style={{ backgroundColor: BRAND, opacity: 0.6 }}
+                title="You're already creating a new loan"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                New Loan
+              </span>
+            ) : (
+              <Link
+                href={`/${subdomain}/loans/new`}
+                className="hidden sm:flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-lg transition-colors"
+                style={{ backgroundColor: BRAND }}
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                New Loan
+              </Link>
+            )}
           </div>
         </header>
 
