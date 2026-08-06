@@ -523,7 +523,7 @@ export default function WeeklyLoanDetailPage() {
             <button
               type="button"
               onClick={() => setShowAddInstallment(true)}
-              title="Add installment"
+              title="Add an extra installment to the schedule (not a payment)"
               className="relative flex items-center justify-center rounded-lg border-2 border-dashed border-gray-300 text-gray-400 hover:border-blue-400 hover:text-blue-500 transition-colors p-1.5"
             >
               <span className="text-lg font-bold leading-none">+</span>
@@ -533,8 +533,10 @@ export default function WeeklyLoanDetailPage() {
 
         {canRecord && loan.status !== 'CLOSED' && (
           <p className="mt-3 text-xs text-gray-400">
-            Click an overdue or pending installment to record a payment.
+            Click an overdue or pending installment to record a payment — paying more than what&apos;s
+            due carries the extra onto the next installment automatically.
             {canClose && ' Click a paid installment to undo it.'}
+            {canClose && ' The dashed + tile adds a new installment to the schedule; it does not record a payment.'}
           </p>
         )}
       </div>

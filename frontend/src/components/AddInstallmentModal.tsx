@@ -46,7 +46,15 @@ export function AddInstallmentModal({ loanId, onCancel, onAdded }: Props) {
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4">
-        <h2 className="text-lg font-bold text-gray-900">Add installment</h2>
+        <div>
+          <h2 className="text-lg font-bold text-gray-900">Add installment to schedule</h2>
+          <p className="text-xs text-gray-500 mt-1">
+            This adds a new due installment — it does not record a payment.
+            To collect more than what&apos;s due on an existing installment, use{' '}
+            <span className="font-medium text-gray-700">Record Payment</span> instead; any amount
+            above the balance owed carries automatically onto the next installment.
+          </p>
+        </div>
 
         <div className="space-y-3">
           <div>
@@ -114,7 +122,7 @@ export function AddInstallmentModal({ loanId, onCancel, onAdded }: Props) {
             disabled={!canSave}
             className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg disabled:opacity-50 transition-colors"
           >
-            {saving ? 'Saving…' : 'Add'}
+            {saving ? 'Saving…' : 'Add Installment'}
           </button>
         </div>
       </div>
