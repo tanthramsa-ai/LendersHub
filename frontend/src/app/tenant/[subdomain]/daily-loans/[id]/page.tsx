@@ -270,8 +270,9 @@ export default function DailyLoanDetailPage() {
     if (!undoTarget) return;
     setUndoing(true); setUndoError('');
     try {
-      await undoInstallmentPayment(id, undoTarget.id);
+      const result = await undoInstallmentPayment(id, undoTarget.id);
       setUndoTarget(null);
+      if (result.removed) setPaySuccess(`Payment undone — Day #${undoTarget.number} was an added installment, so it was removed from the schedule.`);
       refreshNotificationBell();
       await load();
     } catch (e: unknown) {
@@ -867,7 +868,7 @@ export default function DailyLoanDetailPage() {
                 Undo last payment ({fmt(payInst.paid)} recorded)
               </button>
             )}
-            {payInst.paid === 0 && canClose && payInst.number === lastInstallmentNumber && (
+            {payInst.paid === 0 && canClose && payInst.number === lastInstallmentNumber && payInst.number > loan.termDays && (
               <button
                 onClick={handleRemoveInstallment}
                 disabled={paying}

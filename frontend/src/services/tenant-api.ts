@@ -675,7 +675,7 @@ export function deleteInstallment(loanId: string, installmentId: string) {
 }
 
 export function undoInstallmentPayment(loanId: string, installmentId: string) {
-  return tenantFetch<{ installmentId: string; status: string; paidAmount: number }>(
+  return tenantFetch<{ installmentId: string; status: string | null; paidAmount: number; removed: boolean }>(
     `/api/v1/tenant/loans/${loanId}/installments/${installmentId}/undo-payment`,
     { method: 'POST' },
   );

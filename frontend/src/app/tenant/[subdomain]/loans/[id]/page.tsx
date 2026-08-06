@@ -79,6 +79,7 @@ export default function TermLoanDetailPage() {
   const [showReopenConfirm, setShowReopenConfirm] = useState(false);
   const [reopening, setReopening] = useState(false);
   const [err, setErr] = useState('');
+  const [notice, setNotice] = useState('');
   const [tooltip, setTooltip] = useState<{ num: number; x: number; y: number } | null>(null);
   const [undoTarget, setUndoTarget] = useState<TermInstallment | null>(null);
   const [undoing, setUndoing] = useState(false);
@@ -188,8 +189,9 @@ export default function TermLoanDetailPage() {
     if (!undoTarget) return;
     setUndoing(true); setErr('');
     try {
-      await undoInstallmentPayment(id, undoTarget.id);
+      const result = await undoInstallmentPayment(id, undoTarget.id);
       setUndoTarget(null);
+      if (result.removed) setNotice(`Payment undone — installment #${undoTarget.number} was an added installment, so it was removed from the schedule.`);
       refreshNotificationBell();
       await load();
     } catch (e: unknown) {
@@ -347,6 +349,12 @@ export default function TermLoanDetailPage() {
       )}
 
       {err && <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg">{err}</div>}
+      {notice && (
+        <div className="flex items-center justify-between p-3 bg-green-50 border border-green-200 text-green-700 text-sm rounded-lg">
+          <span>{notice}</span>
+          <button onClick={() => setNotice('')} className="ml-3 text-green-500 hover:text-green-700">✕</button>
+        </div>
+      )}
 
       {/* Financial cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -569,7 +577,7 @@ export default function TermLoanDetailPage() {
                 Undo last payment ({fmt(selectedInstallment.paid)} recorded)
               </button>
             )}
-            {selectedInstallment && selectedInstallment.paid === 0 && canClose && selectedInstallment.number === lastInstallmentNumber && (
+            {selectedInstallment && selectedInstallment.paid === 0 && canClose && selectedInstallment.number === lastInstallmentNumber && selectedInstallment.number > loan.termMonths && (
               <button
                 onClick={handleRemoveInstallment}
                 disabled={paying}

@@ -1548,6 +1548,29 @@ export class TenantLoansService {
   }
 
   /**
+   * True when this installment was appended via addInstallment() (its number falls beyond
+   * the loan's originally-contracted term, which every compute*Schedule() generates exactly
+   * `term_months` rows for regardless of cycle type) and is still the last one in the
+   * schedule. Those are the two things that make it safe to delete without leaving a gap
+   * in installment_number or silently shortening a loan's real, signed-off schedule.
+   */
+  private async isRemovableExtraInstallment(
+    client: import('pg').PoolClient,
+    loanId: string,
+    installmentNumber: number,
+  ): Promise<boolean> {
+    const res = await client.query<{ term_months: number; max_number: number | null }>(
+      `SELECT l.term_months,
+              (SELECT MAX(installment_number) FROM installments WHERE loan_id = l.id) AS max_number
+       FROM loans l WHERE l.id = $1`,
+      [loanId],
+    );
+    const row = res.rows[0];
+    if (!row) return false;
+    return installmentNumber > row.term_months && installmentNumber === row.max_number;
+  }
+
+  /**
    * Extends a loan's schedule with one extra installment. Treated as an edit to the loan record
    * (not a "create loan" action), so — matching Update Loan=No for Agent/Staff — this is
    * restricted to MANAGER_ROLES only, unlike the create-loan endpoints which also allow
@@ -1612,9 +1635,10 @@ export class TenantLoansService {
    * schedule, which is why an installment added in error appears to linger. This is
    * the way to take it back out.
    *
-   * Restricted to the last installment on the loan: added installments are always
-   * appended (max + 1), and deleting from the middle would leave a gap in the
-   * installment_number sequence.
+   * Restricted to installments beyond the loan's originally-contracted term (see
+   * isRemovableExtraInstallment): added installments are always appended past the
+   * contracted term, and allowing removal of a real contracted installment — even
+   * an unpaid one — would silently shorten a loan's signed-off schedule.
    */
   async deleteInstallment(user: TenantJwtPayload, loanId: string, installmentId: string) {
     if (!MANAGER_ROLES.includes(user.role as UserRole)) {
@@ -1650,12 +1674,8 @@ export class TenantLoansService {
         throw new BadRequestException('This installment has payment history and cannot be removed');
       }
 
-      const lastRes = await client.query<{ max: number }>(
-        `SELECT MAX(installment_number) AS max FROM installments WHERE loan_id = $1`,
-        [loanId],
-      );
-      if (inst.installment_number !== lastRes.rows[0].max) {
-        throw new BadRequestException('Only the last installment in the schedule can be removed');
+      if (!(await this.isRemovableExtraInstallment(client, loanId, inst.installment_number))) {
+        throw new BadRequestException('Only an installment added beyond the original schedule can be removed');
       }
 
       await client.query(`DELETE FROM installments WHERE id = $1`, [installmentId]);
@@ -3324,8 +3344,9 @@ export class TenantLoansService {
       // the same class of bug fixed in findOne()'s overdueCount.
       const instRes = await client.query<{
         id: string; status: string; total_amount: string; paid_amount: string; due_date: string; is_past_due: boolean;
+        installment_number: number;
       }>(
-        `SELECT id, status, total_amount, paid_amount, due_date, (due_date < CURRENT_DATE) AS is_past_due
+        `SELECT id, status, total_amount, paid_amount, due_date, (due_date < CURRENT_DATE) AS is_past_due, installment_number
          FROM installments WHERE id = $1 AND loan_id = $2`,
         [installmentId, loanId],
       );
@@ -3345,18 +3366,32 @@ export class TenantLoansService {
         : remainingPaid > 0 ? 'PARTIALLY_PAID'
         : (inst.is_past_due ? 'OVERDUE' : 'PENDING');
 
+      // If this was the installment's only payment and it was added beyond the loan's
+      // contracted term (i.e. via the "+" add-installment action, not part of the real
+      // schedule), take it back out of the schedule entirely instead of leaving a
+      // reverted-but-still-present row — that's the whole point of "undo" for something
+      // that shouldn't have existed as a schedule entry in the first place. A real
+      // contracted installment is never removed here, no matter how many times its
+      // payment is undone.
+      const shouldRemove = remainingPaid === 0
+        && (await this.isRemovableExtraInstallment(client, loanId, inst.installment_number));
+
       // Transactional: a failed status recompute must not leave the payment deleted
       // but the installment still showing it as paid. installments has no updated_at
       // column, unlike most other tenant tables.
       await client.query('BEGIN');
       try {
         await client.query(`DELETE FROM payments WHERE id = $1`, [lastPayment.id]);
-        await client.query(
-          `UPDATE installments
-           SET paid_amount = $1, status = $2::installment_status, paid_at = CASE WHEN $2::installment_status = 'PAID' THEN paid_at ELSE NULL END
-           WHERE id = $3`,
-          [remainingPaid, newStatus, installmentId],
-        );
+        if (shouldRemove) {
+          await client.query(`DELETE FROM installments WHERE id = $1`, [installmentId]);
+        } else {
+          await client.query(
+            `UPDATE installments
+             SET paid_amount = $1, status = $2::installment_status, paid_at = CASE WHEN $2::installment_status = 'PAID' THEN paid_at ELSE NULL END
+             WHERE id = $3`,
+            [remainingPaid, newStatus, installmentId],
+          );
+        }
         await client.query('COMMIT');
       } catch (err) {
         await client.query('ROLLBACK');
@@ -3366,14 +3401,18 @@ export class TenantLoansService {
       const loanRes = await client.query<{ loan_number: string }>(`SELECT loan_number FROM loans WHERE id = $1`, [loanId]);
 
       await this.activity.record(client, user, {
-        action: 'payment.undone',
+        action: shouldRemove ? 'installment.removed' : 'payment.undone',
         entityType: 'loan',
         entityId: loanId,
         entityLabel: loanRes.rows[0]?.loan_number ?? loanId,
-        metadata: { installmentId, undoneAmount: parseFloat(lastPayment.amount), newStatus },
+        metadata: shouldRemove
+          ? { installmentId, undoneAmount: parseFloat(lastPayment.amount), installmentNumber: inst.installment_number, reason: 'undo of the only payment on an added installment' }
+          : { installmentId, undoneAmount: parseFloat(lastPayment.amount), newStatus },
       });
 
-      return { installmentId, status: newStatus, paidAmount: remainingPaid };
+      return shouldRemove
+        ? { installmentId, status: null, paidAmount: 0, removed: true }
+        : { installmentId, status: newStatus, paidAmount: remainingPaid, removed: false };
     });
   }
 }
