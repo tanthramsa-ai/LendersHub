@@ -2971,10 +2971,17 @@ export class TenantLoansService {
     }
 
     return this.withSchema(user.schemaName, async (client) => {
+      // is_past_due computed in SQL, not JS: node-pg parses `due_date` into a JS
+      // Date object at runtime despite the query being typed `string` here, and
+      // comparing that Date to a 'YYYY-MM-DD' string via `<` silently coerces the
+      // Date to its epoch number and the string to NaN -- any comparison against
+      // NaN is false, so a JS-side `due_date < today` check is always false. See
+      // the same class of bug fixed in findOne()'s overdueCount.
       const instRes = await client.query<{
-        id: string; status: string; total_amount: string; paid_amount: string; due_date: string;
+        id: string; status: string; total_amount: string; paid_amount: string; due_date: string; is_past_due: boolean;
       }>(
-        `SELECT id, status, total_amount, paid_amount, due_date FROM installments WHERE id = $1 AND loan_id = $2`,
+        `SELECT id, status, total_amount, paid_amount, due_date, (due_date < CURRENT_DATE) AS is_past_due
+         FROM installments WHERE id = $1 AND loan_id = $2`,
         [installmentId, loanId],
       );
       if (!instRes.rows[0]) throw new NotFoundException('Installment not found');
@@ -2989,10 +2996,9 @@ export class TenantLoansService {
 
       const remainingPaid = Math.max(0, parseFloat(inst.paid_amount) - parseFloat(lastPayment.amount));
       const totalAmount = parseFloat(inst.total_amount);
-      const today = new Date().toISOString().slice(0, 10);
       const newStatus = remainingPaid >= totalAmount ? 'PAID'
         : remainingPaid > 0 ? 'PARTIALLY_PAID'
-        : (inst.due_date && inst.due_date < today ? 'OVERDUE' : 'PENDING');
+        : (inst.is_past_due ? 'OVERDUE' : 'PENDING');
 
       // Transactional: a failed status recompute must not leave the payment deleted
       // but the installment still showing it as paid. installments has no updated_at
