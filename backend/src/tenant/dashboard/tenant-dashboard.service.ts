@@ -175,7 +175,7 @@ export class TenantDashboardService {
 
       const dataRes = await client.query(`
           SELECT l.id, l.loan_number, l.principal, l.interest_rate, l.term_months,
-                 l.status, l.disbursed_at, l.first_due_date, l.created_at,
+                 l.status, l.cycle_type, l.disbursed_at, l.first_due_date, l.created_at,
                  c.first_name || ' ' || c.last_name AS customer_name,
                  c.phone AS customer_phone,
                  COALESCE(SUM(CASE WHEN i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE') THEN i.total_amount - i.paid_amount ELSE 0 END), 0) AS outstanding
@@ -196,6 +196,7 @@ export class TenantDashboardService {
           principal: parseFloat(r.principal),
           interestRate: parseFloat(r.interest_rate),
           termMonths: r.term_months, status: r.status,
+          cycleType: r.cycle_type,
           outstanding: parseFloat(r.outstanding),
           disbursedAt: r.disbursed_at,
           firstDueDate: r.first_due_date,

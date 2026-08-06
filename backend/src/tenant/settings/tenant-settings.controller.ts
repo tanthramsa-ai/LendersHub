@@ -1,5 +1,5 @@
 import { Controller, Get, Put, Body, UseGuards, Request } from '@nestjs/common';
-import { TenantSettingsService, SmsConfigDto, WhatsAppConfigDto } from './tenant-settings.service';
+import { TenantSettingsService, SmsConfigDto, WhatsAppConfigDto, NpaConfigDto } from './tenant-settings.service';
 import { TenantJwtGuard } from '../auth/guards/tenant-jwt.guard';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 
@@ -19,6 +19,19 @@ export class TenantSettingsController {
     @Body() dto: SmsConfigDto,
   ) {
     return this.svc.updateSmsConfig(req.user, dto);
+  }
+
+  @Get('npa')
+  getNpaConfig(@Request() req: { user: TenantJwtPayload }) {
+    return this.svc.getNpaConfig(req.user);
+  }
+
+  @Put('npa')
+  updateNpaConfig(
+    @Request() req: { user: TenantJwtPayload },
+    @Body() dto: NpaConfigDto,
+  ) {
+    return this.svc.updateNpaConfig(req.user, dto);
   }
 
   @Get('whatsapp')

@@ -6,6 +6,7 @@ import {
   getBranchMembers, BranchMember,
   getTenantUsers, updateTenantUser,
   getSmsConfig, updateSmsConfig, SmsConfig,
+  getNpaConfig, updateNpaConfig, NpaConfig,
   getLoanTypes, createLoanType, updateLoanType, deleteLoanType, LoanType,
   getWhatsAppConfig, updateWhatsAppConfig, WhatsAppConfig,
   getPermissionMatrix, updatePermissionMatrix, addPermissionRole, renamePermissionRole, deletePermissionRole,
@@ -320,6 +321,84 @@ function BranchMembersModal({ branch, onClose, onChanged }: {
         )}
       </div>
     </div>
+  );
+}
+
+// ── NPA Rule Tab ──────────────────────────────────────────────────────────────
+function NpaConfigTab() {
+  const [threshold, setThreshold] = useState('');
+  const [config, setConfig] = useState<NpaConfig | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    getNpaConfig()
+      .then((c) => { setConfig(c); setThreshold(String(c.overdueThreshold)); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setError(''); setSaving(true); setSaved(false);
+    try {
+      const res = await updateNpaConfig(Number(threshold));
+      setConfig((c) => (c ? { ...c, overdueThreshold: res.overdueThreshold, isCustom: true } : c));
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to save');
+    } finally { setSaving(false); }
+  }
+
+  if (loading) return <div className="flex justify-center py-12"><div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>;
+
+  return (
+    <form onSubmit={save} className="max-w-xl space-y-5">
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-blue-800 space-y-1">
+        <p className="font-semibold">When is a loan a non-performing asset?</p>
+        <p>
+          A loan is flagged <strong>NPA</strong> once it has this many overdue installments.
+          Installments become overdue automatically the day after their due date.
+        </p>
+        <p className="text-xs text-blue-700">
+          Admins can also mark any individual loan NPA by hand from the loan page — that override
+          applies regardless of this number.
+        </p>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          Overdue installments before NPA
+        </label>
+        <input
+          type="number"
+          min={1}
+          max={60}
+          value={threshold}
+          onChange={(e) => { setThreshold(e.target.value); if (error) setError(''); }}
+          className="w-32 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-gray-900"
+        />
+        <p className="text-xs text-gray-500 mt-1">
+          Default is {config?.defaultThreshold ?? 4}. Applies to every loan cycle — remember that
+          4 missed daily installments is a much shorter window than 4 missed monthly ones.
+        </p>
+      </div>
+
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      {saved && <p className="text-sm text-green-600 font-medium">NPA rule saved.</p>}
+
+      <button
+        type="submit"
+        disabled={saving}
+        className="text-sm px-5 py-2.5 rounded-xl font-semibold text-white disabled:opacity-50"
+        style={{ backgroundColor: BRAND }}
+      >
+        {saving ? 'Saving…' : 'Save NPA Rule'}
+      </button>
+    </form>
   );
 }
 
@@ -1062,7 +1141,7 @@ function PermissionsTab() {
 }
 
 // ── Main Settings Page ────────────────────────────────────────────────────────
-type SettingsTab = 'branches' | 'loanTypes' | 'sms' | 'whatsapp' | 'permissions';
+type SettingsTab = 'branches' | 'loanTypes' | 'npa' | 'sms' | 'whatsapp' | 'permissions';
 
 export default function SettingsPage() {
   const [tab, setTab] = useState<SettingsTab>('branches');
@@ -1088,6 +1167,7 @@ export default function SettingsPage() {
   const tabs: { key: SettingsTab; label: string }[] = [
     { key: 'branches', label: 'Branches' },
     { key: 'loanTypes', label: 'Loan Types' },
+    ...(isAdmin ? [{ key: 'npa' as const, label: 'NPA Rule' }] : []),
     { key: 'sms', label: 'SMS / OTP' },
     { key: 'whatsapp', label: 'WhatsApp' },
     ...(isAdmin ? [{ key: 'permissions' as const, label: 'Permissions' }] : []),
@@ -1145,6 +1225,7 @@ export default function SettingsPage() {
       )}
 
       {tab === 'loanTypes' && <LoanTypesTab />}
+      {tab === 'npa' && isAdmin && <NpaConfigTab />}
       {tab === 'sms' && <SmsConfigTab />}
       {tab === 'whatsapp' && <WhatsAppConfigTab />}
       {tab === 'permissions' && isAdmin && <PermissionsTab />}

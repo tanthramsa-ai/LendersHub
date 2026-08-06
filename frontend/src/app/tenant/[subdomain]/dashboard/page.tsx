@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   getDashboardStats, getRecentActivity, getActiveLoans, getMonthlyTrend,
-  getTenantSession,
+  getTenantSession, loanDetailPath,
   DashboardStats, ActivityItem, ActiveLoan, MonthlyTrend,
   MANAGER_ROLES, LOAN_ROLES,
 } from '@/services/tenant-api';
@@ -356,7 +356,7 @@ export default function TenantDashboardPage() {
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        <Link href={`/tenant/${subdomain}/loans/${loan.id}`} className="font-medium hover:underline whitespace-nowrap" style={{ color: BRAND }}>
+                        <Link href={`/tenant/${subdomain}/${loanDetailPath(loan.cycleType, loan.id)}`} className="font-medium hover:underline whitespace-nowrap" style={{ color: BRAND }}>
                           {loan.loanNumber}
                         </Link>
                       </td>
@@ -374,10 +374,14 @@ export default function TenantDashboardPage() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
-                          <Link href={`/tenant/${subdomain}/loans/${loan.id}`} className="text-xs font-medium px-2.5 py-1 rounded-lg border hover:bg-gray-50 text-gray-600 whitespace-nowrap transition-colors">
+                          <Link href={`/tenant/${subdomain}/${loanDetailPath(loan.cycleType, loan.id)}`} className="text-xs font-medium px-2.5 py-1 rounded-lg border hover:bg-gray-50 text-gray-600 whitespace-nowrap transition-colors">
                             View
                           </Link>
-                          <Link href={`/tenant/${subdomain}/loans/${loan.id}`} className="text-xs font-medium px-2.5 py-1 rounded-lg text-white whitespace-nowrap transition-colors" style={{ backgroundColor: ACCENT }}>
+                          <Link
+                            href={`/tenant/${subdomain}/${loanDetailPath(loan.cycleType, loan.id)}?collect=1`}
+                            className="text-xs font-medium px-2.5 py-1 rounded-lg text-white whitespace-nowrap transition-colors"
+                            style={{ backgroundColor: ACCENT }}
+                          >
                             Collect
                           </Link>
                         </div>

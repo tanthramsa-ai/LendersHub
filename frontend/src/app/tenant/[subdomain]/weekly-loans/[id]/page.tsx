@@ -1,10 +1,11 @@
 'use client';
 
+import { NpaBadge } from '@/components/NpaBadge';
 import { useEffect, useState, useCallback } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams, useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import {
-  getWeeklyLoan, recordPayment, undoInstallmentPayment, closeLoan, reopenLoan, resolveMissedInstallment,
+  getWeeklyLoan, recordPayment, undoInstallmentPayment, deleteInstallment, closeLoan, reopenLoan, resolveMissedInstallment,
   approveLoan, rejectLoan, approveCloseLoan, assignLoanAgent, getOfficers,
   WeeklyLoanDetail, WeeklyInstallment, MissResolution, Officer,
   getTenantSession, COLLECTION_ROLES, MANAGER_ROLES,
@@ -111,6 +112,9 @@ const PAYMENT_METHODS = ['CASH', 'UPI', 'BANK_TRANSFER', 'CHEQUE', 'NEFT', 'RTGS
 export default function WeeklyLoanDetailPage() {
   const params = useParams<{ subdomain: string; id: string }>();
   const { subdomain, id } = params;
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const session = getTenantSession();
   const canRecord = COLLECTION_ROLES.includes(session?.user.role ?? 'CUSTOMER');
   const canClose = MANAGER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
@@ -178,6 +182,18 @@ export default function WeeklyLoanDetailPage() {
     setPayError(''); setPaySuccess('');
   }
 
+  // Dashboard "Collect" deep-links here with ?collect=1 to jump straight to recording
+  // a payment on the earliest unpaid installment, instead of landing on a page with
+  // no way to act on it.
+  useEffect(() => {
+    if (!loan) return;
+    if (searchParams.get('collect') !== '1') return;
+    router.replace(pathname);
+    if (!canRecord || loan.status === 'CLOSED') return;
+    const target = loan.installments.find((i) => !['PAID', 'WAIVED'].includes(i.status));
+    if (target) openPay(target);
+  }, [loan]); // eslint-disable-line react-hooks/exhaustive-deps
+
   async function submitPay() {
     if (!payInst) return;
     const amount = parseFloat(payForm.amount);
@@ -193,6 +209,22 @@ export default function WeeklyLoanDetailPage() {
       setPayInst(null);
       setPaySuccess(`Payment of ${fmt(amount)} recorded for Week #${payInst.number}`);
       refreshNotificationBell();
+      await load();
+    } catch (e: unknown) {
+      setPayError((e as Error).message);
+    } finally { setPaying(false); }
+  }
+
+  /**
+   * Takes an extra installment back out of the schedule. Undoing a payment only
+   * reverses the payment — the row itself stays until it is removed here.
+   */
+  async function handleRemoveInstallment() {
+    if (!payInst) return;
+    setPaying(true); setPayError('');
+    try {
+      await deleteInstallment(id, payInst.id);
+      setPayInst(null);
       await load();
     } catch (e: unknown) {
       setPayError((e as Error).message);
@@ -291,7 +323,7 @@ export default function WeeklyLoanDetailPage() {
   if (!loan) return null;
 
   const fin = computeFinancials(loan.installments);
-  const isNpa = loan.status === 'DEFAULTED' || fin.overdueCount > 2;
+  const lastInstallmentNumber = Math.max(0, ...loan.installments.map((i) => i.number));
   const today = new Date(); today.setHours(0, 0, 0, 0);
 
   return (
@@ -302,7 +334,7 @@ export default function WeeklyLoanDetailPage() {
         <span className="text-gray-300">|</span>
         <h1 className="text-lg font-bold text-gray-900 font-mono">{loan.loanNumber}</h1>
         <span className={`px-2 py-0.5 rounded text-xs font-semibold ${LOAN_STATUS_COLORS[loan.status] ?? 'bg-gray-100 text-gray-500'}`}>{loan.status}</span>
-        {isNpa && <span className="px-2 py-0.5 bg-red-200 text-red-800 rounded text-xs font-bold">NPA</span>}
+        <NpaBadge loan={loan} canManage={canClose} onChanged={load} />
         {loan.pendingClosure && (
           <span className="px-2 py-0.5 bg-amber-100 text-amber-800 rounded text-xs font-semibold">Closure pending approval</span>
         )}
@@ -449,7 +481,7 @@ export default function WeeklyLoanDetailPage() {
             const due = new Date(inst.dueDate); due.setHours(0, 0, 0, 0);
             const isPastDue = inst.status === 'OVERDUE' || (inst.status === 'PENDING' && due < today);
             const canPay = canRecord && ['PENDING', 'OVERDUE', 'PARTIALLY_PAID'].includes(inst.status) && loan.status !== 'CLOSED';
-            const canUndo = canClose && inst.status === 'PAID' && loan.status !== 'CLOSED';
+            const canUndo = canClose && inst.paid > 0 && loan.status !== 'CLOSED';
             const tooltip = buildTooltip(inst);
 
             return (
@@ -768,6 +800,23 @@ export default function WeeklyLoanDetailPage() {
 
             {payError && <p className="mt-3 text-xs text-red-600">{payError}</p>}
 
+            {payInst.paid > 0 && canClose && (
+              <button
+                onClick={() => { const t = payInst; setPayInst(null); setUndoTarget(t); }}
+                className="mt-4 w-full px-4 py-2 border border-amber-300 text-amber-700 text-sm rounded-lg hover:bg-amber-50 transition-colors"
+              >
+                Undo last payment ({fmt(payInst.paid)} recorded)
+              </button>
+            )}
+            {payInst.paid === 0 && canClose && payInst.number === lastInstallmentNumber && (
+              <button
+                onClick={handleRemoveInstallment}
+                disabled={paying}
+                className="mt-4 w-full px-4 py-2 border border-red-300 text-red-700 text-sm rounded-lg hover:bg-red-50 disabled:opacity-60 transition-colors"
+              >
+                Remove this installment from the schedule
+              </button>
+            )}
             <div className="mt-5 flex gap-3">
               <button onClick={() => setPayInst(null)}
                 className="flex-1 px-4 py-2 border border-gray-300 text-gray-600 text-sm rounded-lg hover:bg-gray-50 transition-colors">

@@ -187,6 +187,24 @@ export class TenantLoansController {
     return this.svc.approveCloseLoan(req.user, id);
   }
 
+  @Patch(':id/npa')
+  markNpa(
+    @Request() req: { user: TenantJwtPayload },
+    @Param('id') id: string,
+    @Body() dto: { reason?: string },
+  ) {
+    return this.svc.markNpa(req.user, id, dto ?? {});
+  }
+
+  @Delete(':id/npa')
+  clearNpa(
+    @Request() req: { user: TenantJwtPayload },
+    @Param('id') id: string,
+    @Body() dto: { reason?: string },
+  ) {
+    return this.svc.clearNpa(req.user, id, dto ?? {});
+  }
+
   @Patch(':id/agent')
   assignLoanAgent(
     @Request() req: { user: TenantJwtPayload },
@@ -203,6 +221,15 @@ export class TenantLoansController {
     @Body() dto: { dueDate: string; principalAmount?: number; interestAmount?: number; totalAmount: number },
   ) {
     return this.svc.addInstallment(req.user, id, dto);
+  }
+
+  @Delete(':id/installments/:installmentId')
+  deleteInstallment(
+    @Request() req: { user: TenantJwtPayload },
+    @Param('id') id: string,
+    @Param('installmentId') installmentId: string,
+  ) {
+    return this.svc.deleteInstallment(req.user, id, installmentId);
   }
 
   @Patch(':id/reopen')

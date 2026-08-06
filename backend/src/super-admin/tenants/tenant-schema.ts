@@ -94,6 +94,9 @@ export function tenantSchemaDDL(s: string): string[] {
        purpose          TEXT,
        disbursed_at     TIMESTAMPTZ,
        first_due_date   DATE,
+       npa_marked_at    TIMESTAMPTZ,
+       npa_marked_by    UUID          REFERENCES ${q}."users" (id) ON DELETE SET NULL,
+       npa_reason       TEXT,
        created_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
        updated_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
        CONSTRAINT uq_${s}_loans_number UNIQUE (loan_number)

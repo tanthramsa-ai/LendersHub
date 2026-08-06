@@ -193,6 +193,7 @@ export interface ActiveLoan {
   interestRate: number;
   termMonths: number;
   status: string;
+  cycleType: string | null;
   outstanding: number;
   disbursedAt: string | null;
   firstDueDate: string | null;
@@ -393,7 +394,7 @@ export interface WeeklyLoan {
   totalInstallments: number;
   paidInstallments: number;
   overdueCount: number;
-  isNpa: boolean;
+  isNpa: boolean; npaMarkedAt?: string | null;
 }
 
 export interface WeeklyInstallment {
@@ -499,7 +500,21 @@ export interface LoanProjection {
   extraPeriods: number;
 }
 
-export interface WeeklyLoanDetail extends WeeklyLoan {
+/**
+ * NPA fields returned by the loan detail endpoint. `isNpa` (inherited from the list
+ * types) is authoritative — the server applies the tenant threshold and the manual
+ * override, so pages must not recompute it from overdueCount.
+ */
+export interface NpaDetailFields {
+  /** Overdue installments at which this tenant classifies a loan NPA. */
+  npaThreshold?: number;
+  /** Set only when an admin flagged the loan manually. */
+  npaMarkedAt?: string | null;
+  npaMarkedByName?: string | null;
+  npaReason?: string | null;
+}
+
+export interface WeeklyLoanDetail extends WeeklyLoan, NpaDetailFields {
   purpose?: string | null;
   cycleType: string;
   calculationType: string;
@@ -606,6 +621,18 @@ export function addInstallment(loanId: string, dto: AddInstallmentDto) {
   );
 }
 
+/**
+ * Removes an extra installment added by mistake. Undoing a payment only reverses the
+ * payment — the row stays in the schedule until it is removed with this.
+ * Server-side: last installment only, and only when nothing has been paid against it.
+ */
+export function deleteInstallment(loanId: string, installmentId: string) {
+  return tenantFetch<{ installmentId: string; removed: boolean; installmentNumber: number }>(
+    `/api/v1/tenant/loans/${loanId}/installments/${installmentId}`,
+    { method: 'DELETE' },
+  );
+}
+
 export function undoInstallmentPayment(loanId: string, installmentId: string) {
   return tenantFetch<{ installmentId: string; status: string; paidAmount: number }>(
     `/api/v1/tenant/loans/${loanId}/installments/${installmentId}/undo-payment`,
@@ -647,7 +674,7 @@ export interface DailyLoan {
   totalInstallments: number;
   paidInstallments: number;
   overdueCount: number;
-  isNpa: boolean;
+  isNpa: boolean; npaMarkedAt?: string | null;
 }
 
 export interface DailyInstallment {
@@ -674,7 +701,7 @@ export interface DailySchedulePreview {
   }>;
 }
 
-export interface DailyLoanDetail extends DailyLoan {
+export interface DailyLoanDetail extends DailyLoan, NpaDetailFields {
   purpose?: string | null;
   cycleType: string;
   calculationType: string;
@@ -765,7 +792,7 @@ export interface MonthlyLoan {
   totalInstallments: number;
   paidInstallments: number;
   overdueCount: number;
-  isNpa: boolean;
+  isNpa: boolean; npaMarkedAt?: string | null;
 }
 
 export interface MonthlyInstallment {
@@ -780,7 +807,7 @@ export interface MonthlyInstallment {
   paidAt: string | null;
 }
 
-export interface MonthlyLoanDetail extends MonthlyLoan {
+export interface MonthlyLoanDetail extends MonthlyLoan, NpaDetailFields {
   purpose?: string | null;
   calculationType?: string;
   emiAmount: number | null;
@@ -853,10 +880,10 @@ export interface AgentRiskLoan {
   status: string; branchId: string | null; branchName: string | null;
   disbursedAt: string | null; firstDueDate: string | null; createdAt: string;
   principalOutstanding: number; interestReceived: number; interestOutstanding: number;
-  totalInstallments: number; paidInstallments: number; overdueCount: number; isNpa: boolean;
+  totalInstallments: number; paidInstallments: number; overdueCount: number; isNpa: boolean; npaMarkedAt?: string | null;
 }
 
-export interface AgentRiskLoanDetail extends AgentRiskLoan {
+export interface AgentRiskLoanDetail extends AgentRiskLoan, NpaDetailFields {
   purpose?: string | null; emiAmount: number | null;
   securityDocUrl?: string | null; promissoryNoteUrl?: string | null;
   loanTypeId?: string | null; customerPhone: string;
@@ -903,7 +930,7 @@ export interface TermLoan {
   principal: number; interestRate: number; termMonths: number; emi: number | null;
   calculationType: string; status: string; branchId: string | null; branchName: string | null;
   outstanding: number; paidInstallments: number; totalInstallments: number;
-  overdueCount: number; isNpa: boolean; disbursedAt: string; firstDueDate: string; createdAt: string;
+  overdueCount: number; isNpa: boolean; npaMarkedAt?: string | null; disbursedAt: string; firstDueDate: string; createdAt: string;
 }
 
 export interface TermInstallment {
@@ -912,7 +939,7 @@ export interface TermInstallment {
   paid: number; status: string; paidAt: string | null;
 }
 
-export interface TermLoanDetail extends TermLoan {
+export interface TermLoanDetail extends TermLoan, NpaDetailFields {
   purpose?: string | null; emiAmount: number | null;
   securityDocUrl?: string | null; promissoryNoteUrl?: string | null;
   loanTypeId?: string | null; customerPhone: string;
@@ -1239,6 +1266,41 @@ export function assignLoanAgent(id: string, loanOfficerId: string) {
   return tenantFetch<{ id: string; loanOfficerId: string; loanOfficerName?: string }>(`/api/v1/tenant/loans/${id}/agent`, {
     method: 'PATCH',
     body: JSON.stringify({ loanOfficerId }),
+  });
+}
+
+// ── NPA classification ────────────────────────────────────────────────────────
+// A loan is NPA when an admin has flagged it OR its overdue installment count has
+// reached the tenant threshold. The server decides — never recompute this client-side.
+
+export function markLoanNpa(id: string, reason: string) {
+  return tenantFetch<{ id: string; isNpa: boolean; reason: string }>(`/api/v1/tenant/loans/${id}/npa`, {
+    method: 'PATCH',
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export function clearLoanNpa(id: string, reason?: string) {
+  return tenantFetch<{ id: string; isNpa: boolean; overdueCount: number; npaThreshold: number }>(
+    `/api/v1/tenant/loans/${id}/npa`,
+    { method: 'DELETE', body: JSON.stringify({ reason }) },
+  );
+}
+
+export interface NpaConfig {
+  overdueThreshold: number;
+  defaultThreshold: number;
+  isCustom: boolean;
+}
+
+export function getNpaConfig() {
+  return tenantFetch<NpaConfig>('/api/v1/tenant/settings/npa');
+}
+
+export function updateNpaConfig(overdueThreshold: number) {
+  return tenantFetch<{ message: string; overdueThreshold: number }>('/api/v1/tenant/settings/npa', {
+    method: 'PUT',
+    body: JSON.stringify({ overdueThreshold }),
   });
 }
 
