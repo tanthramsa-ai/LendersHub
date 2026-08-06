@@ -76,9 +76,9 @@ export default function CustomerDetailPage() {
   const [toggling, setToggling] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [loanFilter, setLoanFilter] = useState<'all' | 'active'>('all');
+  const [loanFilter, setLoanFilter] = useState<'all' | 'active' | 'npa'>('all');
 
-  function goToLoans(filter: 'all' | 'active') {
+  function goToLoans(filter: 'all' | 'active' | 'npa') {
     setLoanFilter(filter);
     document.getElementById('customer-loans')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
@@ -209,7 +209,9 @@ export default function CustomerDetailPage() {
 
   const visibleLoans = loanFilter === 'active'
     ? loans.filter((l) => ['DISBURSED', 'APPROVED'].includes(l.status))
-    : loans;
+    : loanFilter === 'npa'
+      ? loans.filter((l) => l.isNpa)
+      : loans;
 
   if (editing) {
     return (
@@ -370,10 +372,11 @@ export default function CustomerDetailPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         {[
           { label: 'Total Loans', value: customer.totalLoans, color: 'text-blue-700', onClick: () => goToLoans('all') },
           { label: 'Active Loans', value: customer.activeLoans, color: 'text-green-700', onClick: () => goToLoans('active') },
+          { label: 'NPA Loans', value: customer.npaLoans, color: customer.npaLoans > 0 ? 'text-red-700' : 'text-gray-400', onClick: customer.npaLoans > 0 ? () => goToLoans('npa') : undefined },
           { label: 'Total Repaid', value: `₹${customer.totalPaid.toLocaleString('en-IN')}`, color: 'text-purple-700', onClick: undefined },
         ].map((s) => (
           <button
@@ -467,16 +470,18 @@ export default function CustomerDetailPage() {
       <div id="customer-loans" className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 space-y-3 scroll-mt-4">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold text-gray-700">
-            {loanFilter === 'active' ? 'Active Loans' : 'Loans'} ({visibleLoans.length})
+            {loanFilter === 'active' ? 'Active Loans' : loanFilter === 'npa' ? 'NPA Loans' : 'Loans'} ({visibleLoans.length})
           </h2>
-          {loanFilter === 'active' && (
+          {loanFilter !== 'all' && (
             <button onClick={() => setLoanFilter('all')} className="text-xs text-blue-600 hover:underline">
               Show all {loans.length}
             </button>
           )}
         </div>
         {visibleLoans.length === 0 ? (
-          <p className="text-sm text-gray-400">{loanFilter === 'active' ? 'No active loans.' : 'No loans yet.'}</p>
+          <p className="text-sm text-gray-400">
+            {loanFilter === 'active' ? 'No active loans.' : loanFilter === 'npa' ? 'No NPA loans.' : 'No loans yet.'}
+          </p>
         ) : (
           <div className="divide-y divide-gray-100">
             {visibleLoans.map((l) => (
@@ -490,6 +495,9 @@ export default function CustomerDetailPage() {
                   <span className="ml-2 px-1.5 py-0.5 rounded text-[11px] font-medium bg-gray-100 text-gray-600">
                     {CYCLE_TYPE_LABEL[l.cycleType ?? ''] ?? l.cycleType}
                   </span>
+                  {l.isNpa && (
+                    <span className="ml-2 px-1.5 py-0.5 bg-red-200 text-red-800 rounded text-[11px] font-bold">NPA</span>
+                  )}
                 </div>
                 <div className="flex items-center gap-3 text-sm">
                   <span className="text-gray-500">{fmt(l.principal)}</span>

@@ -878,8 +878,10 @@ export class TenantLoansService {
       const dataRes = await client.query(`
           SELECT l.id, l.loan_number, l.principal, l.interest_rate, l.term_months,
                  l.status, l.purpose, l.disbursed_at, l.first_due_date, l.created_at, l.cycle_type,
+                 l.npa_marked_at,
                  c.first_name || ' ' || c.last_name AS customer_name, c.phone AS customer_phone,
-                 COALESCE(SUM(CASE WHEN i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE') THEN i.total_amount - i.paid_amount ELSE 0 END), 0) AS outstanding
+                 COALESCE(SUM(CASE WHEN i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE') THEN i.total_amount - i.paid_amount ELSE 0 END), 0) AS outstanding,
+                 ${NPA_OVERDUE_COUNT_SQL} AS npa_overdue_count
           FROM loans l
           JOIN customers c ON c.id = l.customer_id
           LEFT JOIN installments i ON i.loan_id = l.id
@@ -894,6 +896,7 @@ export class TenantLoansService {
           ${whereClause}
         `, countParams);
 
+      const npaThreshold = await this.getNpaThreshold(client);
       return {
         data: dataRes.rows.map((r) => ({
           id: r.id, loanNumber: r.loan_number,
@@ -904,6 +907,8 @@ export class TenantLoansService {
           outstanding: parseFloat(r.outstanding),
           disbursedAt: r.disbursed_at, firstDueDate: r.first_due_date, createdAt: r.created_at,
           cycleType: r.cycle_type,
+          isNpa: this.isNpa(r, npaThreshold),
+          npaMarkedAt: r.npa_marked_at ?? null,
         })),
         total: parseInt(countRes.rows[0].total),
         page, limit,
