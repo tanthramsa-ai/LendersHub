@@ -465,20 +465,29 @@ export default function TermLoanDetailPage() {
 
       {/* Payment history */}
       {loan.payments.length > 0 && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-          <div className="px-5 py-3 border-b border-gray-100">
-            <p className="text-sm font-semibold text-gray-900">Payment History</p>
-          </div>
-          <div className="divide-y divide-gray-50">
-            {loan.payments.map((p) => (
-              <div key={p.id} className="px-5 py-3 flex items-center justify-between text-sm">
-                <div>
-                  <p className="font-medium text-gray-900">{fmt(p.amount)}</p>
-                  <p className="text-xs text-gray-400">{p.method}{p.referenceNumber ? ` · ${p.referenceNumber}` : ''}</p>
-                </div>
-                <p className="text-xs text-gray-400 whitespace-nowrap">{fmtDate(p.paymentDate)}</p>
-              </div>
-            ))}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+          <h2 className="text-sm font-bold text-gray-700 mb-3">Payment History</h2>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-left text-gray-400 uppercase border-b border-gray-100">
+                  <th className="pb-2 pr-4">Date</th>
+                  <th className="pb-2 pr-4">Amount</th>
+                  <th className="pb-2 pr-4">Method</th>
+                  <th className="pb-2">Reference</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {loan.payments.map((p) => (
+                  <tr key={p.id}>
+                    <td className="py-2 pr-4 text-gray-600 whitespace-nowrap">{fmtDate(p.paymentDate)}</td>
+                    <td className="py-2 pr-4 font-semibold text-gray-900">{fmt(p.amount)}</td>
+                    <td className="py-2 pr-4 text-gray-600">{p.method}</td>
+                    <td className="py-2 text-gray-400">{p.referenceNumber ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
