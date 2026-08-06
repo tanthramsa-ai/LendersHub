@@ -929,6 +929,17 @@ export class TenantLoansService {
         `, [id]);
       const installmentsRes = await client.query(`SELECT * FROM installments WHERE loan_id = $1 ORDER BY installment_number`, [id]);
       const paymentsRes = await client.query(`SELECT * FROM payments WHERE loan_id = $1 ORDER BY created_at DESC`, [id]);
+      // Computed in SQL, not JS, against the same installments row set: a JS-side
+      // `due_date < today` comparison has to round-trip the DATE value through
+      // node-pg's JS Date parsing and back to a string, and doing that via
+      // `.toISOString()` silently shifts the date backwards by a day for any
+      // server process running in a timezone ahead of UTC (IST included) — an
+      // installment due today would wrongly count as overdue. Postgres's own
+      // `due_date < CURRENT_DATE` has no such conversion to get wrong.
+      const overdueRes = await client.query(
+        `SELECT ${NPA_OVERDUE_COUNT_SQL} AS n FROM installments i WHERE i.loan_id = $1`,
+        [id],
+      );
 
       if (!loanRes.rows[0]) throw new NotFoundException('Loan not found');
       const l = loanRes.rows[0];
@@ -936,16 +947,7 @@ export class TenantLoansService {
         throw new ForbiddenException('You can only view loans assigned to you');
       }
       const npaThreshold = await this.getNpaThreshold(client);
-      const today = new Date().toISOString().slice(0, 10);
-      // Date-based, matching NPA_OVERDUE_COUNT_SQL — see the note there on why a
-      // partially-paid installment must still count as overdue for classification.
-      const overdueCount = installmentsRes.rows.filter(
-        (i) =>
-          i.due_date &&
-          String(i.due_date instanceof Date ? i.due_date.toISOString().slice(0, 10) : i.due_date).slice(0, 10) < today &&
-          !['PAID', 'WAIVED'].includes(i.status) &&
-          parseFloat(i.paid_amount) < parseFloat(i.total_amount),
-      ).length;
+      const overdueCount = parseInt(overdueRes.rows[0].n);
       return {
         id: l.id, loanNumber: l.loan_number,
         customerId: l.customer_id_ref, customerName: l.customer_name, customerPhone: l.customer_phone,
