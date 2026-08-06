@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
+import { clampTenureInput } from '@/lib/numeric-input';
 import {
   getCustomers, createCustomer, updateCustomer, getCustomer, getBranches, getLoanTypes,
   previewDailySchedule, createDailyLoan, getOfficers,
@@ -451,7 +452,7 @@ export default function NewDailyLoanPage() {
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Tenure (days) <span className="text-red-500">*</span></label>
-                <input type="number" value={form.termDays} onChange={(e) => setF('termDays', e.target.value)} className={inputCls} placeholder="100" min={1} max={3650} />
+                <input type="number" value={form.termDays} onChange={(e) => setF('termDays', clampTenureInput(e.target.value, 3650))} className={inputCls} placeholder="100" min={1} max={3650} />
                 <p className="text-xs text-gray-400 mt-1">
                   {form.termDays && form.cycleType === 'DAILY_NO_SUNDAY'
                     ? `≈ ${Math.ceil(parseInt(form.termDays) * 7 / 6)} calendar days (excl. Sundays)`

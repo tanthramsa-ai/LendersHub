@@ -14,6 +14,7 @@ import {
   PERMISSION_KEYS, PERMISSION_LABELS, PERMISSION_VALUE_OPTIONS,
   ROLE_LABELS, UserRole, USER_ADMIN_ROLES, getTenantSession,
 } from '@/services/tenant-api';
+import { isOnlySpecialChars } from '@/lib/text-validation';
 
 const BRAND = '#0F4C81';
 
@@ -48,7 +49,9 @@ function BranchModal({ branch, onClose, onSuccess }: { branch?: TenantBranch; on
 
   async function submit() {
     if (!form.name.trim()) return setError('Branch name is required');
+    if (isOnlySpecialChars(form.name)) return setError('Branch name cannot consist of only special characters');
     if (!isEdit && !form.code.trim()) return setError('Branch code is required');
+    if (!isEdit && isOnlySpecialChars(form.code)) return setError('Branch code cannot consist of only special characters');
     setError(''); setLoading(true);
     try {
       if (isEdit) {
