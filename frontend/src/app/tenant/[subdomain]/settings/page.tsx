@@ -44,15 +44,22 @@ function BranchModal({ branch, onClose, onSuccess }: { branch?: TenantBranch; on
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [nameError, setNameError] = useState('');
+  const [codeError, setCodeError] = useState('');
 
-  function set(k: keyof BranchForm, v: string) { setForm((f) => ({ ...f, [k]: v })); }
+  function set(k: keyof BranchForm, v: string) {
+    setForm((f) => ({ ...f, [k]: v }));
+    if (k === 'name' && nameError) setNameError('');
+    if (k === 'code' && codeError) setCodeError('');
+  }
 
   async function submit() {
-    if (!form.name.trim()) return setError('Branch name is required');
-    if (isOnlySpecialChars(form.name)) return setError('Branch name cannot consist of only special characters');
-    if (!isEdit && !form.code.trim()) return setError('Branch code is required');
-    if (!isEdit && isOnlySpecialChars(form.code)) return setError('Branch code cannot consist of only special characters');
-    setError(''); setLoading(true);
+    setError(''); setNameError(''); setCodeError('');
+    if (!form.name.trim()) { setNameError('Branch name is required'); return; }
+    if (isOnlySpecialChars(form.name)) { setNameError('Branch name cannot consist of only special characters'); return; }
+    if (!isEdit && !form.code.trim()) { setCodeError('Branch code is required'); return; }
+    if (!isEdit && isOnlySpecialChars(form.code)) { setCodeError('Branch code cannot consist of only special characters'); return; }
+    setLoading(true);
     try {
       if (isEdit) {
         await updateBranch(branch!.id, { name: form.name, address: form.address || undefined, city: form.city || undefined, state: form.state || undefined, phone: form.phone || undefined, email: form.email || undefined, managerName: form.managerName || undefined });
@@ -61,7 +68,14 @@ function BranchModal({ branch, onClose, onSuccess }: { branch?: TenantBranch; on
       }
       onSuccess();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to save branch');
+      const message = e instanceof Error ? e.message : 'Failed to save branch';
+      // Server-side validation mirrors the client-side checks above and uses the
+      // same wording, so routing by which field the message names keeps a
+      // duplicate-key API error or other backend rejection inline too, not just
+      // the checks this form already does before ever calling the API.
+      if (/\bname\b/i.test(message)) setNameError(message);
+      else if (/\bcode\b/i.test(message)) setCodeError(message);
+      else setError(message);
     } finally { setLoading(false); }
   }
 
@@ -76,11 +90,13 @@ function BranchModal({ branch, onClose, onSuccess }: { branch?: TenantBranch; on
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1.5">Branch Name *</label>
-              <input value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="e.g. Chennai Main" className={inputCls} />
+              <input value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="e.g. Chennai Main" className={`${inputCls} ${nameError ? 'border-red-400 focus:ring-red-400' : ''}`} />
+              {nameError && <p className="text-xs text-red-600 mt-1">{nameError}</p>}
             </div>
             <div>
               <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1.5">Branch Code *</label>
-              <input value={form.code} onChange={(e) => set('code', e.target.value.toUpperCase())} placeholder="e.g. CHN-001" disabled={isEdit} className={`${inputCls} ${isEdit ? 'bg-gray-50 text-gray-400' : ''}`} />
+              <input value={form.code} onChange={(e) => set('code', e.target.value.toUpperCase())} placeholder="e.g. CHN-001" disabled={isEdit} className={`${inputCls} ${isEdit ? 'bg-gray-50 text-gray-400' : ''} ${codeError ? 'border-red-400 focus:ring-red-400' : ''}`} />
+              {codeError && <p className="text-xs text-red-600 mt-1">{codeError}</p>}
             </div>
           </div>
           <div>
