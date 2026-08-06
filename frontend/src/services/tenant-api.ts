@@ -620,6 +620,18 @@ export function addInstallment(loanId: string, dto: AddInstallmentDto) {
   );
 }
 
+/**
+ * Removes an extra installment added by mistake. Undoing a payment only reverses the
+ * payment — the row stays in the schedule until it is removed with this.
+ * Server-side: last installment only, and only when nothing has been paid against it.
+ */
+export function deleteInstallment(loanId: string, installmentId: string) {
+  return tenantFetch<{ installmentId: string; removed: boolean; installmentNumber: number }>(
+    `/api/v1/tenant/loans/${loanId}/installments/${installmentId}`,
+    { method: 'DELETE' },
+  );
+}
+
 export function undoInstallmentPayment(loanId: string, installmentId: string) {
   return tenantFetch<{ installmentId: string; status: string; paidAmount: number }>(
     `/api/v1/tenant/loans/${loanId}/installments/${installmentId}/undo-payment`,

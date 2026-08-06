@@ -5,7 +5,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
-  getWeeklyLoan, recordPayment, undoInstallmentPayment, closeLoan, reopenLoan, resolveMissedInstallment,
+  getWeeklyLoan, recordPayment, undoInstallmentPayment, deleteInstallment, closeLoan, reopenLoan, resolveMissedInstallment,
   approveLoan, rejectLoan, approveCloseLoan, assignLoanAgent, getOfficers,
   WeeklyLoanDetail, WeeklyInstallment, MissResolution, Officer,
   getTenantSession, COLLECTION_ROLES, MANAGER_ROLES,
@@ -200,6 +200,22 @@ export default function WeeklyLoanDetailPage() {
     } finally { setPaying(false); }
   }
 
+  /**
+   * Takes an extra installment back out of the schedule. Undoing a payment only
+   * reverses the payment — the row itself stays until it is removed here.
+   */
+  async function handleRemoveInstallment() {
+    if (!payInst) return;
+    setPaying(true); setPayError('');
+    try {
+      await deleteInstallment(id, payInst.id);
+      setPayInst(null);
+      await load();
+    } catch (e: unknown) {
+      setPayError((e as Error).message);
+    } finally { setPaying(false); }
+  }
+
   async function handleResolve(strategy: MissResolution | null) {
     if (!missTarget) return;
     setResolving(true); setResolveError('');
@@ -292,6 +308,7 @@ export default function WeeklyLoanDetailPage() {
   if (!loan) return null;
 
   const fin = computeFinancials(loan.installments);
+  const lastInstallmentNumber = Math.max(0, ...loan.installments.map((i) => i.number));
   const today = new Date(); today.setHours(0, 0, 0, 0);
 
   return (
@@ -449,7 +466,7 @@ export default function WeeklyLoanDetailPage() {
             const due = new Date(inst.dueDate); due.setHours(0, 0, 0, 0);
             const isPastDue = inst.status === 'OVERDUE' || (inst.status === 'PENDING' && due < today);
             const canPay = canRecord && ['PENDING', 'OVERDUE', 'PARTIALLY_PAID'].includes(inst.status) && loan.status !== 'CLOSED';
-            const canUndo = canClose && inst.status === 'PAID' && loan.status !== 'CLOSED';
+            const canUndo = canClose && inst.paid > 0 && loan.status !== 'CLOSED';
             const tooltip = buildTooltip(inst);
 
             return (
@@ -768,6 +785,23 @@ export default function WeeklyLoanDetailPage() {
 
             {payError && <p className="mt-3 text-xs text-red-600">{payError}</p>}
 
+            {payInst.paid > 0 && canClose && (
+              <button
+                onClick={() => { const t = payInst; setPayInst(null); setUndoTarget(t); }}
+                className="mt-4 w-full px-4 py-2 border border-amber-300 text-amber-700 text-sm rounded-lg hover:bg-amber-50 transition-colors"
+              >
+                Undo last payment ({fmt(payInst.paid)} recorded)
+              </button>
+            )}
+            {payInst.paid === 0 && canClose && payInst.number === lastInstallmentNumber && (
+              <button
+                onClick={handleRemoveInstallment}
+                disabled={paying}
+                className="mt-4 w-full px-4 py-2 border border-red-300 text-red-700 text-sm rounded-lg hover:bg-red-50 disabled:opacity-60 transition-colors"
+              >
+                Remove this installment from the schedule
+              </button>
+            )}
             <div className="mt-5 flex gap-3">
               <button onClick={() => setPayInst(null)}
                 className="flex-1 px-4 py-2 border border-gray-300 text-gray-600 text-sm rounded-lg hover:bg-gray-50 transition-colors">

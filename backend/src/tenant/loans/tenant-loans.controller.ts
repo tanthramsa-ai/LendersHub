@@ -223,6 +223,15 @@ export class TenantLoansController {
     return this.svc.addInstallment(req.user, id, dto);
   }
 
+  @Delete(':id/installments/:installmentId')
+  deleteInstallment(
+    @Request() req: { user: TenantJwtPayload },
+    @Param('id') id: string,
+    @Param('installmentId') installmentId: string,
+  ) {
+    return this.svc.deleteInstallment(req.user, id, installmentId);
+  }
+
   @Patch(':id/reopen')
   reopenLoan(
     @Request() req: { user: TenantJwtPayload },

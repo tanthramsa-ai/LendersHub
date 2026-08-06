@@ -1532,6 +1532,73 @@ export class TenantLoansService {
     });
   }
 
+  /**
+   * Removes an extra installment added by mistake.
+   *
+   * Undoing a payment only reverses the payment — the installment row stays in the
+   * schedule, which is why an installment added in error appears to linger. This is
+   * the way to take it back out.
+   *
+   * Restricted to the last installment on the loan: added installments are always
+   * appended (max + 1), and deleting from the middle would leave a gap in the
+   * installment_number sequence.
+   */
+  async deleteInstallment(user: TenantJwtPayload, loanId: string, installmentId: string) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) {
+      throw new ForbiddenException('Only Owner, Manager or Admin can remove an installment');
+    }
+
+    return this.withSchema(user.schemaName, async (client) => {
+      const loanRes = await client.query<{ loan_number: string; status: string }>(
+        `SELECT loan_number, status FROM loans WHERE id = $1 AND deleted_at IS NULL`,
+        [loanId],
+      );
+      if (!loanRes.rows[0]) throw new NotFoundException('Loan not found');
+      if (loanRes.rows[0].status === 'CLOSED') {
+        throw new BadRequestException('Cannot change the schedule of a closed loan');
+      }
+
+      const instRes = await client.query<{ installment_number: number; paid_amount: string }>(
+        `SELECT installment_number, paid_amount FROM installments WHERE id = $1 AND loan_id = $2`,
+        [installmentId, loanId],
+      );
+      if (!instRes.rows[0]) throw new NotFoundException('Installment not found');
+      const inst = instRes.rows[0];
+
+      if (parseFloat(inst.paid_amount) > 0) {
+        throw new BadRequestException('Undo the payment on this installment before removing it');
+      }
+
+      const paymentsRes = await client.query<{ n: string }>(
+        `SELECT COUNT(*) AS n FROM payments WHERE installment_id = $1`,
+        [installmentId],
+      );
+      if (parseInt(paymentsRes.rows[0].n) > 0) {
+        throw new BadRequestException('This installment has payment history and cannot be removed');
+      }
+
+      const lastRes = await client.query<{ max: number }>(
+        `SELECT MAX(installment_number) AS max FROM installments WHERE loan_id = $1`,
+        [loanId],
+      );
+      if (inst.installment_number !== lastRes.rows[0].max) {
+        throw new BadRequestException('Only the last installment in the schedule can be removed');
+      }
+
+      await client.query(`DELETE FROM installments WHERE id = $1`, [installmentId]);
+
+      await this.activity.record(client, user, {
+        action: 'installment.removed',
+        entityType: 'loan',
+        entityId: loanId,
+        entityLabel: loanRes.rows[0].loan_number,
+        metadata: { installmentNumber: inst.installment_number },
+      });
+
+      return { installmentId, removed: true, installmentNumber: inst.installment_number };
+    });
+  }
+
   async reopenLoan(user: TenantJwtPayload, loanId: string, dto: { comment?: string } = {}) {
     if (!MANAGER_ROLES.includes(user.role as UserRole)) {
       throw new BadRequestException('Only Owner, Manager or Admin can reopen a loan');
