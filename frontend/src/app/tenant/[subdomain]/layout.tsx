@@ -594,7 +594,7 @@ export default function TenantLayout({ children }: { children: React.ReactNode }
               )}
             </div>
 
-            {pathname === `/${subdomain}/loans/new` ? (
+            {pathname.includes(`/${subdomain}/loans/new`) ? (
               <span
                 className="hidden sm:flex items-center gap-2 px-4 py-2 text-sm font-medium text-white/70 rounded-lg cursor-default"
                 style={{ backgroundColor: BRAND, opacity: 0.6 }}
