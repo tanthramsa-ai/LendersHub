@@ -1,9 +1,9 @@
-import { Injectable, ConflictException, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
 import { USER_ADMIN_ROLES, UserRole } from '../common/roles';
-import { assertNotOnlySpecialChars } from '../common/text-validation';
+import { validateBranchFields } from './branch-validation';
 
 export interface CreateBranchDto {
   name: string;
@@ -67,10 +67,7 @@ export class TenantBranchesService {
   async create(user: TenantJwtPayload, dto: CreateBranchDto) {
     if (!USER_ADMIN_ROLES.includes(user.role as UserRole)) throw new ForbiddenException('Only Owner or Admin can manage branches');
 
-    if (!dto.name?.trim()) throw new BadRequestException('Branch name is required');
-    if (!dto.code) throw new BadRequestException('Branch code is required');
-    assertNotOnlySpecialChars(dto.name, 'Branch name');
-    assertNotOnlySpecialChars(dto.code, 'Branch code');
+    validateBranchFields(dto);
 
     return this.withSchema(user.schemaName, async (client) => {
       const existing = await client.query(`SELECT id FROM branches WHERE UPPER(code) = UPPER($1)`, [dto.code]);
@@ -115,7 +112,7 @@ export class TenantBranchesService {
 
   async update(user: TenantJwtPayload, id: string, dto: UpdateBranchDto) {
     if (!USER_ADMIN_ROLES.includes(user.role as UserRole)) throw new ForbiddenException('Only Owner or Admin can manage branches');
-    if (dto.name !== undefined) assertNotOnlySpecialChars(dto.name, 'Branch name');
+    validateBranchFields({ ...dto, requireCore: false });
 
     return this.withSchema(user.schemaName, async (client) => {
       const res = await client.query(`
