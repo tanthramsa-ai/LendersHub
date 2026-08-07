@@ -92,8 +92,7 @@ export default function MonthlyLoansPage() {
           <div className="py-16 text-center text-gray-400 text-sm">Loading…</div>
         ) : loans.length === 0 ? (
           <div className="py-16 text-center">
-            <p className="text-gray-400 text-sm mb-3">No monthly loans found</p>
-            {canCreate && <Link href={`/${subdomain}/monthly-loans/new`} className="text-sm text-blue-600 hover:underline">Create first monthly loan</Link>}
+            <p className="text-gray-400 text-sm">No monthly loans found</p>
           </div>
         ) : (
           <>

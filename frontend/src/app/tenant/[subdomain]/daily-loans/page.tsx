@@ -110,8 +110,7 @@ export default function DailyLoansPage() {
           <div className="py-16 text-center text-gray-400 text-sm">Loading…</div>
         ) : loans.length === 0 ? (
           <div className="py-16 text-center">
-            <p className="text-gray-400 text-sm mb-3">No daily loans found</p>
-            {canCreate && <Link href={`/${subdomain}/daily-loans/new`} className="text-sm text-blue-600 hover:underline">Create first daily loan</Link>}
+            <p className="text-gray-400 text-sm">No daily loans found</p>
           </div>
         ) : (
           <>

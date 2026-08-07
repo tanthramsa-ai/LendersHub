@@ -91,8 +91,7 @@ export default function TermLoansPage() {
           <div className="py-16 text-center text-gray-400 text-sm">Loading…</div>
         ) : loans.length === 0 ? (
           <div className="py-16 text-center">
-            <p className="text-gray-400 text-sm mb-3">No loans found</p>
-            {canCreate && <Link href={`/${subdomain}/loans/new`} className="text-sm text-blue-600 hover:underline">Create first loan</Link>}
+            <p className="text-gray-400 text-sm">No loans found</p>
           </div>
         ) : (
           <>
