@@ -89,6 +89,10 @@ const LOANS_GROUP_ITEMS: NavItem[] = [
   },
 ];
 
+// Loan-type list hrefs that each have their own /new creation page -- the header's
+// global "New Loan" button should go inert on any of them, not just Term Loan's.
+const LOAN_CREATE_HREFS = ['loans', 'weekly-loans', 'daily-loans', 'monthly-loans', 'agent-risk-loans'];
+
 // Rendered before the collapsible Loans group.
 const NAV_TOP: NavItem[] = [
   {
@@ -594,7 +598,7 @@ export default function TenantLayout({ children }: { children: React.ReactNode }
               )}
             </div>
 
-            {pathname.includes(`/${subdomain}/loans/new`) ? (
+            {LOAN_CREATE_HREFS.some((href) => pathname.includes(`/${subdomain}/${href}/new`)) ? (
               <span
                 className="hidden sm:flex items-center gap-2 px-4 py-2 text-sm font-medium text-white/70 rounded-lg cursor-default"
                 style={{ backgroundColor: BRAND, opacity: 0.6 }}
