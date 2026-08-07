@@ -19,8 +19,21 @@ export function AddInstallmentModal({ loanId, onCancel, onAdded }: Props) {
   const [totalAmount, setTotalAmount] = useState('');
   const [principalAmount, setPrincipalAmount] = useState('');
   const [interestAmount, setInterestAmount] = useState('');
+  // Whether the user has directly edited Principal/Interest -- once they have, stop
+  // overwriting their value when Total changes. Save always sends the same default
+  // (unset Principal -> whole total, unset Interest -> 0) either way; this only
+  // controls whether that default is visibly mirrored into the field as you type,
+  // so what gets saved isn't a hidden assumption revealed only after the fact.
+  const [principalTouched, setPrincipalTouched] = useState(false);
+  const [interestTouched, setInterestTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  function handleTotalChange(v: string) {
+    setTotalAmount(v);
+    if (!principalTouched) setPrincipalAmount(v);
+    if (!interestTouched) setInterestAmount(v ? '0' : '');
+  }
 
   const canSave = !!dueDate && !!totalAmount && Number(totalAmount) > 0 && !saving;
 
@@ -73,37 +86,41 @@ export function AddInstallmentModal({ loanId, onCancel, onAdded }: Props) {
               min="0"
               step="0.01"
               value={totalAmount}
-              onChange={(e) => setTotalAmount(e.target.value)}
+              onChange={(e) => handleTotalChange(e.target.value)}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
               placeholder="0.00"
             />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1">Principal (optional)</label>
+              <label className="block text-xs font-semibold text-gray-500 mb-1">Principal</label>
               <input
                 type="number"
                 min="0"
                 step="0.01"
                 value={principalAmount}
-                onChange={(e) => setPrincipalAmount(e.target.value)}
+                onChange={(e) => { setPrincipalAmount(e.target.value); setPrincipalTouched(true); }}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 placeholder="0.00"
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1">Interest (optional)</label>
+              <label className="block text-xs font-semibold text-gray-500 mb-1">Interest</label>
               <input
                 type="number"
                 min="0"
                 step="0.01"
                 value={interestAmount}
-                onChange={(e) => setInterestAmount(e.target.value)}
+                onChange={(e) => { setInterestAmount(e.target.value); setInterestTouched(true); }}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 placeholder="0.00"
               />
             </div>
           </div>
+          <p className="text-[11px] text-gray-400 -mt-1">
+            Principal and interest default to matching the total amount (all principal,
+            no interest) — adjust them if this installment should be split differently.
+          </p>
         </div>
 
         {error && <p className="text-sm text-red-600">{error}</p>}
