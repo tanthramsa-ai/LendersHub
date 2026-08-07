@@ -95,8 +95,7 @@ export default function WeeklyLoansPage() {
           <div className="py-16 text-center text-gray-400 text-sm">Loading…</div>
         ) : loans.length === 0 ? (
           <div className="py-16 text-center">
-            <p className="text-gray-400 text-sm mb-3">No weekly loans found</p>
-            {canCreate && <Link href={`/${subdomain}/weekly-loans/new`} className="text-sm text-blue-600 hover:underline">Create first weekly loan</Link>}
+            <p className="text-gray-400 text-sm">No weekly loans found</p>
           </div>
         ) : (
           <>
