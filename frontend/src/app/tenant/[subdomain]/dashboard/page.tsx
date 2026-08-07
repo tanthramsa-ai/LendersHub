@@ -316,7 +316,7 @@ export default function TenantDashboardPage() {
             </Link>
             {canCreateLoan && (
               <Link href={`/tenant/${subdomain}/loans/new`} className="text-xs font-medium px-3 py-1.5 rounded-lg text-white transition-colors" style={{ backgroundColor: BRAND }}>
-                + New Loan
+                + New Term Loan
               </Link>
             )}
           </div>
