@@ -59,12 +59,28 @@ const COLLECTION_STATUS_BADGE: Record<string, { label: string; cls: string }> = 
   CANCELLED: { label: '✕ Cancelled', cls: 'bg-gray-200 text-gray-500' },
 };
 
-function StatCard({ label, value, accent }: { label: string; value: string | number; accent?: string }) {
+// The status a KPI card filters the grid to. 'ALL' clears the filter
+// (Expected has no single status — it's every item in range).
+type KpiFilter = 'ALL' | 'SCHEDULED' | 'COLLECTED' | 'CONFIRMED' | 'NOT_CONFIRMED';
+
+function StatCard({
+  label, value, accent, filter, active, onSelect,
+}: {
+  label: string; value: string | number; accent?: string;
+  filter: KpiFilter; active: boolean; onSelect: (f: KpiFilter) => void;
+}) {
   return (
-    <div className="bg-white rounded-lg border border-gray-100 shadow-sm px-2.5 py-2">
+    <button
+      type="button"
+      onClick={() => onSelect(filter)}
+      aria-pressed={active}
+      className={`text-left bg-white rounded-lg border shadow-sm px-2.5 py-2 transition-colors ${
+        active ? 'border-blue-500 ring-2 ring-blue-100' : 'border-gray-100 hover:border-gray-200'
+      }`}
+    >
       <p className="text-[10px] text-gray-400 truncate">{label}</p>
       <p className="text-sm font-bold mt-0.5 truncate" style={accent ? { color: accent } : undefined}>{value}</p>
-    </div>
+    </button>
   );
 }
 
@@ -183,6 +199,7 @@ export default function CollectionsCalendarPage() {
 
   const [view, setView] = useState<CalendarView>('day');
   const [date, setDate] = useState(todayStr());
+  const [kpiFilter, setKpiFilter] = useState<KpiFilter>('ALL');
   const [items, setItems] = useState<CalendarCollectionItem[]>([]);
   const [summary, setSummary] = useState<CalendarSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -231,6 +248,21 @@ export default function CollectionsCalendarPage() {
     setLoading(true);
     setDate(d);
   }
+
+  // Toggling the same card again clears the filter, matching the "Expected"
+  // (ALL) card's own behavior.
+  function toggleKpiFilter(f: KpiFilter) {
+    setKpiFilter((prev) => (prev === f ? 'ALL' : f));
+  }
+
+  // Mirrors the backend's own definitions exactly (tenant-collections.service.ts
+  // getCalendarSummary), so a card's count always matches what the grid shows
+  // after filtering to it.
+  const filteredItems = items.filter((it) => {
+    if (kpiFilter === 'ALL') return true;
+    if (kpiFilter === 'NOT_CONFIRMED') return it.collectionStatus !== 'CONFIRMED';
+    return it.collectionStatus === kpiFilter;
+  });
 
   async function openCollection(installmentId: string) {
     setOpenId(installmentId);
@@ -328,16 +360,19 @@ export default function CollectionsCalendarPage() {
         </div>
       </div>
 
-      {/* Summary (spec §10) — authoritative backend totals, not UI-state math */}
+      {/* Summary (spec §10) — authoritative backend totals, not UI-state math.
+          Each card also acts as a filter: click one to narrow the grid below
+          to exactly the collections behind that number; click again (or
+          "Expected") to clear it. */}
       {summary && (
         <div className="grid grid-cols-4 sm:grid-cols-4 lg:grid-cols-7 gap-2">
-          <StatCard label="Scheduled" value={summary.scheduled} />
-          <StatCard label="Collected" value={summary.collected} accent="#D97706" />
-          <StatCard label="Confirmed" value={summary.confirmed} accent="#10B981" />
-          <StatCard label="Pending" value={summary.pending} accent={ACCENT} />
-          <StatCard label="Expected" value={fmt(summary.amountExpected)} />
-          <StatCard label="Collected ₹" value={fmt(summary.amountCollected)} accent="#D97706" />
-          <StatCard label="Confirmed ₹" value={fmt(summary.amountConfirmed)} accent="#10B981" />
+          <StatCard label="Scheduled" value={summary.scheduled} filter="SCHEDULED" active={kpiFilter === 'SCHEDULED'} onSelect={toggleKpiFilter} />
+          <StatCard label="Collected" value={summary.collected} accent="#D97706" filter="COLLECTED" active={kpiFilter === 'COLLECTED'} onSelect={toggleKpiFilter} />
+          <StatCard label="Confirmed" value={summary.confirmed} accent="#10B981" filter="CONFIRMED" active={kpiFilter === 'CONFIRMED'} onSelect={toggleKpiFilter} />
+          <StatCard label="Pending" value={summary.pending} accent={ACCENT} filter="NOT_CONFIRMED" active={kpiFilter === 'NOT_CONFIRMED'} onSelect={toggleKpiFilter} />
+          <StatCard label="Expected" value={fmt(summary.amountExpected)} filter="ALL" active={kpiFilter === 'ALL'} onSelect={toggleKpiFilter} />
+          <StatCard label="Collected ₹" value={fmt(summary.amountCollected)} accent="#D97706" filter="COLLECTED" active={kpiFilter === 'COLLECTED'} onSelect={toggleKpiFilter} />
+          <StatCard label="Confirmed ₹" value={fmt(summary.amountConfirmed)} accent="#10B981" filter="CONFIRMED" active={kpiFilter === 'CONFIRMED'} onSelect={toggleKpiFilter} />
         </div>
       )}
 
@@ -349,10 +384,12 @@ export default function CollectionsCalendarPage() {
           <p className="px-5 py-10 text-center text-sm text-gray-400">Loading…</p>
         ) : error ? (
           <p className="px-5 py-10 text-center text-sm text-red-600">{error}</p>
-        ) : items.length === 0 ? (
-          <p className="px-5 py-10 text-center text-sm text-gray-400">No collections scheduled in this range.</p>
+        ) : filteredItems.length === 0 ? (
+          <p className="px-5 py-10 text-center text-sm text-gray-400">
+            {kpiFilter === 'ALL' ? 'No collections scheduled in this range.' : 'Nothing matches this filter in this range.'}
+          </p>
         ) : (
-          <CollectionGrid summary={summary} items={items} onOpen={openCollection} />
+          <CollectionGrid summary={summary} items={filteredItems} onOpen={openCollection} />
         )}
       </div>
 
