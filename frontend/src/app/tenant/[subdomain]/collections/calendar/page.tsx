@@ -146,12 +146,23 @@ function CollectionGrid({
                         className="w-full text-left rounded-lg border p-2.5 hover:shadow-sm transition-shadow"
                         style={{ borderColor: `${CELL_ACCENT[it.collectionStatus]}55`, backgroundColor: `${CELL_ACCENT[it.collectionStatus]}0D` }}
                       >
-                        <p className="text-xs font-semibold text-gray-900">Installment {it.installmentNumber}</p>
-                        <p className="text-xs text-gray-600 mt-0.5">{fmt(it.scheduledAmount)}</p>
-                        <div className="flex flex-wrap gap-1 mt-1">
-                          <span className={`text-[9px] font-bold px-1 py-0.5 rounded ${DUE_BUCKET_BADGE[it.dueBucket].cls}`}>{DUE_BUCKET_BADGE[it.dueBucket].label}</span>
-                          <span className={`text-[9px] font-bold px-1 py-0.5 rounded ${COLLECTION_STATUS_BADGE[it.collectionStatus].cls}`}>{COLLECTION_STATUS_BADGE[it.collectionStatus].label}</span>
-                        </div>
+                        <p className="text-xs font-semibold text-gray-900 truncate">{it.customerName}</p>
+                        <p className="text-xs text-gray-600 mt-0.5">Installment {it.installmentNumber} · {fmt(it.scheduledAmount)}</p>
+                        {/* Upcoming/Due-today is redundant with the column's own date, and
+                            Scheduled is the default no-op state — only flag what's actually
+                            informative here: overdue-relative-to-today, and real status
+                            changes (Collected/Confirmed). Full status still shows in the
+                            detail drawer. */}
+                        {(it.dueBucket === 'OVERDUE' || it.collectionStatus !== 'SCHEDULED') && (
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {it.dueBucket === 'OVERDUE' && (
+                              <span className={`text-[9px] font-bold px-1 py-0.5 rounded ${DUE_BUCKET_BADGE.OVERDUE.cls}`}>{DUE_BUCKET_BADGE.OVERDUE.label}</span>
+                            )}
+                            {it.collectionStatus !== 'SCHEDULED' && (
+                              <span className={`text-[9px] font-bold px-1 py-0.5 rounded ${COLLECTION_STATUS_BADGE[it.collectionStatus].cls}`}>{COLLECTION_STATUS_BADGE[it.collectionStatus].label}</span>
+                            )}
+                          </div>
+                        )}
                         {it.pendingInstallments > 0 && (
                           <p className="text-[10px] text-red-600 font-semibold mt-1">
                             Pending {it.pendingInstallments} · Total {fmt(it.totalAmountDue)}
