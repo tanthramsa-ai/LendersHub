@@ -61,9 +61,9 @@ const COLLECTION_STATUS_BADGE: Record<string, { label: string; cls: string }> = 
 
 function StatCard({ label, value, accent }: { label: string; value: string | number; accent?: string }) {
   return (
-    <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-3">
-      <p className="text-xs text-gray-400">{label}</p>
-      <p className="text-lg font-bold mt-0.5" style={accent ? { color: accent } : undefined}>{value}</p>
+    <div className="bg-white rounded-lg border border-gray-100 shadow-sm px-2.5 py-2">
+      <p className="text-[10px] text-gray-400 truncate">{label}</p>
+      <p className="text-sm font-bold mt-0.5 truncate" style={accent ? { color: accent } : undefined}>{value}</p>
     </div>
   );
 }
@@ -108,9 +108,6 @@ function CollectionGrid({
       <table className="w-full border-collapse text-sm min-w-[640px]">
         <thead>
           <tr>
-            <th className="sticky left-0 bg-white z-10 text-left text-xs font-semibold text-gray-500 px-4 py-3 border-b border-gray-100 w-48">
-              Customer
-            </th>
             {dates.map((d) => {
               const isToday = d === today;
               const dt = new Date(`${d}T00:00:00Z`);
@@ -131,10 +128,6 @@ function CollectionGrid({
         <tbody>
           {rows.map((row) => (
             <tr key={row.loanId} className="border-b border-gray-50 align-top">
-              <td className="sticky left-0 bg-white z-10 px-4 py-3 border-r border-gray-100">
-                <p className="font-semibold text-gray-900 text-sm truncate">{row.customerName}</p>
-                <p className="text-xs text-gray-400 font-mono">{row.loanNumber}</p>
-              </td>
               {dates.map((d) => {
                 const it = row.byDate.get(d);
                 const isToday = d === today;
@@ -188,8 +181,7 @@ export default function CollectionsCalendarPage() {
   const role = session?.user.role ?? 'CUSTOMER';
   const isManager = MANAGER_ROLES.includes(role);
 
-  // Spec: default view is Week.
-  const [view, setView] = useState<CalendarView>('week');
+  const [view, setView] = useState<CalendarView>('day');
   const [date, setDate] = useState(todayStr());
   const [items, setItems] = useState<CalendarCollectionItem[]>([]);
   const [summary, setSummary] = useState<CalendarSummary | null>(null);
@@ -338,7 +330,7 @@ export default function CollectionsCalendarPage() {
 
       {/* Summary (spec §10) — authoritative backend totals, not UI-state math */}
       {summary && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+        <div className="grid grid-cols-4 sm:grid-cols-4 lg:grid-cols-7 gap-2">
           <StatCard label="Scheduled" value={summary.scheduled} />
           <StatCard label="Collected" value={summary.collected} accent="#D97706" />
           <StatCard label="Confirmed" value={summary.confirmed} accent="#10B981" />
