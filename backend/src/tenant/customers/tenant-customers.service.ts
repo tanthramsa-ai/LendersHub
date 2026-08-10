@@ -96,10 +96,8 @@ export class TenantCustomersService {
       const filterParams: unknown[] = [];
       let idx = 1;
 
-      if (user.role === 'AGENT') {
-        conditions.push(`c.id IN (SELECT DISTINCT customer_id FROM loans WHERE loan_officer_id = $${idx++})`);
-        filterParams.push(user.sub);
-      }
+      // Agents see every customer, not just the ones on their own loans — their
+      // *collections* stay scoped to them, but the customer directory does not.
       if (branchId) {
         conditions.push(`c.branch_id = $${idx++}`);
         filterParams.push(branchId);

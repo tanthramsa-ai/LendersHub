@@ -9,8 +9,30 @@ export class TenantCollectionsController {
   constructor(private svc: TenantCollectionsService) {}
 
   @Get('stats')
-  stats(@Req() req: { user: TenantJwtPayload }) {
-    return this.svc.getStats(req.user);
+  stats(@Req() req: { user: TenantJwtPayload }, @Query('period') period?: string) {
+    return this.svc.getStats(req.user, period);
+  }
+
+  @Get('reminder')
+  reminder(
+    @Req() req: { user: TenantJwtPayload },
+    @Query('period') period = 'D',
+    @Query('page') page = '1',
+    @Query('limit') limit = '20',
+    @Query('search') search?: string,
+  ) {
+    return this.svc.getReminder(req.user, period, parseInt(page), parseInt(limit), search);
+  }
+
+  @Get('pending')
+  pending(
+    @Req() req: { user: TenantJwtPayload },
+    @Query('period') period = 'D',
+    @Query('page') page = '1',
+    @Query('limit') limit = '20',
+    @Query('search') search?: string,
+  ) {
+    return this.svc.getPending(req.user, period, parseInt(page), parseInt(limit), search);
   }
 
   @Get('today')
