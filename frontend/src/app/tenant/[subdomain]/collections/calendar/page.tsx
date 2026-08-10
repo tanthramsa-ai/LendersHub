@@ -364,7 +364,12 @@ export default function CollectionsCalendarPage() {
           <div className="relative bg-white w-full max-w-md h-full overflow-y-auto shadow-2xl p-6 space-y-5">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-bold text-gray-900">Collection</h2>
-              <button onClick={closeDrawer} className="text-gray-400 hover:text-gray-600 text-sm">✕ Close</button>
+              <button
+                onClick={closeDrawer}
+                className="flex items-center gap-1.5 text-sm font-semibold text-white bg-gray-900 hover:bg-black px-3 py-1.5 rounded-lg transition-colors"
+              >
+                ✕ Close
+              </button>
             </div>
 
             {detailLoading ? (
