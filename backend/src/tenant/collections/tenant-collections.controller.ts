@@ -86,6 +86,54 @@ export class TenantCollectionsController {
     return this.svc.recordPayment(req.user, installmentId, dto);
   }
 
+  // ── Collection Calendar workflow ────────────────────────────────────────────
+
+  @Get('calendar-items')
+  calendarItems(
+    @Req() req: { user: TenantJwtPayload },
+    @Query('view') view: 'day' | 'week' | 'month' = 'week',
+    @Query('date') date?: string,
+  ) {
+    return this.svc.getCalendarItems(req.user, view, date ?? new Date().toISOString().slice(0, 10));
+  }
+
+  @Get('calendar-summary')
+  calendarSummary(
+    @Req() req: { user: TenantJwtPayload },
+    @Query('view') view: 'day' | 'week' | 'month' = 'week',
+    @Query('date') date?: string,
+  ) {
+    return this.svc.getCalendarSummary(req.user, view, date ?? new Date().toISOString().slice(0, 10));
+  }
+
+  @Get('detail/:installmentId')
+  collectionDetail(
+    @Req() req: { user: TenantJwtPayload },
+    @Param('installmentId') installmentId: string,
+  ) {
+    return this.svc.getCollectionDetail(req.user, installmentId);
+  }
+
+  @Post(':installmentId/collect')
+  @HttpCode(HttpStatus.OK)
+  collect(
+    @Req() req: { user: TenantJwtPayload },
+    @Param('installmentId') installmentId: string,
+    @Body() dto: RecordCollectionPaymentDto & { idempotencyKey?: string },
+  ) {
+    return this.svc.collectPayment(req.user, installmentId, dto);
+  }
+
+  @Post('payments/:paymentId/confirm')
+  @HttpCode(HttpStatus.OK)
+  confirm(
+    @Req() req: { user: TenantJwtPayload },
+    @Param('paymentId') paymentId: string,
+    @Body('confirmedAmount') confirmedAmount?: number,
+  ) {
+    return this.svc.confirmPayment(req.user, paymentId, confirmedAmount);
+  }
+
   @Patch(':installmentId/assign')
   assign(
     @Req() req: { user: TenantJwtPayload },
