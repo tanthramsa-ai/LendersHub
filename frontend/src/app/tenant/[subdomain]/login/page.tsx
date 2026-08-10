@@ -21,6 +21,7 @@ import {
   tenantLoginWithEmail,
   verifyLoginOtp,
   saveTenantSession,
+  postLoginPath,
   LoginResponse,
 } from '@/services/tenant-api';
 
@@ -82,7 +83,7 @@ export default function TenantLoginPage() {
         setStep('otp');
       } else {
         saveTenantSession(res as LoginResponse);
-        router.push(`/${subdomain}/dashboard`);
+        router.push(postLoginPath(subdomain, (res as LoginResponse).user.role));
       }
     } catch (err) {
       setError((err as Error).message);
@@ -98,7 +99,7 @@ export default function TenantLoginPage() {
     try {
       const res = await verifyLoginOtp(tempToken, otp);
       saveTenantSession(res);
-      router.push(`/${subdomain}/dashboard`);
+      router.push(postLoginPath(subdomain, res.user.role));
     } catch (err) {
       setError((err as Error).message);
     } finally {

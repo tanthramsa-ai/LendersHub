@@ -113,6 +113,20 @@ const NAV_TOP: NavItem[] = [
   },
 ];
 
+// Collection Agents land on their calendar, not the dashboard — this item
+// replaces "Dashboard" at the top of their sidebar. Not part of NAV_TOP/
+// ALL_NAV_ITEMS: the route guard already permits AGENT on /collections/*
+// via the existing "Collections" entry below, so this is purely a rendering
+// choice, not a new permission.
+const COLLECTION_CALENDAR_NAV: NavItem = {
+  href: 'collections/calendar', label: 'Collection Calendar', roles: ['AGENT'],
+  icon: (
+    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+    </svg>
+  ),
+};
+
 // Rendered after the collapsible Loans group.
 const NAV_BOTTOM: NavItem[] = [
   {
@@ -349,7 +363,10 @@ export default function TenantLayout({ children }: { children: React.ReactNode }
 
         {/* Nav */}
         <nav className="flex-1 px-3 py-5 space-y-0.5 overflow-y-auto">
-          {NAV_TOP.filter((item) => item.roles.includes(user.role as UserRole)).map((item) => {
+          {(user.role === 'AGENT'
+            ? [COLLECTION_CALENDAR_NAV, ...NAV_TOP.filter((item) => item.href !== 'dashboard')]
+            : NAV_TOP.filter((item) => item.roles.includes(user.role as UserRole))
+          ).map((item) => {
             const active = isActive(item.href);
             return (
               <Link

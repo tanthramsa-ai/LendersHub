@@ -146,6 +146,16 @@ export function getTenantSession(): { user: TenantUser; tenant: TenantInfo } | n
   return { user: JSON.parse(user) as TenantUser, tenant: JSON.parse(tenant) as TenantInfo };
 }
 
+/**
+ * Where a signed-in user should land. Collection Agents go straight to their
+ * calendar (spec: "Login -> Collection Calendar, not a generic dashboard") —
+ * everyone else keeps the existing dashboard landing.
+ */
+export function postLoginPath(subdomain: string, role: UserRole): string {
+  if (role === 'AGENT') return `/${subdomain}/collections/calendar`;
+  return `/${subdomain}/dashboard`;
+}
+
 export function clearTenantSession() {
   localStorage.removeItem('tenant_token');
   localStorage.removeItem('tenant_user');
@@ -1261,6 +1271,88 @@ export function getCollectionsByDate(date: string, page = 1, limit = 20, search?
   if (search) params.set('search', search);
   return tenantFetch<{ data: CollectionItem[]; total: number; page: number; limit: number }>(
     `/api/v1/tenant/collections/by-date?${params}`,
+  );
+}
+
+// ── Collection Calendar workflow (SCHEDULED -> COLLECTED -> CONFIRMED) ──────
+
+export type CalendarView = 'day' | 'week' | 'month';
+export type CollectionWorkflowStatus = 'SCHEDULED' | 'COLLECTED' | 'CONFIRMED' | 'CANCELLED';
+export type DueBucket = 'UPCOMING' | 'DUE_TODAY' | 'OVERDUE';
+
+export interface CalendarCollectionItem {
+  installmentId: string;
+  installmentNumber: number;
+  dueDate: string;
+  loanId: string;
+  loanNumber: string;
+  customerId: string;
+  customerName: string;
+  phone: string;
+  scheduledAmount: number;
+  installmentStatus: string;
+  collectionStatus: CollectionWorkflowStatus;
+  pendingInstallments: number;
+  totalInstallmentsDue: number;
+  totalAmountDue: number;
+  dueBucket: DueBucket;
+}
+
+export function getCalendarItems(view: CalendarView, date: string) {
+  return tenantFetch<{ view: CalendarView; start: string; end: string; items: CalendarCollectionItem[] }>(
+    `/api/v1/tenant/collections/calendar-items?view=${view}&date=${date}`,
+  );
+}
+
+export interface CalendarSummary {
+  view: CalendarView; start: string; end: string;
+  scheduled: number; collected: number; confirmed: number; pending: number;
+  amountExpected: number; amountCollected: number; amountConfirmed: number;
+}
+
+export function getCalendarSummary(view: CalendarView, date: string) {
+  return tenantFetch<CalendarSummary>(`/api/v1/tenant/collections/calendar-summary?view=${view}&date=${date}`);
+}
+
+export interface CollectionHistoryEntry {
+  id: string; amount: number; method: string; referenceNumber: string | null;
+  paymentDate: string; createdAt: string; collectionStatus: CollectionWorkflowStatus;
+  confirmedAmount: number | null; confirmedAt: string | null;
+  collectedByName: string | null; confirmedByName: string | null;
+}
+
+export interface CollectionDetail {
+  installment: {
+    id: string; installmentNumber: number; dueDate: string; scheduledAmount: number;
+    paidAmount: number; balance: number; installmentStatus: string;
+    collectionStatus: CollectionWorkflowStatus; previousInstallmentStatus: string | null;
+  };
+  loan: { id: string; loanNumber: string; status: string; principal: number; interestRate: number };
+  customer: { id: string; name: string; phone: string; locality: string | null; city: string | null };
+  pendingInstallments: number;
+  totalInstallmentsDue: number;
+  totalAmountDue: number;
+  history: CollectionHistoryEntry[];
+}
+
+export function getCollectionDetail(installmentId: string) {
+  return tenantFetch<CollectionDetail>(`/api/v1/tenant/collections/detail/${installmentId}`);
+}
+
+export function collectPayment(
+  installmentId: string,
+  dto: { amount: number; paymentMethod: string; referenceNumber?: string; paymentDate?: string; idempotencyKey?: string },
+) {
+  return tenantFetch<{ success: true; paymentId: string; collectionStatus: 'COLLECTED'; duplicate?: boolean }>(
+    `/api/v1/tenant/collections/${installmentId}/collect`,
+    { method: 'POST', body: JSON.stringify(dto) },
+  );
+}
+
+export function confirmCollection(paymentId: string, confirmedAmount?: number) {
+  return tenantFetch<{ success: true; paymentId: string; collectionStatus: 'CONFIRMED'; alreadyConfirmed?: boolean }>(
+    `/api/v1/tenant/collections/payments/${paymentId}/confirm`,
+    { method: 'POST', body: JSON.stringify({ confirmedAmount }) },
   );
 }
 

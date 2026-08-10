@@ -2,7 +2,7 @@ import { Injectable, NotFoundException, BadRequestException, ForbiddenException 
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
-import { FIELD_ROLES } from '../common/roles';
+import { FIELD_ROLES, MANAGER_ROLES, UserRole } from '../common/roles';
 
 export type CollectionPeriod = 'D' | 'W' | 'M';
 
@@ -22,6 +22,7 @@ export class TenantCollectionsService {
 
   // In-memory cache — avoids repeated ALTER TABLE calls per schema per process lifetime
   private migratedSchemas = new Set<string>();
+  private workflowMigratedSchemas = new Set<string>();
 
   private async withSchema<T>(
     schemaName: string,
@@ -76,6 +77,71 @@ export class TenantCollectionsService {
       `ALTER TABLE "${schemaName}".installments ADD COLUMN IF NOT EXISTS assigned_to UUID`,
     );
     this.migratedSchemas.add(schemaName);
+  }
+
+  /**
+   * Collection workflow (SCHEDULED -> COLLECTED -> CONFIRMED) rides on the
+   * existing payments row rather than a parallel financial model: a payment IS
+   * the collection transaction. SCHEDULED is derived (an installment with no
+   * live payment), so only COLLECTED/CONFIRMED/CANCELLED are ever stored.
+   *
+   * Confirmation never overwrites the agent's original figures — amount stays
+   * put and confirmed_amount is recorded alongside it, with the transition
+   * written to collection_audit.
+   */
+  private async ensureCollectionWorkflow(schemaName: string): Promise<void> {
+    if (this.workflowMigratedSchemas.has(schemaName)) return;
+    const q = `"${schemaName}"`;
+    const stmts = [
+      `ALTER TABLE ${q}.payments ADD COLUMN IF NOT EXISTS collection_status TEXT NOT NULL DEFAULT 'COLLECTED'`,
+      `ALTER TABLE ${q}.payments ADD COLUMN IF NOT EXISTS confirmed_by UUID REFERENCES ${q}.users (id) ON DELETE SET NULL`,
+      `ALTER TABLE ${q}.payments ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMPTZ`,
+      `ALTER TABLE ${q}.payments ADD COLUMN IF NOT EXISTS confirmed_amount NUMERIC(14,2)`,
+      `ALTER TABLE ${q}.payments ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ`,
+      // Idempotency: a retried "Collect" submission reuses the key and is
+      // absorbed instead of double-crediting the borrower.
+      `ALTER TABLE ${q}.payments ADD COLUMN IF NOT EXISTS idempotency_key TEXT`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS uq_${schemaName}_payments_idem
+         ON ${q}.payments (idempotency_key) WHERE idempotency_key IS NOT NULL`,
+      `CREATE INDEX IF NOT EXISTS idx_${schemaName}_payments_collection_status
+         ON ${q}.payments (collection_status)`,
+      `CREATE TABLE IF NOT EXISTS ${q}."collection_audit" (
+         id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+         payment_id    UUID        REFERENCES ${q}.payments (id) ON DELETE SET NULL,
+         installment_id UUID       REFERENCES ${q}.installments (id) ON DELETE SET NULL,
+         loan_id       UUID        NOT NULL REFERENCES ${q}.loans (id) ON DELETE CASCADE,
+         from_status   TEXT,
+         to_status     TEXT        NOT NULL,
+         amount        NUMERIC(14,2),
+         performed_by  UUID        REFERENCES ${q}.users (id) ON DELETE SET NULL,
+         performed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+         reference     TEXT
+       )`,
+      `CREATE INDEX IF NOT EXISTS idx_${schemaName}_collection_audit_loan
+         ON ${q}."collection_audit" (loan_id)`,
+    ];
+    for (const s of stmts) await this.prisma.$executeRawUnsafe(s);
+    this.workflowMigratedSchemas.add(schemaName);
+  }
+
+  private async recordAudit(
+    client: import('pg').PoolClient,
+    entry: {
+      paymentId?: string | null; installmentId?: string | null; loanId: string;
+      fromStatus: string | null; toStatus: string; amount?: number | null;
+      performedBy: string; reference?: string | null;
+    },
+  ): Promise<void> {
+    await client.query(
+      `INSERT INTO collection_audit
+         (payment_id, installment_id, loan_id, from_status, to_status, amount, performed_by, reference)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [
+        entry.paymentId ?? null, entry.installmentId ?? null, entry.loanId,
+        entry.fromStatus, entry.toStatus, entry.amount ?? null,
+        entry.performedBy, entry.reference ?? null,
+      ],
+    );
   }
 
   async getStats(user: TenantJwtPayload, period?: string) {
@@ -531,6 +597,460 @@ export class TenantCollectionsService {
         totalAmount: parseFloat(countRes.rows[0].amount),
         period: p, end, page, limit,
       };
+    });
+  }
+
+  // ── Collection workflow (calendar + collect + confirm) ──────────────────────
+
+  /**
+   * Pending-installment accumulation (spec §8). Installments are pre-generated
+   * per loan at disbursement regardless of frequency (daily/weekly/monthly/...),
+   * so "how many unpaid installments came due before this one" is a plain
+   * schedule query — no frequency-specific branching, and no fabricated rows.
+   */
+  private async pendingFor(
+    client: import('pg').PoolClient,
+    loanId: string,
+    beforeDueDate: string,
+  ): Promise<{ count: number; amount: number }> {
+    const res = await client.query<{ count: string; amount: string }>(
+      `SELECT COUNT(*) AS count, COALESCE(SUM(total_amount - paid_amount), 0) AS amount
+         FROM installments
+        WHERE loan_id = $1 AND due_date < $2 AND status IN ('PENDING','PARTIALLY_PAID','OVERDUE')`,
+      [loanId, beforeDueDate],
+    );
+    return { count: parseInt(res.rows[0].count), amount: parseFloat(res.rows[0].amount) };
+  }
+
+  /**
+   * Derives the collection workflow status for an installment from its most
+   * recent payment. No live payment => SCHEDULED (never stored). This keeps
+   * SCHEDULED/COLLECTED/CONFIRMED off the installment row entirely, so the
+   * installment's own PENDING/PARTIALLY_PAID/PAID status (spec §6) is untouched.
+   */
+  private collectionStatusExpr(alias = 'i'): string {
+    return `COALESCE(
+      (SELECT p.collection_status FROM payments p
+        WHERE p.installment_id = ${alias}.id AND p.cancelled_at IS NULL
+        ORDER BY p.created_at DESC LIMIT 1),
+      'SCHEDULED'
+    )`;
+  }
+
+  private rangeForView(view: 'day' | 'week' | 'month', date: string): { start: string; end: string } {
+    const d = new Date(`${date}T00:00:00Z`);
+    if (view === 'day') return { start: date, end: date };
+    if (view === 'week') {
+      // Monday-start week containing `date`.
+      const dow = (d.getUTCDay() + 6) % 7; // 0=Mon
+      const start = new Date(d); start.setUTCDate(d.getUTCDate() - dow);
+      const end = new Date(start); end.setUTCDate(start.getUTCDate() + 6);
+      return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
+    }
+    const start = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+    const end = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
+    return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
+  }
+
+  /** Collection Calendar — the agent's (or, for staff/managers, everyone's) items for a Day/Week/Month range. */
+  async getCalendarItems(user: TenantJwtPayload, view: 'day' | 'week' | 'month', date: string) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new BadRequestException('date must be YYYY-MM-DD');
+    await this.ensureAssignedTo(user.schemaName);
+    await this.ensureCollectionWorkflow(user.schemaName);
+    const { start, end } = this.rangeForView(view, date);
+    return this.withSchema(user.schemaName, async (client) => {
+      const params: unknown[] = [start, end];
+      const selfFilter = this.selfScope(user, params);
+
+      const res = await client.query(
+        // due_date cast to text: the pg driver returns DATE columns as JS Date
+        // objects, and comparing those against the plain 'YYYY-MM-DD' `today`
+        // string below silently does the wrong thing (Date > string coerces via
+        // Date#toString(), not by calendar day) — cast keeps it a plain string
+        // all the way through.
+        `SELECT i.id, i.installment_number, i.due_date::text AS due_date, i.total_amount, i.paid_amount,
+                i.total_amount - i.paid_amount AS balance, i.status AS installment_status,
+                ${this.collectionStatusExpr('i')} AS collection_status,
+                l.id AS loan_id, l.loan_number,
+                c.id AS customer_id, c.first_name || ' ' || c.last_name AS customer_name, c.phone
+         FROM installments i
+         JOIN loans l ON l.id = i.loan_id
+         JOIN customers c ON c.id = l.customer_id
+         WHERE i.due_date BETWEEN $1 AND $2 ${selfFilter}
+         ORDER BY i.due_date ASC, c.first_name`,
+        params,
+      );
+
+      const today = new Date().toISOString().slice(0, 10);
+      const items: Array<Record<string, unknown>> = [];
+      for (const r of res.rows) {
+        const pending = await this.pendingFor(client, r.loan_id, r.due_date);
+        const currentBalance = parseFloat(r.balance);
+        items.push({
+          installmentId: r.id,
+          installmentNumber: r.installment_number,
+          dueDate: r.due_date,
+          loanId: r.loan_id,
+          loanNumber: r.loan_number,
+          customerId: r.customer_id,
+          customerName: r.customer_name,
+          phone: r.phone,
+          scheduledAmount: parseFloat(r.total_amount),
+          installmentStatus: r.installment_status,
+          collectionStatus: r.collection_status,
+          pendingInstallments: pending.count,
+          totalInstallmentsDue: pending.count + (currentBalance > 0 ? 1 : 0),
+          totalAmountDue: Math.round((pending.amount + currentBalance) * 100) / 100,
+          // Due-date framing (spec §7): Upcoming / Due today / Overdue, independent
+          // of collection status so the two concepts never collapse into one badge.
+          dueBucket: r.due_date > today ? 'UPCOMING' : r.due_date === today ? 'DUE_TODAY' : 'OVERDUE',
+        });
+      }
+      return { view, start, end, items };
+    });
+  }
+
+  /** Calendar Summary (spec §10) — authoritative backend totals for the selected range. */
+  async getCalendarSummary(user: TenantJwtPayload, view: 'day' | 'week' | 'month', date: string) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new BadRequestException('date must be YYYY-MM-DD');
+    await this.ensureAssignedTo(user.schemaName);
+    await this.ensureCollectionWorkflow(user.schemaName);
+    const { start, end } = this.rangeForView(view, date);
+    return this.withSchema(user.schemaName, async (client) => {
+      const instParams: unknown[] = [start, end];
+      const instSelf = this.selfScope(user, instParams);
+      const instRes = await client.query<{
+        scheduled: string; collected: string; confirmed: string; pending: string;
+        expected: string; collected_amount: string; confirmed_amount: string;
+      }>(
+        `SELECT
+           COUNT(*) FILTER (WHERE cs = 'SCHEDULED') AS scheduled,
+           COUNT(*) FILTER (WHERE cs = 'COLLECTED') AS collected,
+           COUNT(*) FILTER (WHERE cs = 'CONFIRMED') AS confirmed,
+           COUNT(*) FILTER (WHERE cs <> 'CONFIRMED') AS pending,
+           COALESCE(SUM(i.total_amount), 0) AS expected,
+           COALESCE(SUM(i.paid_amount) FILTER (WHERE cs = 'COLLECTED'), 0) AS collected_amount,
+           COALESCE(SUM(i.paid_amount) FILTER (WHERE cs = 'CONFIRMED'), 0) AS confirmed_amount
+         FROM (
+           SELECT i.*, ${this.collectionStatusExpr('i')} AS cs
+           FROM installments i JOIN loans l ON l.id = i.loan_id
+           WHERE i.due_date BETWEEN $1 AND $2 ${instSelf}
+         ) i`,
+        instParams,
+      );
+      const row = instRes.rows[0];
+      return {
+        view, start, end,
+        scheduled: parseInt(row.scheduled),
+        collected: parseInt(row.collected),
+        confirmed: parseInt(row.confirmed),
+        pending: parseInt(row.pending),
+        amountExpected: parseFloat(row.expected),
+        amountCollected: parseFloat(row.collected_amount),
+        amountConfirmed: parseFloat(row.confirmed_amount),
+      };
+    });
+  }
+
+  /**
+   * Collection detail — everything the agent needs from one call so opening a
+   * collection from the calendar never forces Customer -> Loan -> Installments
+   * navigation (spec §3).
+   */
+  async getCollectionDetail(user: TenantJwtPayload, installmentId: string) {
+    await this.ensureAssignedTo(user.schemaName);
+    await this.ensureCollectionWorkflow(user.schemaName);
+    return this.withSchema(user.schemaName, async (client) => {
+      const params: unknown[] = [installmentId];
+      const selfFilter = this.selfScope(user, params);
+      const instRes = await client.query(
+        `SELECT i.id, i.installment_number, i.due_date, i.total_amount, i.paid_amount,
+                i.total_amount - i.paid_amount AS balance, i.status AS installment_status,
+                ${this.collectionStatusExpr('i')} AS collection_status,
+                l.id AS loan_id, l.loan_number, l.status AS loan_status, l.principal, l.interest_rate,
+                c.id AS customer_id, c.first_name || ' ' || c.last_name AS customer_name,
+                c.phone, c.locality, c.city
+         FROM installments i
+         JOIN loans l ON l.id = i.loan_id
+         JOIN customers c ON c.id = l.customer_id
+         WHERE i.id = $1 ${selfFilter}`,
+        params,
+      );
+      if (!instRes.rows[0]) throw new NotFoundException('Collection not found');
+      const inst = instRes.rows[0];
+
+      const pending = await this.pendingFor(client, inst.loan_id, inst.due_date);
+      const currentBalance = parseFloat(inst.balance);
+
+      const prevRes = await client.query(
+        `SELECT status FROM installments WHERE loan_id = $1 AND installment_number = $2`,
+        [inst.loan_id, inst.installment_number - 1],
+      );
+      const historyRes = await client.query(
+        `SELECT p.id, p.amount, p.payment_method, p.reference_number, p.payment_date, p.created_at,
+                p.collection_status, p.confirmed_amount, p.confirmed_at,
+                u.first_name || ' ' || u.last_name AS collected_by_name,
+                cu.first_name || ' ' || cu.last_name AS confirmed_by_name
+         FROM payments p
+         LEFT JOIN users u ON u.id = p.collected_by
+         LEFT JOIN users cu ON cu.id = p.confirmed_by
+         WHERE p.loan_id = $1 AND p.cancelled_at IS NULL
+         ORDER BY p.created_at DESC
+         LIMIT 20`,
+        [inst.loan_id],
+      );
+
+      return {
+        installment: {
+          id: inst.id,
+          installmentNumber: inst.installment_number,
+          dueDate: inst.due_date,
+          scheduledAmount: parseFloat(inst.total_amount),
+          paidAmount: parseFloat(inst.paid_amount),
+          balance: currentBalance,
+          installmentStatus: inst.installment_status,
+          collectionStatus: inst.collection_status,
+          previousInstallmentStatus: prevRes.rows[0]?.status ?? null,
+        },
+        loan: {
+          id: inst.loan_id, loanNumber: inst.loan_number, status: inst.loan_status,
+          principal: parseFloat(inst.principal), interestRate: parseFloat(inst.interest_rate),
+        },
+        customer: {
+          id: inst.customer_id, name: inst.customer_name, phone: inst.phone,
+          locality: inst.locality, city: inst.city,
+        },
+        pendingInstallments: pending.count,
+        totalInstallmentsDue: pending.count + (currentBalance > 0 ? 1 : 0),
+        totalAmountDue: Math.round((pending.amount + currentBalance) * 100) / 100,
+        history: historyRes.rows.map((h) => ({
+          id: h.id, amount: parseFloat(h.amount), method: h.payment_method,
+          referenceNumber: h.reference_number, paymentDate: h.payment_date, createdAt: h.created_at,
+          collectionStatus: h.collection_status,
+          confirmedAmount: h.confirmed_amount !== null ? parseFloat(h.confirmed_amount) : null,
+          confirmedAt: h.confirmed_at, collectedByName: h.collected_by_name, confirmedByName: h.confirmed_by_name,
+        })),
+      };
+    });
+  }
+
+  /**
+   * Collect Payment (spec §4). Creates the payment row in COLLECTED status —
+   * this means the agent has the money in hand, not that the office has it.
+   * Idempotent on `idempotencyKey`: a retried submission (network retry,
+   * double-tap) returns the original result instead of double-crediting.
+   */
+  async collectPayment(
+    user: TenantJwtPayload,
+    installmentId: string,
+    dto: RecordCollectionPaymentDto & { idempotencyKey?: string },
+  ) {
+    if (!['AGENT', ...MANAGER_ROLES, 'STAFF'].includes(user.role)) {
+      throw new ForbiddenException('You do not have permission to record collections');
+    }
+    if (!dto.amount || dto.amount <= 0) throw new BadRequestException('Amount must be positive');
+    await this.ensureAssignedTo(user.schemaName);
+    await this.ensureCollectionWorkflow(user.schemaName);
+
+    return this.withSchema(user.schemaName, async (client) => {
+      if (dto.idempotencyKey) {
+        const dupe = await client.query(
+          `SELECT id FROM payments WHERE idempotency_key = $1`,
+          [dto.idempotencyKey],
+        );
+        if (dupe.rows[0]) return { success: true, paymentId: dupe.rows[0].id, duplicate: true };
+      }
+
+      // AGENT ownership check: assigned OR loan officer, matching every other
+      // AGENT-scoped read in this service — an agent cannot collect on a loan
+      // that isn't theirs.
+      const ownerParams: unknown[] = [installmentId];
+      let ownerFilter = '';
+      if (user.role === 'AGENT') {
+        ownerParams.push(user.sub);
+        ownerFilter = `AND (i.assigned_to = $2 OR l.loan_officer_id = $2)`;
+      }
+      const instRes = await client.query(
+        `SELECT i.*, l.id AS loan_id, l.status AS loan_status, l.loan_number
+         FROM installments i JOIN loans l ON l.id = i.loan_id
+         WHERE i.id = $1 ${ownerFilter}`,
+        ownerParams,
+      );
+      if (!instRes.rows[0]) throw new NotFoundException('Collection not found or not assigned to you');
+      const inst = instRes.rows[0];
+      if (!['APPROVED', 'DISBURSED'].includes(inst.loan_status)) {
+        throw new BadRequestException('Payment can only be recorded on active loans');
+      }
+
+      // Two concurrent "Collect" submissions on the same loan (spec edge case
+      // #19) must not both read the same balance and both succeed — that would
+      // double-credit the customer. BEGIN + FOR UPDATE locks every installment
+      // this submission could touch before any balance is read, so the second
+      // concurrent transaction blocks here until the first commits and sees
+      // the first one's updated paid_amount.
+      await client.query('BEGIN');
+      let committed = false;
+      try {
+        await client.query(
+          `SELECT id FROM installments WHERE loan_id = $1 AND due_date <= $2 FOR UPDATE`,
+          [inst.loan_id, inst.due_date],
+        );
+
+        const currentBalance = Math.round((parseFloat(inst.total_amount) - parseFloat(inst.paid_amount)) * 100) / 100;
+        const pending = await this.pendingFor(client, inst.loan_id, inst.due_date);
+        const totalDue = Math.round((pending.amount + currentBalance) * 100) / 100;
+        // Amount can cover this installment plus any accumulated pending ones
+        // (spec §8's "customer pays multiple pending installments together"),
+        // but never more than what's actually owed.
+        if (dto.amount > totalDue) {
+          throw new BadRequestException(`Amount exceeds total due of ₹${totalDue} (including ${pending.count} pending installment${pending.count === 1 ? '' : 's'})`);
+        }
+
+        const paymentDate = dto.paymentDate ?? new Date().toISOString().slice(0, 10);
+
+        // Oldest-first settlement across this installment and any earlier unpaid
+        // ones, so the ₹400-short partial in spec §9 stays outstanding rather
+        // than silently applying to the wrong installment.
+        const settleRes = await client.query<{ id: string; balance: string; due_date: string }>(
+          `SELECT id, total_amount - paid_amount AS balance, due_date
+             FROM installments
+            WHERE loan_id = $1 AND due_date <= $2 AND status IN ('PENDING','PARTIALLY_PAID','OVERDUE')
+            ORDER BY due_date ASC`,
+          [inst.loan_id, inst.due_date],
+        );
+        const result = await this.applyCollectionSettlement(client, user, inst, settleRes.rows, dto, paymentDate, installmentId);
+        await client.query('COMMIT');
+        committed = true;
+        return result;
+      } finally {
+        if (!committed) await client.query('ROLLBACK');
+      }
+    });
+  }
+
+  /** Payment-insertion + installment-update loop shared by collectPayment's locked section. */
+  private async applyCollectionSettlement(
+    client: import('pg').PoolClient,
+    user: TenantJwtPayload,
+    inst: { loan_id: string; loan_number: string },
+    settleRows: { id: string; balance: string; due_date: string }[],
+    dto: RecordCollectionPaymentDto & { idempotencyKey?: string },
+    paymentDate: string,
+    installmentId: string,
+  ): Promise<{ success: true; paymentId: string | null; collectionStatus: 'COLLECTED' }> {
+      let remaining = dto.amount;
+      let primaryPaymentId: string | null = null;
+      for (const row of settleRows) {
+        if (remaining <= 0) break;
+        const rowBalance = parseFloat(row.balance);
+        const applied = Math.min(remaining, rowBalance);
+        if (applied <= 0) continue;
+        remaining = Math.round((remaining - applied) * 100) / 100;
+
+        const payRes = await client.query<{ id: string }>(
+          `INSERT INTO payments
+             (loan_id, installment_id, amount, payment_method, reference_number, collected_by, payment_date,
+              collection_status, idempotency_key)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'COLLECTED',$8)
+           RETURNING id`,
+          [
+            inst.loan_id, row.id, applied, dto.paymentMethod, dto.referenceNumber ?? null,
+            user.sub, paymentDate,
+            // Only the payment tied to the requested installment carries the
+            // idempotency key; settlement of older pending rows in the same
+            // submission is inherent to that one request.
+            row.id === installmentId ? (dto.idempotencyKey ?? null) : null,
+          ],
+        );
+        primaryPaymentId ??= payRes.rows[0].id;
+        if (row.id === installmentId) primaryPaymentId = payRes.rows[0].id;
+
+        await client.query(
+          `UPDATE installments
+             SET paid_amount = paid_amount + $1,
+                 status = CASE
+                   WHEN paid_amount + $1 >= total_amount THEN 'PAID'
+                   WHEN paid_amount + $1 > 0             THEN 'PARTIALLY_PAID'
+                   ELSE status
+                 END,
+                 paid_at = CASE WHEN paid_amount + $1 >= total_amount THEN NOW() ELSE paid_at END
+           WHERE id = $2`,
+          [applied, row.id],
+        );
+
+        await this.recordAudit(client, {
+          paymentId: payRes.rows[0].id, installmentId: row.id, loanId: inst.loan_id,
+          fromStatus: 'SCHEDULED', toStatus: 'COLLECTED', amount: applied,
+          performedBy: user.sub, reference: dto.referenceNumber,
+        });
+      }
+
+      await this.activity.record(client, user, {
+        action: 'payment.recorded',
+        entityType: 'loan',
+        entityId: inst.loan_id,
+        entityLabel: inst.loan_number,
+        metadata: { amount: dto.amount, paymentMethod: dto.paymentMethod, installmentId, source: 'collections' },
+      });
+
+      return { success: true, paymentId: primaryPaymentId, collectionStatus: 'COLLECTED' as const };
+  }
+
+  /**
+   * Office Confirmation (spec §5). Manager/Owner-only — enforced here, not
+   * just hidden in the UI. Never mutates the original payment amount; writes
+   * confirmed_amount/confirmed_by/confirmed_at alongside it and audits the
+   * transition, so COLLECTED -> CONFIRMED is always reconstructable.
+   */
+  async confirmPayment(user: TenantJwtPayload, paymentId: string, confirmedAmount?: number) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) {
+      throw new ForbiddenException('Only Owner, Manager or Admin can confirm a collection');
+    }
+    await this.ensureCollectionWorkflow(user.schemaName);
+    return this.withSchema(user.schemaName, async (client) => {
+      await client.query('BEGIN');
+      let committed = false;
+      try {
+        // FOR UPDATE: a concurrent confirm (or a second manager double-tapping)
+        // on the same payment must see the first transaction's result rather
+        // than both racing on the CONFIRMED check.
+        const res = await client.query(
+          `SELECT id, loan_id, installment_id, amount, collection_status FROM payments WHERE id = $1 FOR UPDATE`,
+          [paymentId],
+        );
+        if (!res.rows[0]) throw new NotFoundException('Collection not found');
+        const payment = res.rows[0];
+        if (payment.collection_status === 'CONFIRMED') {
+          // Idempotent no-op — resubmitting an already-confirmed collection
+          // (spec edge case #10) must not error or double-audit.
+          await client.query('COMMIT');
+          committed = true;
+          return { success: true, paymentId, collectionStatus: 'CONFIRMED' as const, alreadyConfirmed: true };
+        }
+        if (payment.collection_status !== 'COLLECTED') {
+          throw new BadRequestException(`Cannot confirm a payment in ${payment.collection_status} status`);
+        }
+
+        const amount = confirmedAmount ?? parseFloat(payment.amount);
+        await client.query(
+          `UPDATE payments
+             SET collection_status = 'CONFIRMED', confirmed_by = $1, confirmed_at = NOW(), confirmed_amount = $2
+           WHERE id = $3`,
+          [user.sub, amount, paymentId],
+        );
+
+        await this.recordAudit(client, {
+          paymentId, installmentId: payment.installment_id, loanId: payment.loan_id,
+          fromStatus: 'COLLECTED', toStatus: 'CONFIRMED', amount,
+          performedBy: user.sub,
+        });
+
+        await client.query('COMMIT');
+        committed = true;
+        return { success: true, paymentId, collectionStatus: 'CONFIRMED' as const };
+      } finally {
+        if (!committed) await client.query('ROLLBACK');
+      }
     });
   }
 
