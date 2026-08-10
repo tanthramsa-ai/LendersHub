@@ -1129,12 +1129,27 @@ export function getBranchMembers(branchId: string) {
 
 // ── Collections ──────────────────────────────────────────────────────────────
 
+/** Day / Week / Month window for the collection reminder + pending views. */
+export type CollectionPeriod = 'D' | 'W' | 'M';
+
+export const COLLECTION_PERIODS: { key: CollectionPeriod; label: string }[] = [
+  { key: 'D', label: 'Day' },
+  { key: 'W', label: 'Week' },
+  { key: 'M', label: 'Month' },
+];
+
 export interface CollectionStats {
+  period: CollectionPeriod;
+  start: string;
+  end: string;
   todayCount: number;
   todayAmount: number;
+  reminderCount: number;
+  reminderAmount: number;
   overdueCount: number;
   overdueAmount: number;
   collectedToday: number;
+  pendingCount: number;
   totalPending: number;
 }
 
@@ -1162,8 +1177,31 @@ export interface CollectionAgent {
   role: string;
 }
 
-export function getCollectionStats() {
-  return tenantFetch<CollectionStats>('/api/v1/tenant/collections/stats');
+export function getCollectionStats(period: CollectionPeriod = 'D') {
+  return tenantFetch<CollectionStats>(`/api/v1/tenant/collections/stats?period=${period}`);
+}
+
+export interface CollectionListResult {
+  data: CollectionItem[];
+  total: number;
+  totalAmount: number;
+  period: CollectionPeriod;
+  page: number;
+  limit: number;
+}
+
+/** Installments falling due inside the selected window. */
+export function getCollectionReminder(period: CollectionPeriod = 'D', page = 1, limit = 20, search?: string) {
+  const params = new URLSearchParams({ period, page: String(page), limit: String(limit) });
+  if (search) params.set('search', search);
+  return tenantFetch<CollectionListResult>(`/api/v1/tenant/collections/reminder?${params}`);
+}
+
+/** Everything still owed as at the end of the selected window (includes overdue). */
+export function getPendingCollections(period: CollectionPeriod = 'D', page = 1, limit = 20, search?: string) {
+  const params = new URLSearchParams({ period, page: String(page), limit: String(limit) });
+  if (search) params.set('search', search);
+  return tenantFetch<CollectionListResult>(`/api/v1/tenant/collections/pending?${params}`);
 }
 
 export function getTodayCollections(page = 1, limit = 20, search?: string) {

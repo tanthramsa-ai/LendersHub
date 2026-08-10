@@ -4,6 +4,8 @@ import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
 import { FIELD_ROLES } from '../common/roles';
 
+export type CollectionPeriod = 'D' | 'W' | 'M';
+
 export interface RecordCollectionPaymentDto {
   amount: number;
   paymentMethod: 'CASH' | 'UPI' | 'BANK_TRANSFER' | 'CHEQUE' | 'NEFT' | 'RTGS';
@@ -34,6 +36,40 @@ export class TenantCollectionsService {
     }
   }
 
+  /**
+   * Day / Week / Month window used by the Collection Reminder and Pending
+   * Collections views. "Week" and "Month" are rolling from today rather than
+   * calendar-aligned, so the agent always sees the next 7 / 30 days of work.
+   */
+  private resolvePeriod(period?: string): CollectionPeriod {
+    const p = (period ?? 'D').toUpperCase();
+    if (p !== 'D' && p !== 'W' && p !== 'M') {
+      throw new BadRequestException("period must be one of 'D', 'W', 'M'");
+    }
+    return p;
+  }
+
+  private rangeFor(period: CollectionPeriod): { start: string; end: string } {
+    const start = new Date();
+    const end = new Date(start);
+    if (period === 'W') end.setDate(end.getDate() + 6);
+    if (period === 'M') end.setDate(end.getDate() + 29);
+    const iso = (d: Date) => d.toISOString().slice(0, 10);
+    return { start: iso(start), end: iso(end) };
+  }
+
+  /**
+   * An AGENT only ever sees their own book; STAFF and the manager roles see
+   * every user's collections. Returns '' for the unscoped roles.
+   * Pushes user.sub onto `params` (bound, never interpolated).
+   */
+  private selfScope(user: TenantJwtPayload, params: unknown[]): string {
+    if (user.role !== 'AGENT') return '';
+    params.push(user.sub);
+    const p = `$${params.length}`;
+    return `AND (i.assigned_to = ${p} OR l.loan_officer_id = ${p})`;
+  }
+
   private async ensureAssignedTo(schemaName: string): Promise<void> {
     if (this.migratedSchemas.has(schemaName)) return;
     await this.prisma.$executeRawUnsafe(
@@ -42,33 +78,62 @@ export class TenantCollectionsService {
     this.migratedSchemas.add(schemaName);
   }
 
-  async getStats(user: TenantJwtPayload) {
+  async getStats(user: TenantJwtPayload, period?: string) {
+    const p = this.resolvePeriod(period);
+    const { start, end } = this.rangeFor(p);
+    await this.ensureAssignedTo(user.schemaName);
     return this.withSchema(user.schemaName, async (client) => {
-      const today = new Date().toISOString().slice(0, 10);
+      // Every figure below is scoped the same way as the lists: an AGENT sees
+      // only their own book, STAFF/managers see all users'.
+      const dueParams: unknown[] = [start, end];
+      const dueSelf = this.selfScope(user, dueParams);
       // Sequential: a single pg connection cannot run queries concurrently.
-      const todayRes = await client.query<{ count: string; amount: string }>(
-        `SELECT COUNT(*) AS count, COALESCE(SUM(total_amount - paid_amount), 0) AS amount
-           FROM installments WHERE due_date = $1 AND status IN ('PENDING','PARTIALLY_PAID')`,
-        [today],
+      const dueRes = await client.query<{ count: string; amount: string }>(
+        `SELECT COUNT(*) AS count, COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS amount
+           FROM installments i JOIN loans l ON l.id = i.loan_id
+           WHERE i.due_date BETWEEN $1 AND $2 AND i.status IN ('PENDING','PARTIALLY_PAID') ${dueSelf}`,
+        dueParams,
       );
+      const overdueParams: unknown[] = [];
+      const overdueSelf = this.selfScope(user, overdueParams);
       const overdueRes = await client.query<{ count: string; amount: string }>(
-        `SELECT COUNT(*) AS count, COALESCE(SUM(total_amount - paid_amount), 0) AS amount
-           FROM installments WHERE status = 'OVERDUE'`,
+        `SELECT COUNT(*) AS count, COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS amount
+           FROM installments i JOIN loans l ON l.id = i.loan_id
+           WHERE i.status = 'OVERDUE' ${overdueSelf}`,
+        overdueParams,
       );
+      // Payments carry no assigned_to, so the agent scope keys off the loan
+      // officer or the installment the payment settled.
+      const collectedParams: unknown[] = [start, end];
+      const collectedSelf = this.selfScope(user, collectedParams);
       const collectedRes = await client.query<{ amount: string }>(
-        `SELECT COALESCE(SUM(amount), 0) AS amount FROM payments WHERE payment_date = $1`,
-        [today],
+        `SELECT COALESCE(SUM(p.amount), 0) AS amount
+           FROM payments p
+           JOIN loans l ON l.id = p.loan_id
+           LEFT JOIN installments i ON i.id = p.installment_id
+           WHERE p.payment_date BETWEEN $1 AND $2 ${collectedSelf}`,
+        collectedParams,
       );
-      const pendingRes = await client.query<{ amount: string }>(
-        `SELECT COALESCE(SUM(total_amount - paid_amount), 0) AS amount
-           FROM installments WHERE status IN ('PENDING','PARTIALLY_PAID','OVERDUE')`,
+      const pendingParams: unknown[] = [end];
+      const pendingSelf = this.selfScope(user, pendingParams);
+      const pendingRes = await client.query<{ count: string; amount: string }>(
+        `SELECT COUNT(*) AS count, COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS amount
+           FROM installments i JOIN loans l ON l.id = i.loan_id
+           WHERE i.due_date <= $1 AND i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE') ${pendingSelf}`,
+        pendingParams,
       );
       return {
-        todayCount: parseInt(todayRes.rows[0].count),
-        todayAmount: parseFloat(todayRes.rows[0].amount),
+        period: p, start, end,
+        // Reminder = falling due inside the window; kept as today*/ for the
+        // existing callers that still read the day-scoped shape.
+        todayCount: parseInt(dueRes.rows[0].count),
+        todayAmount: parseFloat(dueRes.rows[0].amount),
+        reminderCount: parseInt(dueRes.rows[0].count),
+        reminderAmount: parseFloat(dueRes.rows[0].amount),
         overdueCount: parseInt(overdueRes.rows[0].count),
         overdueAmount: parseFloat(overdueRes.rows[0].amount),
         collectedToday: parseFloat(collectedRes.rows[0].amount),
+        pendingCount: parseInt(pendingRes.rows[0].count),
         totalPending: parseFloat(pendingRes.rows[0].amount),
       };
     });
@@ -339,6 +404,133 @@ export class TenantCollectionsService {
       );
 
       return { data: dataRes.rows.map(this.mapRow), total: parseInt(countRes.rows[0].total), page, limit };
+    });
+  }
+
+  /**
+   * Collection Reminder — installments falling due inside the selected
+   * Day/Week/Month window. Forward-looking only: nothing already overdue.
+   */
+  async getReminder(user: TenantJwtPayload, period: string | undefined, page: number, limit: number, search?: string) {
+    const p = this.resolvePeriod(period);
+    const { start, end } = this.rangeFor(p);
+    await this.ensureAssignedTo(user.schemaName);
+    return this.withSchema(user.schemaName, async (client) => {
+      const offset = (page - 1) * limit;
+      const where = `WHERE i.due_date BETWEEN $1 AND $2 AND i.status IN ('PENDING','PARTIALLY_PAID')`;
+
+      const dataParams: unknown[] = [start, end, limit, offset];
+      const selfFilter = this.selfScope(user, dataParams);
+      let searchFilter = '';
+      if (search) {
+        dataParams.push(`%${search}%`);
+        const s = `$${dataParams.length}`;
+        searchFilter = `AND (c.first_name || ' ' || c.last_name ILIKE ${s} OR l.loan_number ILIKE ${s} OR c.phone ILIKE ${s})`;
+      }
+      const countParams: unknown[] = [start, end];
+      const countSelf = this.selfScope(user, countParams);
+      let countFilter = '';
+      if (search) {
+        countParams.push(`%${search}%`);
+        const s = `$${countParams.length}`;
+        countFilter = `AND (c.first_name || ' ' || c.last_name ILIKE ${s} OR l.loan_number ILIKE ${s} OR c.phone ILIKE ${s})`;
+      }
+
+      // Sequential: a single pg connection cannot run queries concurrently.
+      const dataRes = await client.query(
+        `SELECT i.id, i.installment_number, i.due_date, i.total_amount, i.paid_amount,
+                i.total_amount - i.paid_amount AS balance, i.status, i.assigned_to,
+                l.id AS loan_id, l.loan_number,
+                c.id AS customer_id, c.first_name || ' ' || c.last_name AS customer_name, c.phone,
+                u.first_name || ' ' || u.last_name AS agent_name
+         FROM installments i
+         JOIN loans l ON l.id = i.loan_id
+         JOIN customers c ON c.id = l.customer_id
+         LEFT JOIN users u ON u.id = i.assigned_to
+         ${where} ${selfFilter} ${searchFilter}
+         ORDER BY i.due_date ASC, c.first_name
+         LIMIT $3 OFFSET $4`,
+        dataParams,
+      );
+      const countRes = await client.query<{ total: string; amount: string }>(
+        `SELECT COUNT(*) AS total, COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS amount
+         FROM installments i
+         JOIN loans l ON l.id = i.loan_id
+         JOIN customers c ON c.id = l.customer_id
+         ${where} ${countSelf} ${countFilter}`,
+        countParams,
+      );
+
+      return {
+        data: dataRes.rows.map(this.mapRow),
+        total: parseInt(countRes.rows[0].total),
+        totalAmount: parseFloat(countRes.rows[0].amount),
+        period: p, start, end, page, limit,
+      };
+    });
+  }
+
+  /**
+   * Pending Collections — everything still owed as at the end of the selected
+   * window. Unlike the reminder this *includes* already-overdue installments,
+   * since money outstanding from last week is still pending today.
+   */
+  async getPending(user: TenantJwtPayload, period: string | undefined, page: number, limit: number, search?: string) {
+    const p = this.resolvePeriod(period);
+    const { end } = this.rangeFor(p);
+    await this.ensureAssignedTo(user.schemaName);
+    return this.withSchema(user.schemaName, async (client) => {
+      const offset = (page - 1) * limit;
+      const where = `WHERE i.due_date <= $1 AND i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE')`;
+
+      const dataParams: unknown[] = [end, limit, offset];
+      const selfFilter = this.selfScope(user, dataParams);
+      let searchFilter = '';
+      if (search) {
+        dataParams.push(`%${search}%`);
+        const s = `$${dataParams.length}`;
+        searchFilter = `AND (c.first_name || ' ' || c.last_name ILIKE ${s} OR l.loan_number ILIKE ${s} OR c.phone ILIKE ${s})`;
+      }
+      const countParams: unknown[] = [end];
+      const countSelf = this.selfScope(user, countParams);
+      let countFilter = '';
+      if (search) {
+        countParams.push(`%${search}%`);
+        const s = `$${countParams.length}`;
+        countFilter = `AND (c.first_name || ' ' || c.last_name ILIKE ${s} OR l.loan_number ILIKE ${s} OR c.phone ILIKE ${s})`;
+      }
+
+      const dataRes = await client.query(
+        `SELECT i.id, i.installment_number, i.due_date, i.total_amount, i.paid_amount,
+                i.total_amount - i.paid_amount AS balance, i.status, i.assigned_to,
+                GREATEST(CURRENT_DATE - i.due_date, 0) AS days_overdue,
+                l.id AS loan_id, l.loan_number,
+                c.id AS customer_id, c.first_name || ' ' || c.last_name AS customer_name, c.phone,
+                u.first_name || ' ' || u.last_name AS agent_name
+         FROM installments i
+         JOIN loans l ON l.id = i.loan_id
+         JOIN customers c ON c.id = l.customer_id
+         LEFT JOIN users u ON u.id = i.assigned_to
+         ${where} ${selfFilter} ${searchFilter}
+         ORDER BY i.due_date ASC, c.first_name
+         LIMIT $2 OFFSET $3`,
+        dataParams,
+      );
+      const countRes = await client.query<{ total: string; amount: string }>(
+        `SELECT COUNT(*) AS total, COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS amount
+         FROM installments i
+         JOIN loans l ON l.id = i.loan_id
+         JOIN customers c ON c.id = l.customer_id
+         ${where} ${countSelf} ${countFilter}`,
+        countParams,
+      );
+
+      return {
+        data: dataRes.rows.map(this.mapRow),
+        total: parseInt(countRes.rows[0].total),
+        totalAmount: parseFloat(countRes.rows[0].amount),
+        period: p, end, page, limit,
+      };
     });
   }
 

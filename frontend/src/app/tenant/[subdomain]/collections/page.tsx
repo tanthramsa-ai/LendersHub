@@ -1,20 +1,174 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
+import {
+  getCollectionReminder, getPendingCollections, getTenantSession,
+  CollectionItem, CollectionPeriod, COLLECTION_PERIODS,
+} from '@/services/tenant-api';
 
 const BRAND = '#0F4C81';
 const ACCENT = '#FF6B35';
+
+function fmtCurrency(n: number) {
+  return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
+}
+
+function fmtDate(d: string) {
+  return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+}
+
+/** Collection Reminder / Pending Collections list — same shape, different source. */
+function CollectionList({
+  title, subtitle, items, total, totalAmount, loading, error, accent, subdomain, emptyText,
+}: {
+  title: string; subtitle: string; items: CollectionItem[]; total: number; totalAmount: number;
+  loading: boolean; error: string | null; accent: string; subdomain: string; emptyText: string;
+}) {
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+      <div className="px-5 py-4 border-b border-gray-100 flex items-start justify-between gap-3">
+        <div>
+          <h2 className="font-bold text-gray-900">{title}</h2>
+          <p className="text-xs text-gray-500 mt-0.5">{subtitle}</p>
+        </div>
+        <div className="text-right flex-shrink-0">
+          <p className="text-lg font-bold" style={{ color: accent }}>{fmtCurrency(totalAmount)}</p>
+          <p className="text-xs text-gray-400">{total} installment{total !== 1 ? 's' : ''}</p>
+        </div>
+      </div>
+
+      {loading ? (
+        <p className="px-5 py-10 text-center text-sm text-gray-400">Loading…</p>
+      ) : error ? (
+        <p className="px-5 py-10 text-center text-sm text-red-600">{error}</p>
+      ) : items.length === 0 ? (
+        <p className="px-5 py-10 text-center text-sm text-gray-400">{emptyText}</p>
+      ) : (
+        <ul className="divide-y divide-gray-50">
+          {items.map((i) => (
+            <li key={i.id} className="px-5 py-3 flex items-center justify-between gap-3 hover:bg-gray-50 transition-colors">
+              <div className="min-w-0">
+                <Link
+                  href={`/tenant/${subdomain}/loans/${i.loanId}`}
+                  className="font-medium text-sm text-gray-900 hover:underline truncate block"
+                >
+                  {i.customerName}
+                </Link>
+                <p className="text-xs text-gray-400 mt-0.5 truncate">
+                  {i.loanNumber} · #{i.installmentNumber} · due {fmtDate(i.dueDate)}
+                  {i.agentName ? ` · ${i.agentName}` : ''}
+                </p>
+              </div>
+              <div className="text-right flex-shrink-0">
+                <p className="text-sm font-bold text-gray-900">{fmtCurrency(i.balance)}</p>
+                {i.status === 'OVERDUE' ? (
+                  <span className="text-xs font-semibold text-red-600">
+                    {i.daysOverdue ? `${i.daysOverdue}d overdue` : 'Overdue'}
+                  </span>
+                ) : (
+                  <span className="text-xs text-gray-400">{i.status === 'PARTIALLY_PAID' ? 'Partial' : 'Pending'}</span>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {!loading && !error && total > items.length && (
+        <p className="px-5 py-3 text-xs text-gray-400 border-t border-gray-50">
+          Showing {items.length} of {total}
+        </p>
+      )}
+    </div>
+  );
+}
 
 export default function CollectionsPage() {
   const params = useParams<{ subdomain: string }>();
   const subdomain = params.subdomain;
 
+  const session = getTenantSession();
+  const isAgent = (session?.user.role ?? '') === 'AGENT';
+
+  const [period, setPeriod] = useState<CollectionPeriod>('D');
+  const [reminder, setReminder] = useState<{ data: CollectionItem[]; total: number; totalAmount: number }>({ data: [], total: 0, totalAmount: 0 });
+  const [pending, setPending] = useState<{ data: CollectionItem[]; total: number; totalAmount: number }>({ data: [], total: 0, totalAmount: 0 });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    // `cancelled` guards against a slower earlier period landing after a newer one.
+    let cancelled = false;
+    // Sequential rather than Promise.all: both hit the same tenant pool and the
+    // lists are small, so serialising keeps connection pressure predictable.
+    getCollectionReminder(period, 1, 10)
+      .then(async (r) => ({ r, q: await getPendingCollections(period, 1, 10) }))
+      .then(({ r, q }) => {
+        if (cancelled) return;
+        setReminder({ data: r.data, total: r.total, totalAmount: r.totalAmount });
+        setPending({ data: q.data, total: q.total, totalAmount: q.totalAmount });
+        setError(null);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load collections');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [period]);
+
+  function selectPeriod(p: CollectionPeriod) {
+    if (p === period) return;
+    setLoading(true);
+    setPeriod(p);
+  }
+
+  const scopeNote = isAgent ? 'your assigned collections' : 'all users';
+  const windowNote = period === 'D' ? 'today' : period === 'W' ? 'the next 7 days' : 'the next 30 days';
+
   return (
     <div className="p-4 lg:p-6 space-y-6">
-      <div>
-        <h1 className="text-xl font-bold text-gray-900">Collections</h1>
-        <p className="text-sm text-gray-500 mt-0.5">Manage field agent collections and track dues</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">Collections</h1>
+          <p className="text-sm text-gray-500 mt-0.5">Manage field agent collections and track dues</p>
+        </div>
+
+        {/* Day / Week / Month selector — drives both lists below */}
+        <div className="flex gap-1 bg-gray-100 p-1 rounded-xl" role="group" aria-label="Collection period">
+          {COLLECTION_PERIODS.map((p) => (
+            <button
+              key={p.key}
+              onClick={() => selectPeriod(p.key)}
+              aria-pressed={period === p.key}
+              className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                period === p.key ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <CollectionList
+          title="Collection Reminder"
+          subtitle={`Falling due ${windowNote} · ${scopeNote}`}
+          items={reminder.data} total={reminder.total} totalAmount={reminder.totalAmount}
+          loading={loading} error={error} accent={BRAND} subdomain={subdomain}
+          emptyText="Nothing due in this period."
+        />
+        <CollectionList
+          title="Pending Collections"
+          subtitle={`Outstanding through ${windowNote} · ${scopeNote}`}
+          items={pending.data} total={pending.total} totalAmount={pending.totalAmount}
+          loading={loading} error={error} accent={ACCENT} subdomain={subdomain}
+          emptyText="No pending collections in this period."
+        />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
