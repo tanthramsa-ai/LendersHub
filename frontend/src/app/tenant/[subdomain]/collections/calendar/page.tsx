@@ -33,6 +33,18 @@ function rangeLabel(start: string, end: string) {
   return start === end ? f(start) : `${f(start)} – ${f(end)}`;
 }
 
+// All calendar dates between start and end inclusive, for the day-columns grid.
+function datesBetween(start: string, end: string): string[] {
+  const out: string[] = [];
+  const d = new Date(`${start}T00:00:00Z`);
+  const last = new Date(`${end}T00:00:00Z`);
+  while (d <= last) {
+    out.push(d.toISOString().slice(0, 10));
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return out;
+}
+
 // Not color alone (spec §2): every status also carries a short text glyph/label.
 const DUE_BUCKET_BADGE: Record<string, { label: string; cls: string }> = {
   UPCOMING: { label: '○ Upcoming', cls: 'bg-gray-100 text-gray-600' },
@@ -52,6 +64,108 @@ function StatCard({ label, value, accent }: { label: string; value: string | num
     <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-3">
       <p className="text-xs text-gray-400">{label}</p>
       <p className="text-lg font-bold mt-0.5" style={accent ? { color: accent } : undefined}>{value}</p>
+    </div>
+  );
+}
+
+const CELL_ACCENT: Record<string, string> = {
+  SCHEDULED: '#0F4C81',
+  COLLECTED: '#D97706',
+  CONFIRMED: '#10B981',
+  CANCELLED: '#9CA3AF',
+};
+
+function CollectionGrid({
+  summary, items, onOpen,
+}: {
+  summary: CalendarSummary | null; items: CalendarCollectionItem[]; onOpen: (installmentId: string) => void;
+}) {
+  const today = todayStr();
+  const dates = summary ? datesBetween(summary.start, summary.end) : [];
+
+  // One row per loan (a customer with two loans gets two rows — each is a
+  // separate collection to plan a visit for), one column per date in range.
+  const rows: { loanId: string; loanNumber: string; customerName: string; byDate: Map<string, CalendarCollectionItem> }[] = [];
+  const rowIndex = new Map<string, number>();
+  for (const it of items) {
+    let idx = rowIndex.get(it.loanId);
+    if (idx === undefined) {
+      idx = rows.length;
+      rowIndex.set(it.loanId, idx);
+      rows.push({ loanId: it.loanId, loanNumber: it.loanNumber, customerName: it.customerName, byDate: new Map() });
+    }
+    rows[idx].byDate.set(it.dueDate, it);
+  }
+  // Route order: earliest-due-first customer at the top.
+  rows.sort((a, b) => {
+    const da = [...a.byDate.keys()].sort()[0] ?? '';
+    const db = [...b.byDate.keys()].sort()[0] ?? '';
+    return da.localeCompare(db);
+  });
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full border-collapse text-sm min-w-[640px]">
+        <thead>
+          <tr>
+            <th className="sticky left-0 bg-white z-10 text-left text-xs font-semibold text-gray-500 px-4 py-3 border-b border-gray-100 w-48">
+              Customer
+            </th>
+            {dates.map((d) => {
+              const isToday = d === today;
+              const dt = new Date(`${d}T00:00:00Z`);
+              return (
+                <th
+                  key={d}
+                  className={`text-left px-3 py-3 border-b border-l border-gray-100 min-w-[150px] ${isToday ? 'bg-blue-50' : ''}`}
+                >
+                  <p className={`text-lg font-bold ${isToday ? 'text-blue-700' : 'text-gray-800'}`}>{dt.getUTCDate()}</p>
+                  <p className={`text-xs ${isToday ? 'text-blue-500' : 'text-gray-400'}`}>
+                    {dt.toLocaleDateString('en-IN', { weekday: 'long', timeZone: 'UTC' })}
+                  </p>
+                </th>
+              );
+            })}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.loanId} className="border-b border-gray-50 align-top">
+              <td className="sticky left-0 bg-white z-10 px-4 py-3 border-r border-gray-100">
+                <p className="font-semibold text-gray-900 text-sm truncate">{row.customerName}</p>
+                <p className="text-xs text-gray-400 font-mono">{row.loanNumber}</p>
+              </td>
+              {dates.map((d) => {
+                const it = row.byDate.get(d);
+                const isToday = d === today;
+                return (
+                  <td key={d} className={`px-2 py-2 border-l border-gray-50 ${isToday ? 'bg-blue-50/40' : ''}`}>
+                    {it && (
+                      <button
+                        onClick={() => onOpen(it.installmentId)}
+                        className="w-full text-left rounded-lg border p-2.5 hover:shadow-sm transition-shadow"
+                        style={{ borderColor: `${CELL_ACCENT[it.collectionStatus]}55`, backgroundColor: `${CELL_ACCENT[it.collectionStatus]}0D` }}
+                      >
+                        <p className="text-xs font-semibold text-gray-900">Installment {it.installmentNumber}</p>
+                        <p className="text-xs text-gray-600 mt-0.5">{fmt(it.scheduledAmount)}</p>
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          <span className={`text-[9px] font-bold px-1 py-0.5 rounded ${DUE_BUCKET_BADGE[it.dueBucket].cls}`}>{DUE_BUCKET_BADGE[it.dueBucket].label}</span>
+                          <span className={`text-[9px] font-bold px-1 py-0.5 rounded ${COLLECTION_STATUS_BADGE[it.collectionStatus].cls}`}>{COLLECTION_STATUS_BADGE[it.collectionStatus].label}</span>
+                        </div>
+                        {it.pendingInstallments > 0 && (
+                          <p className="text-[10px] text-red-600 font-semibold mt-1">
+                            Pending {it.pendingInstallments} · Total {fmt(it.totalAmountDue)}
+                          </p>
+                        )}
+                      </button>
+                    )}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -224,7 +338,9 @@ export default function CollectionsCalendarPage() {
         </div>
       )}
 
-      {/* Items */}
+      {/* Grid: one row per customer/loan, one column per day in the current range —
+          mirrors the requested day-columns calendar layout, with collection cards
+          in place of hour slots (installments have a due date, not a time). */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
         {loading ? (
           <p className="px-5 py-10 text-center text-sm text-gray-400">Loading…</p>
@@ -233,40 +349,7 @@ export default function CollectionsCalendarPage() {
         ) : items.length === 0 ? (
           <p className="px-5 py-10 text-center text-sm text-gray-400">No collections scheduled in this range.</p>
         ) : (
-          <ul className="divide-y divide-gray-50">
-            {items.map((it) => {
-              const due = DUE_BUCKET_BADGE[it.dueBucket];
-              const coll = COLLECTION_STATUS_BADGE[it.collectionStatus];
-              return (
-                <li key={it.installmentId}>
-                  <button
-                    onClick={() => openCollection(it.installmentId)}
-                    className="w-full text-left px-5 py-4 flex items-center justify-between gap-4 hover:bg-gray-50 transition-colors"
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="font-semibold text-sm text-gray-900">{it.customerName}</p>
-                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${due.cls}`}>{due.label}</span>
-                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${coll.cls}`}>{coll.label}</span>
-                      </div>
-                      <p className="text-xs text-gray-400 mt-1">
-                        Loan: {it.loanNumber} · Installment: {it.installmentNumber} · Due: {fmt(it.scheduledAmount)}
-                        {new Date(it.dueDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) ? ` · ${new Date(it.dueDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}` : ''}
-                      </p>
-                      {it.pendingInstallments > 0 && (
-                        <p className="text-xs text-red-600 font-medium mt-0.5">
-                          Pending: {it.pendingInstallments} · Total Due: {fmt(it.totalAmountDue)} ({it.totalInstallmentsDue} installments)
-                        </p>
-                      )}
-                    </div>
-                    <svg className="w-4 h-4 text-gray-300 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                    </svg>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          <CollectionGrid summary={summary} items={items} onOpen={openCollection} />
         )}
       </div>
 
