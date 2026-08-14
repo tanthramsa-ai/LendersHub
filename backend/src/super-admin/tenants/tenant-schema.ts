@@ -190,6 +190,16 @@ export function tenantSchemaDDL(s: string): string[] {
     // to IN_PROGRESS explicitly regardless of this default.
     `ALTER TABLE ${q}."customers" ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'ACTIVE'`,
 
+    // ── NPA columns on loans (idempotent) ────────────────────────────────────
+    // These are also declared inline in the CREATE TABLE above, which covers
+    // freshly-provisioned tenants — but CREATE TABLE IF NOT EXISTS is a no-op
+    // on an existing table, so tenants provisioned before NPA shipped never
+    // got them. Repeating them as ALTERs is what actually backfills those.
+    // Any future column added to an existing table needs the same treatment.
+    `ALTER TABLE ${q}."loans" ADD COLUMN IF NOT EXISTS npa_marked_at TIMESTAMPTZ`,
+    `ALTER TABLE ${q}."loans" ADD COLUMN IF NOT EXISTS npa_marked_by UUID REFERENCES ${q}."users" (id) ON DELETE SET NULL`,
+    `ALTER TABLE ${q}."loans" ADD COLUMN IF NOT EXISTS npa_reason TEXT`,
+
     // ── loan_type_id FK on loans (idempotent) ────────────────────────────────
     `ALTER TABLE ${q}."loans" ADD COLUMN IF NOT EXISTS loan_type_id UUID REFERENCES ${q}."loan_types" (id) ON DELETE SET NULL`,
 
