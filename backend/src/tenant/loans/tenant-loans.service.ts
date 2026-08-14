@@ -1648,13 +1648,15 @@ export class TenantLoansService {
       );
       if (!loanRes.rows[0]) throw new NotFoundException('Loan not found');
 
-      const instRes = await client.query<{ installment_number: number; due_date: string; status: string }>(
-        `SELECT installment_number, due_date, status FROM installments WHERE loan_id = $1 ORDER BY installment_number DESC`,
+      const instRes = await client.query<{ installment_number: number; due_date: string; status: string; is_missed: boolean }>(
+        `SELECT installment_number, due_date, status,
+                (status = 'OVERDUE' OR (status = 'PENDING' AND due_date < CURRENT_DATE)) AS is_missed
+         FROM installments WHERE loan_id = $1 ORDER BY installment_number DESC`,
         [loanId],
       );
       if (!instRes.rows.length) throw new BadRequestException('Loan has no installments to extend');
-      if (!instRes.rows.some((r) => r.status !== 'PAID')) {
-        throw new BadRequestException('All installments are already paid — nothing pending to extend');
+      if (!instRes.rows.some((r) => r.is_missed)) {
+        throw new BadRequestException('No missed installment on this loan — nothing to extend for');
       }
 
       const last = instRes.rows[0];

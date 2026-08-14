@@ -43,10 +43,10 @@ export function AddInstallmentModal({ loanId, onCancel, onAdded }: Props) {
         <div>
           <h2 className="text-lg font-bold text-gray-900">Add installment to schedule</h2>
           <p className="text-xs text-gray-500 mt-1">
-            This adds a new due installment after the last one on the schedule — it does not
-            record a payment. To collect more than what&apos;s due on an existing installment,
-            use <span className="font-medium text-gray-700">Record Payment</span> instead; any
-            amount above the balance owed carries automatically onto the next installment.
+            This adds a new due installment after the last one on the schedule, to make up for a
+            missed EMI — it does not record a payment. To collect more than what&apos;s due on an
+            existing installment, use <span className="font-medium text-gray-700">Record Payment</span> instead;
+            any amount above the balance owed carries automatically onto the next installment.
           </p>
         </div>
 
