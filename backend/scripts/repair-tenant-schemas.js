@@ -17,13 +17,9 @@
  */
 const path = require('path');
 const { Client } = require('pg');
+const { resolveDatabaseUrl } = require('./db-url');
 
-try { require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') }); } catch (_) {}
-try { require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') }); } catch (_) {}
-
-const DATABASE_URL =
-  process.env.DATABASE_URL ||
-  'postgresql://postgres:devpass@localhost:5433/lendershub';
+const DATABASE_URL = resolveDatabaseUrl();
 
 // Prefer the REAL, always-current tenantSchemaDDL from the compiled build
 // (dist/ exists in every deployed image — `npm run build` runs before
