@@ -8,9 +8,10 @@ import {
   getMonthlyLoan, recordPayment, undoInstallmentPayment, deleteInstallment, closeLoan, reopenLoan,
   approveLoan, rejectLoan, approveCloseLoan, assignLoanAgent, getOfficers, updateMonthlyLoan, getBranches,
   MonthlyLoanDetail, MonthlyInstallment, Officer, TenantBranch,
-  getTenantSession, COLLECTION_ROLES, MANAGER_ROLES,
+  getTenantSession, LOAN_DETAIL_PAYMENT_ROLES, MANAGER_ROLES,
 } from '@/services/tenant-api';
 import { CloseLoanModal, CloseCommentBanner, ReopenLoanModal } from '@/components/CloseLoanModal';
+import { ApproveLoanModal } from '@/components/ApproveLoanModal';
 import { EditLoanModal } from '@/components/EditLoanModal';
 import { AddInstallmentModal } from '@/components/AddInstallmentModal';
 import { refreshNotificationBell } from '@/lib/notifications-bus';
@@ -96,7 +97,7 @@ export default function MonthlyLoanDetailPage() {
   const router = useRouter();
   const pathname = usePathname();
   const session = getTenantSession();
-  const canRecord = COLLECTION_ROLES.includes(session?.user.role ?? 'CUSTOMER');
+  const canRecord = LOAN_DETAIL_PAYMENT_ROLES.includes(session?.user.role ?? 'CUSTOMER');
   const canClose = MANAGER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
 
   const [loan, setLoan] = useState<MonthlyLoanDetail | null>(null);
@@ -118,6 +119,7 @@ export default function MonthlyLoanDetailPage() {
   const [reopening, setReopening] = useState(false);
   const [reopenError, setReopenError] = useState('');
   const [approving, setApproving] = useState(false);
+  const [showApprove, setShowApprove] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [approvingClose, setApprovingClose] = useState(false);
   const [actionError, setActionError] = useState('');
@@ -270,6 +272,7 @@ export default function MonthlyLoanDetailPage() {
       await approveLoan(id);
       refreshNotificationBell();
       await load();
+      setShowApprove(false);
     } catch (e: unknown) {
       setActionError((e as Error).message);
     } finally { setApproving(false); }
@@ -330,7 +333,7 @@ export default function MonthlyLoanDetailPage() {
         )}
         {canClose && loan.status === 'PENDING' && (
           <span className="flex gap-2 ml-2">
-            <button onClick={handleApprove} disabled={approving}
+            <button onClick={() => { setActionError(''); setShowApprove(true); }} disabled={approving}
               className="px-3 py-1 bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white text-xs font-medium rounded-lg transition-colors">
               {approving ? 'Approving…' : 'Approve'}
             </button>
@@ -458,8 +461,8 @@ export default function MonthlyLoanDetailPage() {
           {loan.installments.map((inst) => {
             const due = new Date(inst.dueDate); due.setHours(0, 0, 0, 0);
             const isPastDue = inst.status === 'OVERDUE' || (inst.status === 'PENDING' && due < today);
-            const canPay = canRecord && ['PENDING', 'OVERDUE', 'PARTIALLY_PAID'].includes(inst.status) && loan.status !== 'CLOSED';
-            const canUndo = canClose && inst.paid > 0 && loan.status !== 'CLOSED';
+            const canPay = canRecord && ['PENDING', 'OVERDUE', 'PARTIALLY_PAID'].includes(inst.status) && ['APPROVED', 'DISBURSED'].includes(loan.status);
+            const canUndo = canClose && inst.paid > 0 && ['APPROVED', 'DISBURSED'].includes(loan.status);
             const tooltip = buildTooltip(inst);
 
             return (
@@ -496,7 +499,7 @@ export default function MonthlyLoanDetailPage() {
               </div>
             );
           })}
-          {canClose && loan.status !== 'CLOSED' && (
+          {canClose && ['APPROVED', 'DISBURSED'].includes(loan.status) && (
             <button
               type="button"
               onClick={() => setShowAddInstallment(true)}
@@ -508,14 +511,33 @@ export default function MonthlyLoanDetailPage() {
           )}
         </div>
 
-        {canRecord && loan.status !== 'CLOSED' && (
+        {canRecord && ['APPROVED', 'DISBURSED'].includes(loan.status) && (
           <p className="mt-3 text-xs text-gray-400">
             Click an overdue or pending month to record a payment.
             {canClose && ' Click a paid month to undo it.'}
             {canClose && ' The dashed + tile adds a new installment to the schedule; it does not record a payment.'}
           </p>
         )}
+        {session?.user.role === 'AGENT' && ['APPROVED', 'DISBURSED'].includes(loan.status) && (
+          <p className="mt-3 text-xs text-gray-400">
+            Payments for this loan are recorded through the Collection Calendar, not from this page.
+          </p>
+        )}
       </div>
+
+      {showApprove && (
+        <ApproveLoanModal
+          loanNumber={loan.loanNumber}
+          customerName={loan.customerName}
+          principal={loan.principal}
+          securityDocUrl={loan.securityDocUrl}
+          promissoryNoteUrl={loan.promissoryNoteUrl}
+          approving={approving}
+          error={actionError}
+          onCancel={() => { setShowApprove(false); setActionError(''); }}
+          onConfirm={handleApprove}
+        />
+      )}
 
       {showAddInstallment && (
         <AddInstallmentModal

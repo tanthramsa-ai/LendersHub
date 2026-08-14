@@ -1312,7 +1312,9 @@ export class TenantLoansService {
       if (res.rows[0].status !== 'PENDING') {
         throw new BadRequestException(`Only PENDING loans can be approved (current status: ${res.rows[0].status})`);
       }
-      await client.query(`UPDATE loans SET status = 'APPROVED', updated_at = NOW() WHERE id = $1`, [loanId]);
+      // disbursed_at is only ever set here, not at creation — a PENDING loan hasn't
+      // actually disbursed anything yet, whatever the loan cycle's calculation type.
+      await client.query(`UPDATE loans SET status = 'APPROVED', disbursed_at = NOW(), updated_at = NOW() WHERE id = $1`, [loanId]);
       await this.activity.record(client, user, {
         action: 'loan.approved',
         entityType: 'loan',
@@ -1959,7 +1961,7 @@ export class TenantLoansService {
           principal, interest_rate, term_months, status, purpose,
           first_due_date, cycle_type, calculation_type, emi_amount,
           security_doc_url, promissory_note_url, interest_per_1000_per_day
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'DISBURSED',$9,$10,'WEEKLY',$11,$12,$13,$14,$15)
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'PENDING',$9,$10,'WEEKLY',$11,$12,$13,$14,$15)
         RETURNING *
       `, [
         loanNumber, dto.customerId, officerId, dto.branchId ?? null, dto.loanTypeId ?? null,
@@ -2207,7 +2209,7 @@ export class TenantLoansService {
           principal, interest_rate, term_months, status, purpose,
           first_due_date, cycle_type, calculation_type, emi_amount,
           security_doc_url, promissory_note_url, interest_per_1000_per_day
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'DISBURSED',$9,$10,$11,$12,$13,$14,$15,$16)
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'PENDING',$9,$10,$11,$12,$13,$14,$15,$16)
         RETURNING *
       `, [
         loanNumber, dto.customerId, officerId, dto.branchId ?? null, dto.loanTypeId ?? null,
@@ -2442,7 +2444,7 @@ export class TenantLoansService {
           principal, interest_rate, term_months, emi_amount,
           cycle_type, status, purpose, first_due_date,
           security_doc_url, promissory_note_url, disbursed_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'MONTHLY','DISBURSED',$10,$11,$12,$13,NOW())
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'MONTHLY','PENDING',$10,$11,$12,$13,NULL)
         RETURNING *
       `, [
         loanNumber, dto.customerId, officerId, dto.branchId || null, dto.loanTypeId ?? null,
@@ -2671,7 +2673,7 @@ export class TenantLoansService {
           principal, interest_rate, term_months, emi_amount,
           cycle_type, status, purpose, first_due_date,
           security_doc_url, promissory_note_url, disbursed_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'AGENT_RISK','DISBURSED',$10,$11,$12,$13,NOW())
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'AGENT_RISK','PENDING',$10,$11,$12,$13,NULL)
         RETURNING *
       `, [
         loanNumber, dto.customerId, officerId, dto.branchId || null, dto.loanTypeId ?? null,
@@ -2888,7 +2890,7 @@ export class TenantLoansService {
           principal, interest_rate, term_months, emi_amount, status,
           purpose, first_due_date, disbursed_at, cycle_type, calculation_type,
           security_doc_url, promissory_note_url
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'DISBURSED',$10,$11,NOW(),'TERM_LOAN',$12,$13,$14)
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'PENDING',$10,$11,NULL,'TERM_LOAN',$12,$13,$14)
         RETURNING id, loan_number
       `, [
         loanNumber, dto.customerId, officerId, dto.branchId || null, dto.loanTypeId ?? null,
@@ -3024,6 +3026,12 @@ export class TenantLoansService {
 
   async recordPayment(user: TenantJwtPayload, loanId: string, dto: RecordPaymentDto) {
     if (user.role === 'CUSTOMER') throw new ForbiddenException('Customers cannot record payments');
+    // Agents have their own collection workflow (Collection Calendar ->
+    // collectPayment, pending office confirmation) — this loan-detail-page path
+    // bypasses that entirely, so it's Manager/Owner/Admin/Staff-only.
+    if (user.role === 'AGENT') {
+      throw new ForbiddenException('Agents record collections through the Collection Calendar, not the loan detail page');
+    }
 
     const VALID_METHODS = ['CASH', 'UPI', 'BANK_TRANSFER', 'CHEQUE', 'NEFT', 'RTGS'];
     if (!dto.amount || dto.amount <= 0) throw new BadRequestException('Payment amount must be greater than zero');

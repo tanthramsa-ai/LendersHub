@@ -52,6 +52,15 @@ export const LOAN_CREATE_ROLES: UserRole[] = ['OWNER', 'ADMIN', 'MANAGER', 'AGEN
 /** Roles that can record collection payments (all except CUSTOMER) */
 export const COLLECTION_ROLES: UserRole[] = ['OWNER', 'ADMIN', 'MANAGER', 'AGENT', 'STAFF'];
 
+/**
+ * Roles that can record a payment directly from a loan detail page.
+ * AGENT is deliberately excluded here (unlike COLLECTION_ROLES, which still
+ * covers their Collection Calendar access) — agents have their own workflow
+ * (collect -> pending office confirmation) and shouldn't have a second,
+ * unconfirmed path to move money. Backend enforces this too.
+ */
+export const LOAN_DETAIL_PAYMENT_ROLES: UserRole[] = ['OWNER', 'ADMIN', 'MANAGER', 'STAFF'];
+
 /** Roles that can add customers (all except CUSTOMER) */
 export const CUSTOMER_ROLES: UserRole[] = ['OWNER', 'ADMIN', 'MANAGER', 'AGENT', 'STAFF'];
 

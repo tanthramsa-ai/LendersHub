@@ -444,7 +444,7 @@ export default function NewTermLoanPage() {
             <button disabled={submitting} onClick={handleSubmit}
               className="px-6 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-40 hover:opacity-90 transition-colors"
               style={{ backgroundColor: BRAND }}>
-              {submitting ? 'Creating Loan…' : 'Confirm & Disburse'}
+              {submitting ? 'Creating Loan…' : '✓ Create Term Loan'}
             </button>
           </div>
         </div>

@@ -4,8 +4,9 @@ import { NpaBadge } from '@/components/NpaBadge';
 import { useEffect, useState } from 'react';
 import { useParams, useRouter, useSearchParams, usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { getTermLoan, closeLoan, reopenLoan, recordPayment, undoInstallmentPayment, deleteInstallment, approveLoan, rejectLoan, approveCloseLoan, assignLoanAgent, getOfficers, updateTermLoan, getBranches, getTenantSession, MANAGER_ROLES, COLLECTION_ROLES, TermLoanDetail, TermInstallment, Officer, TenantBranch } from '@/services/tenant-api';
+import { getTermLoan, closeLoan, reopenLoan, recordPayment, undoInstallmentPayment, deleteInstallment, approveLoan, rejectLoan, approveCloseLoan, assignLoanAgent, getOfficers, updateTermLoan, getBranches, getTenantSession, MANAGER_ROLES, LOAN_DETAIL_PAYMENT_ROLES, TermLoanDetail, TermInstallment, Officer, TenantBranch } from '@/services/tenant-api';
 import { CloseLoanModal, CloseCommentBanner, ReopenLoanModal } from '@/components/CloseLoanModal';
+import { ApproveLoanModal } from '@/components/ApproveLoanModal';
 import { EditLoanModal } from '@/components/EditLoanModal';
 import { AddInstallmentModal } from '@/components/AddInstallmentModal';
 import { refreshNotificationBell } from '@/lib/notifications-bus';
@@ -64,7 +65,7 @@ export default function TermLoanDetailPage() {
   const pathname = usePathname();
   const session = getTenantSession();
   const canClose = MANAGER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
-  const canPay = COLLECTION_ROLES.includes(session?.user.role ?? 'CUSTOMER');
+  const canPay = LOAN_DETAIL_PAYMENT_ROLES.includes(session?.user.role ?? 'CUSTOMER');
 
   const [loan, setLoan] = useState<TermLoanDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -85,6 +86,7 @@ export default function TermLoanDetailPage() {
   const [undoTarget, setUndoTarget] = useState<TermInstallment | null>(null);
   const [undoing, setUndoing] = useState(false);
   const [approving, setApproving] = useState(false);
+  const [showApprove, setShowApprove] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [approvingClose, setApprovingClose] = useState(false);
   const [officers, setOfficers] = useState<Officer[]>([]);
@@ -235,6 +237,7 @@ export default function TermLoanDetailPage() {
       await approveLoan(id);
       refreshNotificationBell();
       await load();
+      setShowApprove(false);
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : 'Approve failed');
     } finally { setApproving(false); }
@@ -299,7 +302,7 @@ export default function TermLoanDetailPage() {
         <div className="flex gap-2 flex-wrap">
           {canClose && loan.status === 'PENDING' && (
             <>
-              <button onClick={handleApprove} disabled={approving}
+              <button onClick={() => { setErr(''); setShowApprove(true); }} disabled={approving}
                 className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white text-sm font-medium rounded-lg transition-colors">
                 {approving ? 'Approving…' : 'Approve'}
               </button>
@@ -418,6 +421,11 @@ export default function TermLoanDetailPage() {
             due carries the extra onto the next installment automatically.
             {canClose && ' Click a paid installment to undo it.'}
             {canClose && ' The dashed + tile adds a new installment to the schedule; it does not record a payment.'}
+          </p>
+        )}
+        {session?.user.role === 'AGENT' && isActive && (
+          <p className="mt-3 text-xs text-gray-400">
+            Payments for this loan are recorded through the Collection Calendar, not from this page.
           </p>
         )}
         <div className="flex flex-wrap gap-3 mt-4 text-xs text-gray-500">
@@ -704,6 +712,20 @@ export default function TermLoanDetailPage() {
           }}
           onCancel={() => { setShowEditLoan(false); setErr(''); }}
           onSave={handleSaveEdit}
+        />
+      )}
+
+      {showApprove && (
+        <ApproveLoanModal
+          loanNumber={loan.loanNumber}
+          customerName={loan.customerName}
+          principal={loan.principal}
+          securityDocUrl={loan.securityDocUrl}
+          promissoryNoteUrl={loan.promissoryNoteUrl}
+          approving={approving}
+          error={err}
+          onCancel={() => { setShowApprove(false); setErr(''); }}
+          onConfirm={handleApprove}
         />
       )}
 

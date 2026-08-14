@@ -157,7 +157,7 @@ export class TenantCollectionsService {
       const dueRes = await client.query<{ count: string; amount: string }>(
         `SELECT COUNT(*) AS count, COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS amount
            FROM installments i JOIN loans l ON l.id = i.loan_id
-           WHERE i.due_date BETWEEN $1 AND $2 AND i.status IN ('PENDING','PARTIALLY_PAID') ${dueSelf}`,
+           WHERE i.due_date BETWEEN $1 AND $2 AND i.status IN ('PENDING','PARTIALLY_PAID') AND l.status IN ('APPROVED','DISBURSED') ${dueSelf}`,
         dueParams,
       );
       const overdueParams: unknown[] = [];
@@ -165,7 +165,7 @@ export class TenantCollectionsService {
       const overdueRes = await client.query<{ count: string; amount: string }>(
         `SELECT COUNT(*) AS count, COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS amount
            FROM installments i JOIN loans l ON l.id = i.loan_id
-           WHERE i.status = 'OVERDUE' ${overdueSelf}`,
+           WHERE i.status = 'OVERDUE' AND l.status IN ('APPROVED','DISBURSED') ${overdueSelf}`,
         overdueParams,
       );
       // Payments carry no assigned_to, so the agent scope keys off the loan
@@ -185,7 +185,7 @@ export class TenantCollectionsService {
       const pendingRes = await client.query<{ count: string; amount: string }>(
         `SELECT COUNT(*) AS count, COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS amount
            FROM installments i JOIN loans l ON l.id = i.loan_id
-           WHERE i.due_date <= $1 AND i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE') ${pendingSelf}`,
+           WHERE i.due_date <= $1 AND i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE') AND l.status IN ('APPROVED','DISBURSED') ${pendingSelf}`,
         pendingParams,
       );
       return {
@@ -251,7 +251,7 @@ export class TenantCollectionsService {
            JOIN loans l ON l.id = i.loan_id
            JOIN customers c ON c.id = l.customer_id
            LEFT JOIN users u ON u.id = i.assigned_to
-           WHERE i.due_date = $1 AND i.status IN ('PENDING','PARTIALLY_PAID')
+           WHERE i.due_date = $1 AND i.status IN ('PENDING','PARTIALLY_PAID') AND l.status IN ('APPROVED','DISBURSED')
            ${selfFilter} ${searchFilter}
            ORDER BY c.first_name, l.loan_number
            LIMIT $2 OFFSET $3`,
@@ -261,7 +261,7 @@ export class TenantCollectionsService {
         `SELECT COUNT(*) AS total FROM installments i
            JOIN loans l ON l.id = i.loan_id
            JOIN customers c ON c.id = l.customer_id
-           WHERE i.due_date = $1 AND i.status IN ('PENDING','PARTIALLY_PAID')
+           WHERE i.due_date = $1 AND i.status IN ('PENDING','PARTIALLY_PAID') AND l.status IN ('APPROVED','DISBURSED')
            ${countSelf} ${countFilter}`,
         countParams,
       );
@@ -315,7 +315,7 @@ export class TenantCollectionsService {
            JOIN loans l ON l.id = i.loan_id
            JOIN customers c ON c.id = l.customer_id
            LEFT JOIN users u ON u.id = i.assigned_to
-           WHERE i.status = 'OVERDUE'
+           WHERE i.status = 'OVERDUE' AND l.status IN ('APPROVED','DISBURSED')
            ${selfFilter} ${searchFilter}
            ORDER BY i.due_date ASC
            LIMIT $1 OFFSET $2`,
@@ -325,7 +325,7 @@ export class TenantCollectionsService {
         `SELECT COUNT(*) AS total FROM installments i
            JOIN loans l ON l.id = i.loan_id
            JOIN customers c ON c.id = l.customer_id
-           WHERE i.status = 'OVERDUE'
+           WHERE i.status = 'OVERDUE' AND l.status IN ('APPROVED','DISBURSED')
            ${countSelf} ${countFilter}`,
         countParams,
       );
@@ -483,7 +483,7 @@ export class TenantCollectionsService {
     await this.ensureAssignedTo(user.schemaName);
     return this.withSchema(user.schemaName, async (client) => {
       const offset = (page - 1) * limit;
-      const where = `WHERE i.due_date BETWEEN $1 AND $2 AND i.status IN ('PENDING','PARTIALLY_PAID')`;
+      const where = `WHERE i.due_date BETWEEN $1 AND $2 AND i.status IN ('PENDING','PARTIALLY_PAID') AND l.status IN ('APPROVED','DISBURSED')`;
 
       const dataParams: unknown[] = [start, end, limit, offset];
       const selfFilter = this.selfScope(user, dataParams);
@@ -547,7 +547,7 @@ export class TenantCollectionsService {
     await this.ensureAssignedTo(user.schemaName);
     return this.withSchema(user.schemaName, async (client) => {
       const offset = (page - 1) * limit;
-      const where = `WHERE i.due_date <= $1 AND i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE')`;
+      const where = `WHERE i.due_date <= $1 AND i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE') AND l.status IN ('APPROVED','DISBURSED')`;
 
       const dataParams: unknown[] = [end, limit, offset];
       const selfFilter = this.selfScope(user, dataParams);
@@ -676,7 +676,8 @@ export class TenantCollectionsService {
          FROM installments i
          JOIN loans l ON l.id = i.loan_id
          JOIN customers c ON c.id = l.customer_id
-         WHERE i.due_date BETWEEN $1 AND $2 ${selfFilter}
+         WHERE i.due_date BETWEEN $1 AND $2
+           AND l.status IN ('APPROVED','DISBURSED') ${selfFilter}
          ORDER BY i.due_date ASC, c.first_name`,
         params,
       );
@@ -738,7 +739,8 @@ export class TenantCollectionsService {
          FROM (
            SELECT i.*, ${this.collectionStatusExpr('i')} AS cs
            FROM installments i JOIN loans l ON l.id = i.loan_id
-           WHERE i.due_date BETWEEN $1 AND $2 ${instSelf}
+           WHERE i.due_date BETWEEN $1 AND $2
+             AND l.status IN ('APPROVED','DISBURSED') ${instSelf}
          ) i`,
         instParams,
       );
