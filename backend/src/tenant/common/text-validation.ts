@@ -29,8 +29,16 @@ export const PLACE_NAME_RE = /^[a-zA-Z0-9\s\-.,'&()/]+$/;
 /** Identifier code: alphanumeric plus - and _ — e.g. "BLR-01", "HQ_MAIN". */
 export const CODE_RE = /^[a-zA-Z0-9\-_]+$/;
 
-/** Person name: letters, spaces, - . ' only — no digits — e.g. "Dr. K. Raman", "O'Brien-Smith". */
-export const PERSON_NAME_RE = /^[a-zA-Z\s\-.']+$/;
+/**
+ * Person name: letters and spaces only — no digits, no punctuation at all.
+ * Deliberately stricter than the place-name sets: initials ("K. Raman"),
+ * hyphenated ("Brown-Smith") and apostrophe ("O'Brien") forms are rejected by
+ * product decision, so a manager name is plain text and nothing else.
+ */
+export const PERSON_NAME_RE = /^[a-zA-Z\s]+$/;
+
+/** Town/city name: letters, spaces, - . ' — e.g. "Thiruvananthapuram - East". */
+export const CITY_RE = /^[a-zA-Z\s\-.']+$/;
 
 /** Street address: place-name set plus # for door numbers — e.g. "#4, 12/3 MG Road". */
 export const ADDRESS_RE = /^[a-zA-Z0-9\s\-.,'&()/#]+$/;

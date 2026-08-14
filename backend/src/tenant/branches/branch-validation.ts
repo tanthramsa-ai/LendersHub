@@ -4,12 +4,14 @@ import {
   PLACE_NAME_RE,
   CODE_RE,
   PERSON_NAME_RE,
+  CITY_RE,
   ADDRESS_RE,
 } from '../common/text-validation';
 
 const PLACE_NAME_CHARS = "letters, numbers, spaces and & - . , ' ( ) /";
 const CODE_CHARS = 'letters, numbers, hyphens and underscores';
-const PERSON_NAME_CHARS = "letters, spaces and - . '";
+const PERSON_NAME_CHARS = 'letters and spaces';
+const CITY_CHARS = "letters, spaces and - . '";
 const ADDRESS_CHARS = "letters, numbers, spaces and # & - . , ' ( ) /";
 
 const PHONE_RE = /^\d{10}$/;
@@ -90,7 +92,7 @@ export function validateBranchFields(dto: {
   }
 
   if (dto.city?.trim()) {
-    assertAllowedChars(dto.city, 'City', PERSON_NAME_RE, PERSON_NAME_CHARS);
+    assertAllowedChars(dto.city, 'City', CITY_RE, CITY_CHARS);
     if (dto.city.trim().length > CITY_MAX)
       throw new BadRequestException(
         `City must be ${CITY_MAX} characters or fewer`,

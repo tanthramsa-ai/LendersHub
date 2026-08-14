@@ -16,8 +16,8 @@ import {
 } from '@/services/tenant-api';
 import {
   allowedCharsError,
-  PLACE_NAME_RE, CODE_RE, PERSON_NAME_RE, ADDRESS_RE,
-  PLACE_NAME_CHARS, CODE_CHARS, PERSON_NAME_CHARS, ADDRESS_CHARS,
+  PLACE_NAME_RE, CODE_RE, PERSON_NAME_RE, CITY_RE, ADDRESS_RE,
+  PLACE_NAME_CHARS, CODE_CHARS, PERSON_NAME_CHARS, CITY_CHARS, ADDRESS_CHARS,
 } from '@/lib/text-validation';
 
 const BRAND = '#0F4C81';
@@ -85,7 +85,7 @@ function validateBranchForm(form: BranchForm, isEdit: boolean): BranchFieldError
   }
 
   if (form.city.trim()) {
-    const err = allowedCharsError(form.city, 'City', PERSON_NAME_RE, PERSON_NAME_CHARS);
+    const err = allowedCharsError(form.city, 'City', CITY_RE, CITY_CHARS);
     if (err) errors.city = err;
     else if (form.city.trim().length > CITY_MAX) errors.city = `City must be ${CITY_MAX} characters or fewer`;
   }
