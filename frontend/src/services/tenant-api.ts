@@ -1483,9 +1483,10 @@ export function reopenLoan(id: string, dto: { comment: string }) {
   });
 }
 
-export function approveLoan(id: string) {
-  return tenantFetch<{ id: string; status: string }>(`/api/v1/tenant/loans/${id}/approve`, {
+export function approveLoan(id: string, firstDueDate?: string) {
+  return tenantFetch<{ id: string; status: string; firstDueDate: string }>(`/api/v1/tenant/loans/${id}/approve`, {
     method: 'PATCH',
+    body: JSON.stringify(firstDueDate ? { firstDueDate } : {}),
   });
 }
 

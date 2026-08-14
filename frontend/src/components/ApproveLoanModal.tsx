@@ -10,23 +10,28 @@ type ApproveProps = {
   loanNumber: string;
   customerName: string;
   principal: number;
+  /** The loan's proposed first-due-date, set by the agent at creation — editable here since the real EMI clock starts at release, not at the original proposal. */
+  firstDueDate: string;
   securityDocUrl?: string | null;
   promissoryNoteUrl?: string | null;
   approving?: boolean;
   error?: string;
   onCancel: () => void;
-  onConfirm: () => void;
+  onConfirm: (firstDueDate: string) => void;
 };
 
 /**
  * Approval is a manual judgment call, not an automated document check — the
  * approver reviews whatever's on file and explicitly confirms, mirroring the
  * customer-verification "Verify & Activate" gate rather than parsing documents.
+ * Releasing the loan also re-anchors the EMI schedule to whatever date the
+ * approver picks here, since the agent's original date was just a proposal.
  */
 export function ApproveLoanModal({
   loanNumber,
   customerName,
   principal,
+  firstDueDate,
   securityDocUrl,
   promissoryNoteUrl,
   approving = false,
@@ -35,6 +40,7 @@ export function ApproveLoanModal({
   onConfirm,
 }: ApproveProps) {
   const [confirmed, setConfirmed] = useState(false);
+  const [dueDate, setDueDate] = useState(firstDueDate);
   const hasDocs = Boolean(securityDocUrl || promissoryNoteUrl);
 
   return (
@@ -67,6 +73,21 @@ export function ApproveLoanModal({
           )}
         </div>
 
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">
+            EMI Start Date (First Due Date) <span className="text-red-500">*</span>
+          </label>
+          <input
+            type="date"
+            value={dueDate}
+            onChange={(e) => setDueDate(e.target.value)}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-gray-900"
+          />
+          <p className="text-[11px] text-gray-400 mt-1">
+            The full schedule shifts to start here — the agent's proposed date is just a placeholder until release.
+          </p>
+        </div>
+
         <label className="flex items-start gap-2 text-sm text-gray-700 cursor-pointer">
           <input
             type="checkbox"
@@ -92,8 +113,8 @@ export function ApproveLoanModal({
           </button>
           <button
             type="button"
-            disabled={approving || !confirmed}
-            onClick={onConfirm}
+            disabled={approving || !confirmed || !dueDate}
+            onClick={() => onConfirm(dueDate)}
             className="flex-1 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg disabled:opacity-40"
           >
             {approving ? 'Approving…' : 'Confirm Approval'}

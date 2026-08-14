@@ -214,8 +214,12 @@ export class TenantLoansController {
   }
 
   @Patch(':id/approve')
-  approveLoan(@Request() req: { user: TenantJwtPayload }, @Param('id') id: string) {
-    return this.svc.approveLoan(req.user, id);
+  approveLoan(
+    @Request() req: { user: TenantJwtPayload },
+    @Param('id') id: string,
+    @Body() dto: { firstDueDate?: string },
+  ) {
+    return this.svc.approveLoan(req.user, id, dto ?? {});
   }
 
   @Patch(':id/reject')

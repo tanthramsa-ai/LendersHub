@@ -308,10 +308,10 @@ export default function DailyLoanDetailPage() {
     } finally { setReopening(false); }
   }
 
-  async function handleApprove() {
+  async function handleApprove(firstDueDate: string) {
     setApproving(true); setActionError('');
     try {
-      await approveLoan(id);
+      await approveLoan(id, firstDueDate);
       refreshNotificationBell();
       await load();
       setShowApprove(false);
@@ -784,6 +784,7 @@ export default function DailyLoanDetailPage() {
           loanNumber={loan.loanNumber}
           customerName={loan.customerName}
           principal={loan.principal}
+          firstDueDate={loan.firstDueDate ?? ''}
           securityDocUrl={loan.securityDocUrl}
           promissoryNoteUrl={loan.promissoryNoteUrl}
           approving={approving}

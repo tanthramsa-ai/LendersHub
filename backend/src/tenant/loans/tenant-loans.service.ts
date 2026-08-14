@@ -1299,19 +1299,38 @@ export class TenantLoansService {
     });
   }
 
-  async approveLoan(user: TenantJwtPayload, loanId: string) {
+  async approveLoan(user: TenantJwtPayload, loanId: string, dto: { firstDueDate?: string } = {}) {
     if (!MANAGER_ROLES.includes(user.role as UserRole)) {
       throw new ForbiddenException('Only Owner, Manager or Admin can approve a loan');
     }
+    if (dto.firstDueDate && !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) {
+      throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
+    }
     return this.withSchema(user.schemaName, async (client) => {
-      const res = await client.query<{ id: string; status: string; loan_number: string }>(
-        `SELECT id, status, loan_number FROM loans WHERE id = $1 AND deleted_at IS NULL`,
+      const res = await client.query<{ id: string; status: string; loan_number: string; first_due_date: string }>(
+        `SELECT id, status, loan_number, first_due_date FROM loans WHERE id = $1 AND deleted_at IS NULL`,
         [loanId],
       );
       if (!res.rows[0]) throw new NotFoundException('Loan not found');
       if (res.rows[0].status !== 'PENDING') {
         throw new BadRequestException(`Only PENDING loans can be approved (current status: ${res.rows[0].status})`);
       }
+
+      // The agent's original first-due-date was only ever a proposal made at loan
+      // creation — the real EMI clock starts at release. Re-anchoring the whole
+      // schedule to the approver's chosen date (a uniform day-shift, not a re-amortization)
+      // preserves every already-computed principal/interest split, so no cycle-specific
+      // schedule math needs to run here.
+      const newFirstDue = dto.firstDueDate ?? toYmd(res.rows[0].first_due_date);
+      if (dto.firstDueDate && dto.firstDueDate !== toYmd(res.rows[0].first_due_date)) {
+        await client.query(
+          `UPDATE installments SET due_date = due_date + ($1::date - $2::date)
+           WHERE loan_id = $3`,
+          [dto.firstDueDate, toYmd(res.rows[0].first_due_date), loanId],
+        );
+        await client.query(`UPDATE loans SET first_due_date = $1 WHERE id = $2`, [dto.firstDueDate, loanId]);
+      }
+
       // disbursed_at is only ever set here, not at creation — a PENDING loan hasn't
       // actually disbursed anything yet, whatever the loan cycle's calculation type.
       await client.query(`UPDATE loans SET status = 'APPROVED', disbursed_at = NOW(), updated_at = NOW() WHERE id = $1`, [loanId]);
@@ -1320,8 +1339,9 @@ export class TenantLoansService {
         entityType: 'loan',
         entityId: loanId,
         entityLabel: res.rows[0].loan_number,
+        metadata: { firstDueDate: newFirstDue },
       });
-      return { id: loanId, status: 'APPROVED' };
+      return { id: loanId, status: 'APPROVED', firstDueDate: newFirstDue };
     });
   }
 
