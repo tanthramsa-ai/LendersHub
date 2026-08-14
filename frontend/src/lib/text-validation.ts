@@ -23,11 +23,11 @@ export const PLACE_NAME_RE = /^[a-zA-Z0-9\s\-.,'&()/]+$/;
 export const CODE_RE = /^[a-zA-Z0-9\-_]+$/;
 
 /**
- * Person name: letters and spaces only — no digits, no punctuation at all.
- * Deliberately stricter than the place-name sets: initials ("K. Raman"),
- * hyphenated and apostrophe forms are rejected by product decision.
+ * Person name: letters, spaces and periods — periods allowed so initials work
+ * ("Dr. K. Raman"). Digits, hyphens and apostrophes are rejected by product
+ * decision.
  */
-export const PERSON_NAME_RE = /^[a-zA-Z\s]+$/;
+export const PERSON_NAME_RE = /^[a-zA-Z\s.]+$/;
 
 /** Town/city name: letters, spaces, - . ' — e.g. "Thiruvananthapuram - East". */
 export const CITY_RE = /^[a-zA-Z\s\-.']+$/;
@@ -37,7 +37,7 @@ export const ADDRESS_RE = /^[a-zA-Z0-9\s\-.,'&()/#]+$/;
 
 export const PLACE_NAME_CHARS = "letters, numbers, spaces and & - . , ' ( ) /";
 export const CODE_CHARS = 'letters, numbers, hyphens and underscores';
-export const PERSON_NAME_CHARS = 'letters and spaces';
+export const PERSON_NAME_CHARS = 'letters, spaces and periods';
 export const CITY_CHARS = "letters, spaces and - . '";
 export const ADDRESS_CHARS = "letters, numbers, spaces and # & - . , ' ( ) /";
 

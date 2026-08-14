@@ -10,7 +10,7 @@ import {
 
 const PLACE_NAME_CHARS = "letters, numbers, spaces and & - . , ' ( ) /";
 const CODE_CHARS = 'letters, numbers, hyphens and underscores';
-const PERSON_NAME_CHARS = 'letters and spaces';
+const PERSON_NAME_CHARS = 'letters, spaces and periods';
 const CITY_CHARS = "letters, spaces and - . '";
 const ADDRESS_CHARS = "letters, numbers, spaces and # & - . , ' ( ) /";
 
