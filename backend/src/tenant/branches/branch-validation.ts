@@ -1,8 +1,21 @@
 import { BadRequestException } from '@nestjs/common';
-import { assertNotOnlySpecialChars } from '../common/text-validation';
+import {
+  assertAllowedChars,
+  PLACE_NAME_RE,
+  CODE_RE,
+  PERSON_NAME_RE,
+  CITY_RE,
+  ADDRESS_RE,
+  PLACE_NAME_CHARS,
+  CODE_CHARS,
+  PERSON_NAME_CHARS,
+  CITY_CHARS,
+  ADDRESS_CHARS,
+  EMAIL_RE,
+} from '../common/text-validation';
+
 
 const PHONE_RE = /^\d{10}$/;
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export const BRANCH_NAME_MIN = 4;
 export const BRANCH_NAME_MAX = 100;
@@ -34,7 +47,7 @@ export function validateBranchFields(dto: {
   if (requireCore || dto.name !== undefined) {
     const name = dto.name?.trim() ?? '';
     if (!name) throw new BadRequestException('Branch name is required');
-    assertNotOnlySpecialChars(dto.name, 'Branch name');
+    assertAllowedChars(dto.name, 'Branch name', PLACE_NAME_RE, PLACE_NAME_CHARS);
     if (name.length < BRANCH_NAME_MIN)
       throw new BadRequestException(
         `Branch name must be at least ${BRANCH_NAME_MIN} characters`,
@@ -48,7 +61,7 @@ export function validateBranchFields(dto: {
   if (requireCore) {
     const code = dto.code?.trim() ?? '';
     if (!code) throw new BadRequestException('Branch code is required');
-    assertNotOnlySpecialChars(dto.code, 'Branch code');
+    assertAllowedChars(dto.code, 'Branch code', CODE_RE, CODE_CHARS, false);
     if (code.length < BRANCH_CODE_MIN)
       throw new BadRequestException(
         `Branch code must be at least ${BRANCH_CODE_MIN} characters`,
@@ -60,12 +73,16 @@ export function validateBranchFields(dto: {
   }
 
   if (dto.managerName?.trim()) {
-    assertNotOnlySpecialChars(dto.managerName, 'Manager name');
+    assertAllowedChars(dto.managerName, 'Manager name', PERSON_NAME_RE, PERSON_NAME_CHARS);
     if (dto.managerName.trim().length > MANAGER_NAME_MAX) {
       throw new BadRequestException(
         `Manager name must be ${MANAGER_NAME_MAX} characters or fewer`,
       );
     }
+  }
+
+  if (dto.address?.trim()) {
+    assertAllowedChars(dto.address, 'Address', ADDRESS_RE, ADDRESS_CHARS, false);
   }
 
   if (dto.address?.trim() && dto.address.trim().length > ADDRESS_MAX) {
@@ -75,7 +92,7 @@ export function validateBranchFields(dto: {
   }
 
   if (dto.city?.trim()) {
-    assertNotOnlySpecialChars(dto.city, 'City');
+    assertAllowedChars(dto.city, 'City', CITY_RE, CITY_CHARS);
     if (dto.city.trim().length > CITY_MAX)
       throw new BadRequestException(
         `City must be ${CITY_MAX} characters or fewer`,

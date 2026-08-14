@@ -265,9 +265,14 @@ export default function CustomersPage() {
                         ) : <span className="text-gray-300 text-xs">—</span>}
                       </td>
                       <td className="px-4 py-3">
-                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${c.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                          {c.isActive ? 'Active' : 'Inactive'}
-                        </span>
+                        <div className="flex flex-col gap-1 items-start">
+                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${c.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                            {c.isActive ? 'Active' : 'Inactive'}
+                          </span>
+                          {c.status === 'IN_PROGRESS' && (
+                            <span className="px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">In-Progress</span>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}

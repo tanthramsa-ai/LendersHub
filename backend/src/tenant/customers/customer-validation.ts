@@ -1,4 +1,12 @@
 import { BadRequestException } from '@nestjs/common';
+import {
+  assertAllowedChars,
+  PERSON_NAME_RE,
+  PERSON_NAME_CHARS,
+  ADDRESS_RE,
+  ADDRESS_CHARS,
+  EMAIL_RE,
+} from '../common/text-validation';
 
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const PHONE_RE = /^\d{10}$/;
@@ -6,8 +14,10 @@ const AADHAAR4_RE = /^\d{4}$/;
 const PINCODE_RE = /^\d{6}$/;
 /** Letters, numbers, spaces, and common punctuation only */
 const PLAIN_TEXT_RE = /^[a-zA-Z0-9\s\-.,']+$/;
+const PLAIN_TEXT_CHARS = "letters, numbers, spaces and - . , '";
 /** Loan purpose is stricter: letters, spaces and basic punctuation only — no digits, no symbols. */
 const LOAN_PURPOSE_RE = /^[a-zA-Z\s\-.,']+$/;
+const LOAN_PURPOSE_CHARS = "letters, spaces and - . , '";
 
 export function validateCustomerFields(dto: {
   firstName?: string;
@@ -21,6 +31,7 @@ export function validateCustomerFields(dto: {
   pincode?: string;
   occupation?: string;
   altContact?: string;
+  altContactName?: string;
   loanPurpose?: string;
   creditScore?: number;
   requireCore?: boolean;
@@ -30,10 +41,12 @@ export function validateCustomerFields(dto: {
   if (requireCore || dto.firstName !== undefined) {
     if (!dto.firstName?.trim()) throw new BadRequestException('First name is required');
     if (/\d/.test(dto.firstName)) throw new BadRequestException('First name cannot contain numbers');
+    assertAllowedChars(dto.firstName, 'First name', PERSON_NAME_RE, PERSON_NAME_CHARS);
   }
   if (requireCore || dto.lastName !== undefined) {
     if (!dto.lastName?.trim()) throw new BadRequestException('Last name is required');
     if (/\d/.test(dto.lastName)) throw new BadRequestException('Last name cannot contain numbers');
+    assertAllowedChars(dto.lastName, 'Last name', PERSON_NAME_RE, PERSON_NAME_CHARS);
   }
   if (requireCore || dto.phone !== undefined) {
     if (!dto.phone?.trim()) throw new BadRequestException('Phone number is required');
@@ -43,18 +56,20 @@ export function validateCustomerFields(dto: {
   }
   if (requireCore || dto.address !== undefined) {
     if (!dto.address?.trim()) throw new BadRequestException('Address is required');
+    assertAllowedChars(dto.address, 'Address', ADDRESS_RE, ADDRESS_CHARS, false);
   }
   if (requireCore || dto.locality !== undefined) {
     if (!dto.locality?.trim()) throw new BadRequestException('Locality is required');
-    if (!PLAIN_TEXT_RE.test(dto.locality.trim())) {
-      throw new BadRequestException('Locality cannot contain special characters');
-    }
+    assertAllowedChars(dto.locality, 'Locality', PLAIN_TEXT_RE, PLAIN_TEXT_CHARS);
   }
   // Occupation is optional; when provided it must be letters/spaces/basic punctuation only — no digits.
   if (dto.occupation != null && dto.occupation !== '') {
-    if (!LOAN_PURPOSE_RE.test(dto.occupation.trim())) {
-      throw new BadRequestException('Occupation can only contain letters (no numbers or special characters)');
-    }
+    assertAllowedChars(dto.occupation, 'Occupation', LOAN_PURPOSE_RE, LOAN_PURPOSE_CHARS);
+  }
+
+  // Alternate contact NAME was previously stored with no validation at all.
+  if (dto.altContactName != null && dto.altContactName !== '') {
+    assertAllowedChars(dto.altContactName, 'Contact name', PERSON_NAME_RE, PERSON_NAME_CHARS);
   }
 
   // Alternate contact is optional; when provided it must be a valid 10-digit number
@@ -64,7 +79,7 @@ export function validateCustomerFields(dto: {
     }
   }
 
-  if (dto.email?.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(dto.email.trim())) {
+  if (dto.email?.trim() && !EMAIL_RE.test(dto.email.trim())) {
     throw new BadRequestException('Email address is invalid');
   }
 
@@ -91,9 +106,7 @@ export function validateCustomerFields(dto: {
   }
 
   if (dto.loanPurpose != null && dto.loanPurpose !== '') {
-    if (!LOAN_PURPOSE_RE.test(dto.loanPurpose.trim())) {
-      throw new BadRequestException('Loan purpose can only contain letters (no numbers or special characters)');
-    }
+    assertAllowedChars(dto.loanPurpose, 'Loan purpose', LOAN_PURPOSE_RE, LOAN_PURPOSE_CHARS);
   }
 
   if (dto.creditScore != null && (dto.creditScore < 300 || dto.creditScore > 900)) {
@@ -112,7 +125,5 @@ export function validateCustomerFields(dto: {
 
 /** Check for loan purpose / similar free-text fields: letters, spaces and basic punctuation only. */
 export function assertNoDigitsOrSpecialChars(value: string | undefined | null, fieldLabel: string): void {
-  if (value != null && value !== '' && !LOAN_PURPOSE_RE.test(value.trim())) {
-    throw new BadRequestException(`${fieldLabel} can only contain letters (no numbers or special characters)`);
-  }
+  assertAllowedChars(value, fieldLabel, LOAN_PURPOSE_RE, LOAN_PURPOSE_CHARS);
 }

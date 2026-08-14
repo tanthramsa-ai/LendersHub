@@ -14,7 +14,12 @@ import {
   PERMISSION_KEYS, PERMISSION_LABELS, PERMISSION_VALUE_OPTIONS,
   ROLE_LABELS, UserRole, USER_ADMIN_ROLES, getTenantSession,
 } from '@/services/tenant-api';
-import { isOnlySpecialChars } from '@/lib/text-validation';
+import {
+  allowedCharsError,
+  PLACE_NAME_RE, CODE_RE, PERSON_NAME_RE, CITY_RE, ADDRESS_RE,
+  PLACE_NAME_CHARS, CODE_CHARS, PERSON_NAME_CHARS, CITY_CHARS, ADDRESS_CHARS,
+  EMAIL_RE,
+} from '@/lib/text-validation';
 
 const BRAND = '#0F4C81';
 
@@ -48,7 +53,6 @@ const MANAGER_NAME_MAX = 100;
 const ADDRESS_MAX = 200;
 const CITY_MAX = 100;
 const PHONE_RE = /^\d{10}$/;
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /** Validates every field at once (not stop-at-first) so all problems can be shown together. */
 function validateBranchForm(form: BranchForm, isEdit: boolean): BranchFieldErrors {
@@ -56,27 +60,33 @@ function validateBranchForm(form: BranchForm, isEdit: boolean): BranchFieldError
 
   const name = form.name.trim();
   if (!name) errors.name = 'Branch name is required';
-  else if (isOnlySpecialChars(form.name)) errors.name = 'Branch name cannot consist of only special characters';
+  else if (allowedCharsError(form.name, 'Branch name', PLACE_NAME_RE, PLACE_NAME_CHARS)) errors.name = allowedCharsError(form.name, 'Branch name', PLACE_NAME_RE, PLACE_NAME_CHARS)!;
   else if (name.length < BRANCH_NAME_MIN) errors.name = `Branch name must be at least ${BRANCH_NAME_MIN} characters`;
   else if (name.length > BRANCH_NAME_MAX) errors.name = `Branch name must be ${BRANCH_NAME_MAX} characters or fewer`;
 
   if (!isEdit) {
     const code = form.code.trim();
     if (!code) errors.code = 'Branch code is required';
-    else if (isOnlySpecialChars(form.code)) errors.code = 'Branch code cannot consist of only special characters';
+    else if (allowedCharsError(form.code, 'Branch code', CODE_RE, CODE_CHARS, false)) errors.code = allowedCharsError(form.code, 'Branch code', CODE_RE, CODE_CHARS, false)!;
     else if (code.length < BRANCH_CODE_MIN) errors.code = `Branch code must be at least ${BRANCH_CODE_MIN} characters`;
     else if (code.length > BRANCH_CODE_MAX) errors.code = `Branch code must be ${BRANCH_CODE_MAX} characters or fewer`;
   }
 
   if (form.managerName.trim()) {
-    if (isOnlySpecialChars(form.managerName)) errors.managerName = 'Manager name cannot consist of only special characters';
+    const err = allowedCharsError(form.managerName, 'Manager name', PERSON_NAME_RE, PERSON_NAME_CHARS);
+    if (err) errors.managerName = err;
     else if (form.managerName.trim().length > MANAGER_NAME_MAX) errors.managerName = `Manager name must be ${MANAGER_NAME_MAX} characters or fewer`;
   }
 
-  if (form.address.trim().length > ADDRESS_MAX) errors.address = `Address must be ${ADDRESS_MAX} characters or fewer`;
+  if (form.address.trim()) {
+    const err = allowedCharsError(form.address, 'Address', ADDRESS_RE, ADDRESS_CHARS, false);
+    if (err) errors.address = err;
+    else if (form.address.trim().length > ADDRESS_MAX) errors.address = `Address must be ${ADDRESS_MAX} characters or fewer`;
+  }
 
   if (form.city.trim()) {
-    if (isOnlySpecialChars(form.city)) errors.city = 'City cannot consist of only special characters';
+    const err = allowedCharsError(form.city, 'City', CITY_RE, CITY_CHARS);
+    if (err) errors.city = err;
     else if (form.city.trim().length > CITY_MAX) errors.city = `City must be ${CITY_MAX} characters or fewer`;
   }
 

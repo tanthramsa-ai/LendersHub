@@ -15,6 +15,9 @@ const TERM_LABEL: Record<EditLoanCycleType, string> = {
 const TERM_MAX: Record<EditLoanCycleType, number> = {
   WEEKLY: 99, DAILY: 3650, MONTHLY: 360, AGENT_RISK: 360, TERM_LOAN: 360,
 };
+const CYCLE_LABEL: Record<EditLoanCycleType, string> = {
+  WEEKLY: 'Weekly', DAILY: 'Daily', MONTHLY: 'Monthly', AGENT_RISK: 'Agent Risk', TERM_LOAN: 'Term Loan',
+};
 
 export type EditLoanInitial = {
   principal: number;
@@ -123,6 +126,14 @@ export function EditLoanModal({ cycleType, loanNumber, branches, initial, saving
         <div>
           <h2 className="text-lg font-bold text-gray-900">Edit Loan</h2>
           <p className="text-sm text-gray-500">{loanNumber}</p>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Loan Type</label>
+          <div className={`${inputCls} bg-gray-50 text-gray-500 cursor-not-allowed`}>{CYCLE_LABEL[cycleType]}</div>
+          <p className="mt-1 text-xs text-gray-400">
+            Fixed after creation — each loan type uses its own repayment schedule and interest calculation, so switching isn&apos;t supported. Create a new loan if a different type is needed.
+          </p>
         </div>
 
         <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">

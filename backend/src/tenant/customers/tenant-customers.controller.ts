@@ -53,6 +53,11 @@ export class TenantCustomersController {
     return this.svc.update(req.user, id, dto);
   }
 
+  @Patch(':id/verify')
+  verify(@Request() req: { user: TenantJwtPayload }, @Param('id') id: string) {
+    return this.svc.verify(req.user, id);
+  }
+
   @Patch(':id/activate')
   activate(@Request() req: { user: TenantJwtPayload }, @Param('id') id: string) {
     return this.svc.setActive(req.user, id, true);

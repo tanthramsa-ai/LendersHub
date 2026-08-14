@@ -233,6 +233,8 @@ export interface Customer {
   branchId: string | null;
   branchName: string | null;
   isActive: boolean;
+  /** IN_PROGRESS until a Manager/Owner/Admin verifies and activates the customer. */
+  status: 'IN_PROGRESS' | 'ACTIVE';
   activeLoans: number;
   closedLoans: number;
   /** True if any of this customer's active loans is NPA (auto-threshold or manually flagged). */
@@ -339,6 +341,11 @@ export function updateCustomer(id: string, dto: UpdateCustomerPayload) {
 
 export function activateCustomer(id: string) {
   return tenantFetch<{ id: string; isActive: boolean }>(`/api/v1/tenant/customers/${id}/activate`, { method: 'PATCH' });
+}
+
+/** Manager-only: flips an IN_PROGRESS customer to ACTIVE. Manual judgment call, no automated document check. */
+export function verifyCustomer(id: string) {
+  return tenantFetch<{ id: string; status: 'ACTIVE' }>(`/api/v1/tenant/customers/${id}/verify`, { method: 'PATCH' });
 }
 
 export function deactivateCustomer(id: string) {
@@ -1277,7 +1284,7 @@ export function getCollectionsByDate(date: string, page = 1, limit = 20, search?
 // ── Collection Calendar workflow (SCHEDULED -> COLLECTED -> CONFIRMED) ──────
 
 export type CalendarView = 'day' | 'week' | 'month';
-export type CollectionWorkflowStatus = 'SCHEDULED' | 'COLLECTED' | 'CONFIRMED' | 'CANCELLED';
+export type CollectionWorkflowStatus = 'SCHEDULED' | 'COLLECTED' | 'PARTIALLY_COLLECTED' | 'CONFIRMED' | 'CANCELLED';
 export type DueBucket = 'UPCOMING' | 'DUE_TODAY' | 'OVERDUE';
 
 export interface CalendarCollectionItem {
@@ -1306,7 +1313,7 @@ export function getCalendarItems(view: CalendarView, date: string) {
 
 export interface CalendarSummary {
   view: CalendarView; start: string; end: string;
-  scheduled: number; collected: number; confirmed: number; pending: number;
+  scheduled: number; collected: number; confirmed: number; completed: number; partiallyCollected: number; pending: number;
   amountExpected: number; amountCollected: number; amountConfirmed: number;
 }
 
@@ -1343,7 +1350,7 @@ export function collectPayment(
   installmentId: string,
   dto: { amount: number; paymentMethod: string; referenceNumber?: string; paymentDate?: string; idempotencyKey?: string },
 ) {
-  return tenantFetch<{ success: true; paymentId: string; collectionStatus: 'COLLECTED'; duplicate?: boolean }>(
+  return tenantFetch<{ success: true; paymentId: string; collectionStatus: 'COLLECTED' | 'PARTIALLY_COLLECTED'; duplicate?: boolean }>(
     `/api/v1/tenant/collections/${installmentId}/collect`,
     { method: 'POST', body: JSON.stringify(dto) },
   );
@@ -1353,6 +1360,14 @@ export function confirmCollection(paymentId: string, confirmedAmount?: number) {
   return tenantFetch<{ success: true; paymentId: string; collectionStatus: 'CONFIRMED'; alreadyConfirmed?: boolean }>(
     `/api/v1/tenant/collections/payments/${paymentId}/confirm`,
     { method: 'POST', body: JSON.stringify({ confirmedAmount }) },
+  );
+}
+
+/** Manager/Owner/Admin-only: reverses the most recent collection on an installment, even after office confirmation. */
+export function undoCollection(installmentId: string) {
+  return tenantFetch<{ success: true; installmentId: string; paidAmount: number; installmentStatus: string }>(
+    `/api/v1/tenant/collections/${installmentId}/undo`,
+    { method: 'POST' },
   );
 }
 

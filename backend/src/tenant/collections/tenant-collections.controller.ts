@@ -134,6 +134,15 @@ export class TenantCollectionsController {
     return this.svc.confirmPayment(req.user, paymentId, confirmedAmount);
   }
 
+  @Post(':installmentId/undo')
+  @HttpCode(HttpStatus.OK)
+  undo(
+    @Req() req: { user: TenantJwtPayload },
+    @Param('installmentId') installmentId: string,
+  ) {
+    return this.svc.undoCollection(req.user, installmentId);
+  }
+
   @Patch(':installmentId/assign')
   assign(
     @Req() req: { user: TenantJwtPayload },

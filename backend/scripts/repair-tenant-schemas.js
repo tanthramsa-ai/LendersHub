@@ -17,19 +17,37 @@
  */
 const path = require('path');
 const { Client } = require('pg');
+const { resolveDatabaseUrl } = require('./db-url');
 
-try { require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') }); } catch (_) {}
-try { require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') }); } catch (_) {}
+const DATABASE_URL = resolveDatabaseUrl();
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ||
-  'postgresql://postgres:devpass@localhost:5433/lendershub';
+// Prefer the REAL, always-current tenantSchemaDDL from the compiled build
+// (dist/ exists in every deployed image — `npm run build` runs before
+// `start:prod`). This is the authoritative source; a hand-copied subset
+// here drifts out of sync with tenant-schema.ts the moment either changes
+// without the other being updated (this happened in practice: this file's
+// old hardcoded copy was missing the NPA columns and the customers.status
+// column, so tenants repaired with it still 500'd on those).
+// Falls back to a minimal hand-copied subset only for local dev use
+// without a build (`node scripts/repair-tenant-schemas.js` run straight
+// from a fresh checkout) — that fallback WILL drift again over time, so
+// don't rely on it for a real repair; run `npm run build` first instead.
+let tenantSchemaDDL;
+try {
+  ({ tenantSchemaDDL } = require(path.resolve(__dirname, '..', 'dist', 'super-admin', 'tenants', 'tenant-schema.js')));
+  console.log('Using compiled tenantSchemaDDL from dist/ (authoritative).');
+} catch (_) {
+  console.warn('dist/ not built — falling back to the hand-copied DDL subset below. Run `npm run build` first for a real repair.');
+  tenantSchemaDDL = tenantSchemaDDLFallback;
+}
 
-// Kept in sync by hand with backend/src/super-admin/tenants/tenant-schema.ts.
-// TS source can't be required directly from a plain Node script without a build step.
-function tenantSchemaDDL(s) {
+function tenantSchemaDDLFallback(s) {
   const q = `"${s}"`;
   return [
+    // Customer verification status (In-Progress -> Active). Default ACTIVE so
+    // existing customers aren't retroactively marked unverified.
+    `ALTER TABLE ${q}."customers" ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'ACTIVE'`,
+
     `DO $$ BEGIN ALTER TYPE ${q}.user_role ADD VALUE IF NOT EXISTS 'OWNER'; EXCEPTION WHEN others THEN NULL; END $$`,
     `DO $$ BEGIN ALTER TYPE ${q}.user_role ADD VALUE IF NOT EXISTS 'MANAGER'; EXCEPTION WHEN others THEN NULL; END $$`,
     `DO $$ BEGIN ALTER TYPE ${q}.user_role ADD VALUE IF NOT EXISTS 'AGENT'; EXCEPTION WHEN others THEN NULL; END $$`,
@@ -111,12 +129,37 @@ async function main() {
       return;
     }
 
+    let anyFailed = false;
     for (const t of tenants) {
-      process.stdout.write(`Repairing ${t.subdomain} (${t.schema_name})... `);
-      for (const sql of tenantSchemaDDL(t.schema_name)) {
-        await client.query(sql);
+      console.log(`\nRepairing ${t.subdomain} (${t.schema_name})...`);
+      const stmts = tenantSchemaDDL(t.schema_name);
+      const failures = [];
+      for (const sql of stmts) {
+        // Each statement runs independently rather than aborting the whole
+        // tenant on the first error: a schema old enough to be missing one
+        // thing is usually missing several, and bailing early means finding
+        // them one painful 500 at a time. Report everything, fix in one pass.
+        try {
+          await client.query(sql);
+        } catch (e) {
+          failures.push({ sql: sql.replace(/\s+/g, ' ').trim().slice(0, 120), message: e.message });
+        }
       }
-      console.log('done');
+      if (failures.length === 0) {
+        console.log(`  ok — ${stmts.length} statements applied`);
+      } else {
+        anyFailed = true;
+        console.log(`  ${stmts.length - failures.length}/${stmts.length} applied, ${failures.length} FAILED:`);
+        for (const f of failures) {
+          console.log(`    - ${f.message}`);
+          console.log(`      ${f.sql}...`);
+        }
+      }
+    }
+    if (anyFailed) {
+      console.log('\nSome statements failed — see above. These usually indicate a schema so old');
+      console.log('it predates a table/column another statement depends on. Fix those manually,');
+      console.log('then re-run; this script is idempotent and safe to repeat.');
     }
   } finally {
     await client.end();
