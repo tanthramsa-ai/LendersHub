@@ -478,7 +478,7 @@ export default function AgentRiskLoanDetailPage() {
               </div>
             );
           })}
-          {canClose && ['APPROVED', 'DISBURSED'].includes(loan.status) && (
+          {canClose && ['APPROVED', 'DISBURSED'].includes(loan.status) && loan.installments.some((i) => i.status !== 'PAID') && (
             <button
               type="button"
               onClick={() => setShowAddInstallment(true)}

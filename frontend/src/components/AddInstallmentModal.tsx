@@ -10,44 +10,25 @@ type Props = {
 };
 
 /**
- * Small modal for adding one extra installment to a loan's schedule. Restricted on the backend
- * to Owner/Admin/Manager — mirrors the confirm/cancel + inline-error pattern used by
- * MissedPaymentModal.
+ * Small modal for extending a loan's schedule by one installment. The due date is picked
+ * automatically (one cycle period after the last installment) and the whole amount counts as
+ * principal, no interest — matching how every other installment on the schedule already
+ * behaves, so it's included the same way in Principal/Interest Outstanding. Restricted on the
+ * backend to Owner/Admin/Manager.
  */
 export function AddInstallmentModal({ loanId, onCancel, onAdded }: Props) {
-  const [dueDate, setDueDate] = useState('');
   const [totalAmount, setTotalAmount] = useState('');
-  const [principalAmount, setPrincipalAmount] = useState('');
-  const [interestAmount, setInterestAmount] = useState('');
-  // Whether the user has directly edited Principal/Interest -- once they have, stop
-  // overwriting their value when Total changes. Save always sends the same default
-  // (unset Principal -> whole total, unset Interest -> 0) either way; this only
-  // controls whether that default is visibly mirrored into the field as you type,
-  // so what gets saved isn't a hidden assumption revealed only after the fact.
-  const [principalTouched, setPrincipalTouched] = useState(false);
-  const [interestTouched, setInterestTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  function handleTotalChange(v: string) {
-    setTotalAmount(v);
-    if (!principalTouched) setPrincipalAmount(v);
-    if (!interestTouched) setInterestAmount(v ? '0' : '');
-  }
-
-  const canSave = !!dueDate && !!totalAmount && Number(totalAmount) > 0 && !saving;
+  const canSave = !!totalAmount && Number(totalAmount) > 0 && !saving;
 
   async function handleSave() {
     if (!canSave) return;
     setSaving(true);
     setError('');
     try {
-      await addInstallment(loanId, {
-        dueDate,
-        totalAmount: Number(totalAmount),
-        principalAmount: principalAmount ? Number(principalAmount) : undefined,
-        interestAmount: interestAmount ? Number(interestAmount) : undefined,
-      });
+      await addInstallment(loanId, { totalAmount: Number(totalAmount) });
       onAdded();
     } catch (e: unknown) {
       setError((e as Error).message || 'Failed to add installment');
@@ -62,65 +43,25 @@ export function AddInstallmentModal({ loanId, onCancel, onAdded }: Props) {
         <div>
           <h2 className="text-lg font-bold text-gray-900">Add installment to schedule</h2>
           <p className="text-xs text-gray-500 mt-1">
-            This adds a new due installment — it does not record a payment.
-            To collect more than what&apos;s due on an existing installment, use{' '}
-            <span className="font-medium text-gray-700">Record Payment</span> instead; any amount
-            above the balance owed carries automatically onto the next installment.
+            This adds a new due installment after the last one on the schedule — it does not
+            record a payment. To collect more than what&apos;s due on an existing installment,
+            use <span className="font-medium text-gray-700">Record Payment</span> instead; any
+            amount above the balance owed carries automatically onto the next installment.
           </p>
         </div>
 
-        <div className="space-y-3">
-          <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-1">Due date</label>
-            <input
-              type="date"
-              value={dueDate}
-              onChange={(e) => setDueDate(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-1">Total amount</label>
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={totalAmount}
-              onChange={(e) => handleTotalChange(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-              placeholder="0.00"
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1">Principal</label>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={principalAmount}
-                onChange={(e) => { setPrincipalAmount(e.target.value); setPrincipalTouched(true); }}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                placeholder="0.00"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1">Interest</label>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={interestAmount}
-                onChange={(e) => { setInterestAmount(e.target.value); setInterestTouched(true); }}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                placeholder="0.00"
-              />
-            </div>
-          </div>
-          <p className="text-[11px] text-gray-400 -mt-1">
-            Principal and interest default to matching the total amount (all principal,
-            no interest) — adjust them if this installment should be split differently.
-          </p>
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 mb-1">Amount</label>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={totalAmount}
+            onChange={(e) => setTotalAmount(e.target.value)}
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            placeholder="0.00"
+            autoFocus
+          />
         </div>
 
         {error && <p className="text-sm text-red-600">{error}</p>}

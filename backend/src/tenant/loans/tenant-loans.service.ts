@@ -140,6 +140,31 @@ function toYmd(value: unknown): string {
   return String(value ?? '').slice(0, 10);
 }
 
+/** The date one collection period after `lastDueDateYmd`, per the loan's own cycle. */
+function nextCycleDueDate(lastDueDateYmd: string, cycleType: string): string {
+  const [y, m, d] = lastDueDateYmd.split('-').map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  switch (cycleType) {
+    case 'WEEKLY':
+      date.setUTCDate(date.getUTCDate() + 7);
+      break;
+    case 'DAILY_NO_SUNDAY':
+      date.setUTCDate(date.getUTCDate() + 1);
+      while (date.getUTCDay() === 0) date.setUTCDate(date.getUTCDate() + 1);
+      break;
+    case 'DAILY_WITH_SUNDAY':
+      date.setUTCDate(date.getUTCDate() + 1);
+      break;
+    case 'MONTHLY':
+    case 'AGENT_RISK':
+    case 'TERM_LOAN':
+    default:
+      date.setUTCMonth(date.getUTCMonth() + 1);
+      break;
+  }
+  return date.toISOString().slice(0, 10);
+}
+
 const DAYS_PER_WEEK = 7;
 const WEEKS_PER_YEAR = 52;
 
@@ -1602,43 +1627,45 @@ export class TenantLoansService {
   }
 
   /**
-   * Extends a loan's schedule with one extra installment. Treated as an edit to the loan record
-   * (not a "create loan" action), so — matching Update Loan=No for Agent/Staff — this is
-   * restricted to MANAGER_ROLES only, unlike the create-loan endpoints which also allow
-   * FIELD_ROLES.
+   * Extends a loan's schedule with one extra installment, appended after the last one at
+   * whatever date the loan's own cycle would naturally land on next (no manual date entry).
+   * Treated as an edit to the loan record (not a "create loan" action), so — matching Update
+   * Loan=No for Agent/Staff — this is restricted to MANAGER_ROLES only, unlike the create-loan
+   * endpoints which also allow FIELD_ROLES.
    */
-  async addInstallment(
-    user: TenantJwtPayload,
-    loanId: string,
-    dto: { dueDate: string; principalAmount?: number; interestAmount?: number; totalAmount: number },
-  ) {
+  async addInstallment(user: TenantJwtPayload, loanId: string, dto: { totalAmount: number }) {
     if (!MANAGER_ROLES.includes(user.role as UserRole)) {
       throw new ForbiddenException('Only Owner, Manager or Admin can add an installment');
-    }
-    if (!dto.dueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.dueDate)) {
-      throw new BadRequestException('dueDate must be YYYY-MM-DD');
     }
     if (typeof dto.totalAmount !== 'number' || dto.totalAmount <= 0) {
       throw new BadRequestException('totalAmount must be a positive number');
     }
-    const principalAmount = dto.principalAmount ?? dto.totalAmount;
-    const interestAmount = dto.interestAmount ?? 0;
 
     return this.withSchema(user.schemaName, async (client) => {
-      const loanRes = await client.query(`SELECT id, loan_number FROM loans WHERE id = $1 AND deleted_at IS NULL`, [loanId]);
-      if (!loanRes.rows[0]) throw new NotFoundException('Loan not found');
-
-      const numRes = await client.query<{ next: string }>(
-        `SELECT COALESCE(MAX(installment_number), 0) + 1 AS next FROM installments WHERE loan_id = $1`,
+      const loanRes = await client.query<{ id: string; loan_number: string; cycle_type: string }>(
+        `SELECT id, loan_number, cycle_type FROM loans WHERE id = $1 AND deleted_at IS NULL`,
         [loanId],
       );
-      const nextNumber = parseInt(numRes.rows[0].next, 10);
+      if (!loanRes.rows[0]) throw new NotFoundException('Loan not found');
+
+      const instRes = await client.query<{ installment_number: number; due_date: string; status: string }>(
+        `SELECT installment_number, due_date, status FROM installments WHERE loan_id = $1 ORDER BY installment_number DESC`,
+        [loanId],
+      );
+      if (!instRes.rows.length) throw new BadRequestException('Loan has no installments to extend');
+      if (!instRes.rows.some((r) => r.status !== 'PAID')) {
+        throw new BadRequestException('All installments are already paid — nothing pending to extend');
+      }
+
+      const last = instRes.rows[0];
+      const nextNumber = last.installment_number + 1;
+      const dueDate = nextCycleDueDate(toYmd(last.due_date), loanRes.rows[0].cycle_type);
 
       const insRes = await client.query(
         `INSERT INTO installments (loan_id, installment_number, due_date, principal_amount, interest_amount, total_amount, status)
-         VALUES ($1,$2,$3,$4,$5,$6,'PENDING')
+         VALUES ($1,$2,$3,$4,0,$4,'PENDING')
          RETURNING *`,
-        [loanId, nextNumber, dto.dueDate, principalAmount, interestAmount, dto.totalAmount],
+        [loanId, nextNumber, dueDate, dto.totalAmount],
       );
       const inst = insRes.rows[0];
 
@@ -1647,7 +1674,7 @@ export class TenantLoansService {
         entityType: 'loan',
         entityId: loanId,
         entityLabel: loanRes.rows[0].loan_number,
-        metadata: { installmentNumber: nextNumber, dueDate: dto.dueDate, totalAmount: dto.totalAmount },
+        metadata: { installmentNumber: nextNumber, dueDate, totalAmount: dto.totalAmount },
       });
 
       return {

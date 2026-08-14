@@ -663,9 +663,6 @@ export function resolveMissedInstallment(
 }
 
 export interface AddInstallmentDto {
-  dueDate: string;
-  principalAmount?: number;
-  interestAmount?: number;
   totalAmount: number;
 }
 

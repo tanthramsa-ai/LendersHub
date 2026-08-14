@@ -267,7 +267,7 @@ export class TenantLoansController {
   addInstallment(
     @Request() req: { user: TenantJwtPayload },
     @Param('id') id: string,
-    @Body() dto: { dueDate: string; principalAmount?: number; interestAmount?: number; totalAmount: number },
+    @Body() dto: { totalAmount: number },
   ) {
     return this.svc.addInstallment(req.user, id, dto);
   }

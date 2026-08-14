@@ -404,7 +404,7 @@ export default function TermLoanDetailPage() {
               </button>
             </div>
           ))}
-          {canClose && isActive && (
+          {canClose && isActive && loan.installments.some((i) => i.status !== 'PAID') && (
             <button
               type="button"
               onClick={() => setShowAddInstallment(true)}
