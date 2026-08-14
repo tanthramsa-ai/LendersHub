@@ -6,6 +6,7 @@ import { TenantActivityLogService } from '../activity-log/tenant-activity-log.se
 import { safePagination } from '../../common/utils/pagination';
 import { MANAGER_ROLES, FIELD_ROLES, UserRole } from '../common/roles';
 import { assertNoDigitsOrSpecialChars } from '../customers/customer-validation';
+import { assertHasLetter } from '../common/text-validation';
 import { NPA_THRESHOLD_SETTING_KEY, npaConsecutiveOverdueRunSql, parseNpaThreshold } from '../common/npa';
 
 export interface CreateLoanDto {
@@ -1149,6 +1150,7 @@ export class TenantLoansService {
     if (!comment) {
       throw new BadRequestException('Comment is required when closing a loan');
     }
+    assertHasLetter(comment, 'Comment');
     if (comment.length > 1000) {
       throw new BadRequestException('Comment must be 1000 characters or fewer');
     }
@@ -1708,6 +1710,7 @@ export class TenantLoansService {
     if (!comment) {
       throw new BadRequestException('Comment is required when reopening a loan');
     }
+    assertHasLetter(comment, 'Comment');
     if (comment.length > 1000) {
       throw new BadRequestException('Comment must be 1000 characters or fewer');
     }

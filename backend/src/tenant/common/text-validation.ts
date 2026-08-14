@@ -43,6 +43,26 @@ export const CITY_RE = /^[a-zA-Z\s\-.']+$/;
 /** Street address: place-name set plus # for door numbers — e.g. "#4, 12/3 MG Road". */
 export const ADDRESS_RE = /^[a-zA-Z0-9\s\-.,'&()/#]+$/;
 
+// Human-readable descriptions, kept beside each set so an error message can
+// never drift from the pattern it describes.
+export const PLACE_NAME_CHARS = "letters, numbers, spaces and & - . , ' ( ) /";
+export const CODE_CHARS = 'letters, numbers, hyphens and underscores';
+export const PERSON_NAME_CHARS = 'letters, spaces and periods';
+export const CITY_CHARS = "letters, spaces and - . '";
+export const ADDRESS_CHARS = "letters, numbers, spaces and # & - . , ' ( ) /";
+
+/**
+ * For free-text fields (audit comments) where restricting the character set
+ * would be wrong, but a value of pure punctuation still isn't a real note.
+ * Only requires that the text contains at least one letter.
+ */
+export function assertHasLetter(value: string | undefined | null, fieldLabel: string): void {
+  const trimmed = value?.trim();
+  if (trimmed && !/[a-zA-Z]/.test(trimmed)) {
+    throw new BadRequestException(`${fieldLabel} must contain at least one letter`);
+  }
+}
+
 /**
  * Enforces an allowlist and requires the value to carry real content, not just
  * punctuation. `requireLetter` distinguishes a field that must be readable text

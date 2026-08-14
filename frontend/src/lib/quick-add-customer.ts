@@ -1,3 +1,5 @@
+import { PERSON_NAME_RE, PERSON_NAME_CHARS, ADDRESS_RE, ADDRESS_CHARS } from './text-validation';
+
 const NAME_HAS_DIGIT = /\d/;
 /** Letters, numbers, spaces, and common punctuation only (no symbols like @#$%) */
 const PLAIN_TEXT_ALLOWED = /^[a-zA-Z0-9\s\-.,']+$/;
@@ -66,19 +68,27 @@ export function getQuickAddCustomerErrors(cust: {
 
   if (!cust.firstName.trim()) errors.push('First Name is missing');
   else if (NAME_HAS_DIGIT.test(cust.firstName)) errors.push('First Name cannot contain numbers');
+  else if (!PERSON_NAME_RE.test(cust.firstName.trim())) errors.push(`First Name can only contain ${PERSON_NAME_CHARS}`);
+  else if (!/[a-zA-Z]/.test(cust.firstName)) errors.push('First Name must contain at least one letter');
 
-  if (cust.lastName?.trim() && NAME_HAS_DIGIT.test(cust.lastName)) {
-    errors.push('Last Name cannot contain numbers');
+  if (cust.lastName?.trim()) {
+    if (NAME_HAS_DIGIT.test(cust.lastName)) errors.push('Last Name cannot contain numbers');
+    else if (!PERSON_NAME_RE.test(cust.lastName.trim())) errors.push(`Last Name can only contain ${PERSON_NAME_CHARS}`);
+    else if (!/[a-zA-Z]/.test(cust.lastName)) errors.push('Last Name must contain at least one letter');
   }
 
   if (!cust.phone.trim()) errors.push('Phone number is missing');
   else if (!/^\d{10}$/.test(cust.phone)) errors.push('Phone number must be exactly 10 digits');
 
   if (!cust.address.trim()) errors.push('Address is missing');
+  else if (!ADDRESS_RE.test(cust.address.trim())) errors.push(`Address can only contain ${ADDRESS_CHARS}`);
+  else if (!/[a-zA-Z0-9]/.test(cust.address)) errors.push('Address must contain at least one letter or number');
 
   if (!cust.locality.trim()) errors.push('Locality is missing');
   else if (!PLAIN_TEXT_ALLOWED.test(cust.locality.trim())) {
     errors.push('Locality cannot contain special characters');
+  } else if (!/[a-zA-Z]/.test(cust.locality)) {
+    errors.push('Locality must contain at least one letter');
   }
 
   if (cust.requireAltContact && !cust.altContact?.trim()) {

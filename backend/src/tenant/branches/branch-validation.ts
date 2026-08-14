@@ -6,13 +6,13 @@ import {
   PERSON_NAME_RE,
   CITY_RE,
   ADDRESS_RE,
+  PLACE_NAME_CHARS,
+  CODE_CHARS,
+  PERSON_NAME_CHARS,
+  CITY_CHARS,
+  ADDRESS_CHARS,
 } from '../common/text-validation';
 
-const PLACE_NAME_CHARS = "letters, numbers, spaces and & - . , ' ( ) /";
-const CODE_CHARS = 'letters, numbers, hyphens and underscores';
-const PERSON_NAME_CHARS = 'letters, spaces and periods';
-const CITY_CHARS = "letters, spaces and - . '";
-const ADDRESS_CHARS = "letters, numbers, spaces and # & - . , ' ( ) /";
 
 const PHONE_RE = /^\d{10}$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
