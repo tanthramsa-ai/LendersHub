@@ -5,6 +5,7 @@ import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { createCustomer, getBranches, TenantBranch, getTenantSession, CUSTOMER_ROLES } from '@/services/tenant-api';
 import { sanitizeLocalityInput, sanitizeOccupationInput, sanitizePanInput, sanitizeNameInput, sanitizeLoanPurposeInput, hasDisallowedLoanPurposeChars } from '@/lib/quick-add-customer';
+import { allowedCharsError, EMAIL_RE, PERSON_NAME_RE, PERSON_NAME_CHARS, ADDRESS_RE, ADDRESS_CHARS } from '@/lib/text-validation';
 
 const STATES = [
   'Andhra Pradesh','Arunachal Pradesh','Assam','Bihar','Chhattisgarh','Goa','Gujarat',
@@ -51,20 +52,40 @@ function Field({
 function validateForm(form: FormFields): Partial<Record<FieldKey | 'kyc', string>> {
   const errors: Partial<Record<FieldKey | 'kyc', string>> = {};
 
+  // Assign only when there IS an error: `errors.x = undefined` still creates the
+  // key, which would make Object.keys(errors).length non-zero and block submit
+  // forever.
   if (!form.firstName.trim()) errors.firstName = 'First name is required';
+  else {
+    const e = allowedCharsError(form.firstName, 'First name', PERSON_NAME_RE, PERSON_NAME_CHARS);
+    if (e) errors.firstName = e;
+  }
   if (!form.lastName.trim()) errors.lastName = 'Last name is required';
+  else {
+    const e = allowedCharsError(form.lastName, 'Last name', PERSON_NAME_RE, PERSON_NAME_CHARS);
+    if (e) errors.lastName = e;
+  }
 
   if (!form.phone.trim()) errors.phone = 'Phone number is required';
   else if (!/^\d{10}$/.test(form.phone)) errors.phone = 'Phone number must be exactly 10 digits';
 
-  if (form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
+  if (form.email.trim() && !EMAIL_RE.test(form.email.trim())) {
     errors.email = 'Email address is invalid';
   }
 
   if (!form.address.trim()) errors.address = 'Address is required';
+  else {
+    const e = allowedCharsError(form.address, 'Address', ADDRESS_RE, ADDRESS_CHARS, false);
+    if (e) errors.address = e;
+  }
   if (!form.locality.trim()) errors.locality = 'Locality is required';
   else if (!/^[a-zA-Z0-9\s\-.,']+$/.test(form.locality.trim())) {
     errors.locality = 'Locality cannot contain special characters';
+  }
+
+  if (form.altContactName.trim()) {
+    const e = allowedCharsError(form.altContactName, 'Contact name', PERSON_NAME_RE, PERSON_NAME_CHARS);
+    if (e) errors.altContactName = e;
   }
 
   if (form.altContact.trim() && !/^\d{10}$/.test(form.altContact)) {
@@ -121,9 +142,24 @@ export default function NewCustomerPage() {
   });
   const [aadhaarFile, setAadhaarFile] = useState<File | null>(null);
   const [aadhaarPreview, setAadhaarPreview] = useState<string>('');
-  const [fieldErrors, setFieldErrors] = useState<Partial<Record<FieldKey | 'kyc', string>>>({});
+  const [touched, setTouched] = useState<Partial<Record<FieldKey | 'kyc', boolean>>>({});
+  const [submitAttempted, setSubmitAttempted] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Validate on every render, but only SHOW a field's error once the user has
+  // left it (blur) or tried to submit — otherwise an untouched empty form lights
+  // up red immediately. Same pattern as the branch modal, so the two forms
+  // behave identically.
+  const liveErrors = validateForm(form);
+  const fieldErrors: Partial<Record<FieldKey | 'kyc', string>> = {};
+  for (const k of Object.keys(liveErrors) as (FieldKey | 'kyc')[]) {
+    if (touched[k] || submitAttempted) fieldErrors[k] = liveErrors[k];
+  }
+
+  function blur(field: FieldKey | 'kyc') {
+    setTouched((t) => (t[field] ? t : { ...t, [field]: true }));
+  }
 
   useEffect(() => {
     getBranches().then((b) => setBranches(b.filter((br) => br.isActive)));
@@ -131,13 +167,6 @@ export default function NewCustomerPage() {
 
   function set(field: FieldKey, value: string) {
     setForm((f) => ({ ...f, [field]: value }));
-    setFieldErrors((prev) => {
-      if (!prev[field] && !(field === 'panNumber' || field === 'aadhaarLast4' ? prev.kyc : false)) return prev;
-      const next = { ...prev };
-      delete next[field];
-      if (field === 'panNumber' || field === 'aadhaarLast4') delete next.kyc;
-      return next;
-    });
   }
 
   function cls(field: FieldKey) {
@@ -158,14 +187,14 @@ export default function NewCustomerPage() {
     e.preventDefault();
     setError('');
 
-    const errors = validateForm(form);
-    if (Object.keys(errors).length > 0) {
-      setFieldErrors(errors);
-      const first = Object.values(errors)[0];
-      setError(first ?? 'Please fix the highlighted fields');
+    setSubmitAttempted(true);
+    if (Object.keys(liveErrors).length > 0) {
+      // Every validation error renders inline under its own field (kyc included),
+      // so the summary stays generic rather than repeating the first field's
+      // message — which read as a second, unrelated problem.
+      setError('Please fix the highlighted fields');
       return;
     }
-    setFieldErrors({});
 
     setLoading(true);
     try {
@@ -220,16 +249,16 @@ export default function NewCustomerPage() {
           <h2 className="text-sm font-semibold text-gray-700 mb-4">Personal Information</h2>
           <div className="grid grid-cols-2 gap-4">
             <Field label="First Name" required error={fieldErrors.firstName}>
-              <input value={form.firstName} onChange={(e) => set('firstName', sanitizeNameInput(e.target.value))} className={cls('firstName')} placeholder="Ravi" />
+              <input value={form.firstName} onBlur={() => blur('firstName')} onChange={(e) => set('firstName', sanitizeNameInput(e.target.value))} className={cls('firstName')} placeholder="Ravi" />
             </Field>
             <Field label="Last Name" required error={fieldErrors.lastName}>
-              <input value={form.lastName} onChange={(e) => set('lastName', sanitizeNameInput(e.target.value))} className={cls('lastName')} placeholder="Kumar" />
+              <input value={form.lastName} onBlur={() => blur('lastName')} onChange={(e) => set('lastName', sanitizeNameInput(e.target.value))} className={cls('lastName')} placeholder="Kumar" />
             </Field>
             <Field label="Mobile Number" required error={fieldErrors.phone}>
               <div className="flex">
                 <span className="inline-flex items-center px-3 border border-r-0 border-gray-300 rounded-l-lg bg-gray-50 text-gray-500 text-sm">+91</span>
                 <input
-                  value={form.phone}
+                  value={form.phone} onBlur={() => blur('phone')}
                   onChange={(e) => set('phone', e.target.value.replace(/\D/g, '').slice(0, 10))}
                   className={`flex-1 px-3 py-2 border rounded-r-lg text-sm focus:outline-none focus:ring-2 bg-white text-gray-900 ${fieldErrors.phone ? 'border-red-400 focus:ring-red-400' : 'border-gray-300 focus:ring-blue-500'}`}
                   placeholder="9876543210"
@@ -239,19 +268,19 @@ export default function NewCustomerPage() {
               </div>
             </Field>
             <Field label="Email Address" error={fieldErrors.email}>
-              <input type="email" value={form.email} onChange={(e) => set('email', e.target.value)} className={cls('email')} placeholder="ravi@example.com" />
+              <input type="email" value={form.email} onBlur={() => blur('email')} onChange={(e) => set('email', e.target.value)} className={cls('email')} placeholder="ravi@example.com" />
             </Field>
             <Field label="Date of Birth">
-              <input type="date" value={form.dateOfBirth} onChange={(e) => set('dateOfBirth', e.target.value)} className={inputCls} />
+              <input type="date" value={form.dateOfBirth} onBlur={() => blur('dateOfBirth')} onChange={(e) => set('dateOfBirth', e.target.value)} className={inputCls} />
             </Field>
             <Field label="Occupation">
-              <input value={form.occupation} onChange={(e) => set('occupation', sanitizeOccupationInput(e.target.value))} className={inputCls} placeholder="Farmer, Business, Salaried…" />
+              <input value={form.occupation} onBlur={() => blur('occupation')} onChange={(e) => set('occupation', sanitizeOccupationInput(e.target.value))} className={inputCls} placeholder="Farmer, Business, Salaried…" />
             </Field>
             <Field label="Reason for Loan" error={fieldErrors.loanPurpose}>
-              <input value={form.loanPurpose} onChange={(e) => set('loanPurpose', sanitizeLoanPurposeInput(e.target.value))} className={cls('loanPurpose')} placeholder="Agriculture, Medical, Education…" />
+              <input value={form.loanPurpose} onBlur={() => blur('loanPurpose')} onChange={(e) => set('loanPurpose', sanitizeLoanPurposeInput(e.target.value))} className={cls('loanPurpose')} placeholder="Agriculture, Medical, Education…" />
             </Field>
             <Field label="Credit Score" error={fieldErrors.creditScore}>
-              <input type="number" value={form.creditScore} onChange={(e) => set('creditScore', e.target.value)} className={cls('creditScore')} placeholder="750" min={300} max={900} />
+              <input type="number" value={form.creditScore} onBlur={() => blur('creditScore')} onChange={(e) => set('creditScore', e.target.value)} className={cls('creditScore')} placeholder="750" min={300} max={900} />
             </Field>
           </div>
         </div>
@@ -263,10 +292,10 @@ export default function NewCustomerPage() {
           {(fieldErrors.kyc) && <p className="text-xs text-red-600 mb-3">{fieldErrors.kyc}</p>}
           <div className="grid grid-cols-2 gap-4">
             <Field label="PAN Number" error={fieldErrors.panNumber}>
-              <input value={form.panNumber} onChange={(e) => set('panNumber', sanitizePanInput(e.target.value))} className={cls('panNumber')} placeholder="ABCDE1234F" maxLength={10} />
+              <input value={form.panNumber} onBlur={() => blur('panNumber')} onChange={(e) => set('panNumber', sanitizePanInput(e.target.value))} className={cls('panNumber')} placeholder="ABCDE1234F" maxLength={10} />
             </Field>
             <Field label="Aadhaar Last 4 Digits" error={fieldErrors.aadhaarLast4}>
-              <input value={form.aadhaarLast4} onChange={(e) => set('aadhaarLast4', e.target.value.replace(/\D/g, '').slice(0, 4))} className={cls('aadhaarLast4')} placeholder="1234" maxLength={4} inputMode="numeric" />
+              <input value={form.aadhaarLast4} onBlur={() => blur('aadhaarLast4')} onChange={(e) => set('aadhaarLast4', e.target.value.replace(/\D/g, '').slice(0, 4))} className={cls('aadhaarLast4')} placeholder="1234" maxLength={4} inputMode="numeric" />
             </Field>
           </div>
           <div className="mt-4">
@@ -286,23 +315,23 @@ export default function NewCustomerPage() {
           <h2 className="text-sm font-semibold text-gray-700 mb-4">Address</h2>
           <div className="space-y-4">
             <Field label="Street Address" required error={fieldErrors.address}>
-              <input value={form.address} onChange={(e) => set('address', e.target.value)} className={cls('address')} placeholder="Plot 12, Main Road" />
+              <input value={form.address} onBlur={() => blur('address')} onChange={(e) => set('address', e.target.value)} className={cls('address')} placeholder="Plot 12, Main Road" />
             </Field>
             <Field label="Locality / Area" required error={fieldErrors.locality}>
-              <input value={form.locality} onChange={(e) => set('locality', sanitizeLocalityInput(e.target.value))} className={cls('locality')} placeholder="Anna Nagar, Velachery…" />
+              <input value={form.locality} onBlur={() => blur('locality')} onChange={(e) => set('locality', sanitizeLocalityInput(e.target.value))} className={cls('locality')} placeholder="Anna Nagar, Velachery…" />
             </Field>
             <div className="grid grid-cols-3 gap-4">
               <Field label="City">
-                <input value={form.city} onChange={(e) => set('city', e.target.value)} className={inputCls} placeholder="Chennai" />
+                <input value={form.city} onBlur={() => blur('city')} onChange={(e) => set('city', e.target.value)} className={inputCls} placeholder="Chennai" />
               </Field>
               <Field label="State">
-                <select value={form.state} onChange={(e) => set('state', e.target.value)} className={inputCls}>
+                <select value={form.state} onBlur={() => blur('state')} onChange={(e) => set('state', e.target.value)} className={inputCls}>
                   <option value="">Select state</option>
                   {STATES.map((s) => <option key={s} value={s}>{s}</option>)}
                 </select>
               </Field>
               <Field label="Pincode" error={fieldErrors.pincode}>
-                <input value={form.pincode} onChange={(e) => set('pincode', e.target.value.replace(/\D/g, '').slice(0, 6))} className={cls('pincode')} placeholder="600001" maxLength={6} inputMode="numeric" />
+                <input value={form.pincode} onBlur={() => blur('pincode')} onChange={(e) => set('pincode', e.target.value.replace(/\D/g, '').slice(0, 6))} className={cls('pincode')} placeholder="600001" maxLength={6} inputMode="numeric" />
               </Field>
             </div>
           </div>
@@ -316,7 +345,7 @@ export default function NewCustomerPage() {
               <div className="flex">
                 <span className="inline-flex items-center px-3 border border-r-0 border-gray-300 rounded-l-lg bg-gray-50 text-gray-500 text-sm">+91</span>
                 <input
-                  value={form.altContact}
+                  value={form.altContact} onBlur={() => blur('altContact')}
                   onChange={(e) => set('altContact', e.target.value.replace(/\D/g, '').slice(0, 10))}
                   className={`flex-1 px-3 py-2 border rounded-r-lg text-sm focus:outline-none focus:ring-2 bg-white text-gray-900 ${fieldErrors.altContact ? 'border-red-400 focus:ring-red-400' : 'border-gray-300 focus:ring-blue-500'}`}
                   placeholder="9876543210"
@@ -325,11 +354,11 @@ export default function NewCustomerPage() {
                 />
               </div>
             </Field>
-            <Field label="Contact Name">
-              <input value={form.altContactName} onChange={(e) => set('altContactName', e.target.value)} className={inputCls} placeholder="Priya Kumar" />
+            <Field label="Contact Name" error={fieldErrors.altContactName}>
+              <input value={form.altContactName} onBlur={() => blur('altContactName')} onChange={(e) => set('altContactName', sanitizeNameInput(e.target.value))} className={cls('altContactName')} placeholder="Priya Kumar" />
             </Field>
             <Field label="Relation">
-              <select value={form.altContactRelation} onChange={(e) => set('altContactRelation', e.target.value)} className={inputCls}>
+              <select value={form.altContactRelation} onBlur={() => blur('altContactRelation')} onChange={(e) => set('altContactRelation', e.target.value)} className={inputCls}>
                 <option value="">Select relation</option>
                 {RELATIONS.map((r) => <option key={r} value={r}>{r}</option>)}
               </select>
@@ -342,7 +371,7 @@ export default function NewCustomerPage() {
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
             <h2 className="text-sm font-semibold text-gray-700 mb-4">Branch Assignment</h2>
             <Field label="Assign to Branch">
-              <select value={form.branchId} onChange={(e) => set('branchId', e.target.value)} className={inputCls}>
+              <select value={form.branchId} onBlur={() => blur('branchId')} onChange={(e) => set('branchId', e.target.value)} className={inputCls}>
                 <option value="">No specific branch</option>
                 {branches.map((b) => <option key={b.id} value={b.id}>{b.name} ({b.code})</option>)}
               </select>

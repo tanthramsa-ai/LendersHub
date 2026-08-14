@@ -18,6 +18,7 @@ import {
   allowedCharsError,
   PLACE_NAME_RE, CODE_RE, PERSON_NAME_RE, CITY_RE, ADDRESS_RE,
   PLACE_NAME_CHARS, CODE_CHARS, PERSON_NAME_CHARS, CITY_CHARS, ADDRESS_CHARS,
+  EMAIL_RE,
 } from '@/lib/text-validation';
 
 const BRAND = '#0F4C81';
@@ -52,7 +53,6 @@ const MANAGER_NAME_MAX = 100;
 const ADDRESS_MAX = 200;
 const CITY_MAX = 100;
 const PHONE_RE = /^\d{10}$/;
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /** Validates every field at once (not stop-at-first) so all problems can be shown together. */
 function validateBranchForm(form: BranchForm, isEdit: boolean): BranchFieldErrors {

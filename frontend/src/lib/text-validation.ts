@@ -37,6 +37,12 @@ export const ADDRESS_RE = /^[a-zA-Z0-9\s\-.,'&()/#]+$/;
 
 export const PLACE_NAME_CHARS = "letters, numbers, spaces and & - . , ' ( ) /";
 export const CODE_CHARS = 'letters, numbers, hyphens and underscores';
+/**
+ * Email. Mirrors the backend: real domain labels and a letters-only TLD of at
+ * least two characters, so "user@gmail.com!" and "a@b..com" are rejected.
+ */
+export const EMAIL_RE = /^[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$/;
+
 export const PERSON_NAME_CHARS = 'letters, spaces and periods';
 export const CITY_CHARS = "letters, spaces and - . '";
 export const ADDRESS_CHARS = "letters, numbers, spaces and # & - . , ' ( ) /";

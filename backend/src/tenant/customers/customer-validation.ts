@@ -5,6 +5,7 @@ import {
   PERSON_NAME_CHARS,
   ADDRESS_RE,
   ADDRESS_CHARS,
+  EMAIL_RE,
 } from '../common/text-validation';
 
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
@@ -30,6 +31,7 @@ export function validateCustomerFields(dto: {
   pincode?: string;
   occupation?: string;
   altContact?: string;
+  altContactName?: string;
   loanPurpose?: string;
   creditScore?: number;
   requireCore?: boolean;
@@ -65,6 +67,11 @@ export function validateCustomerFields(dto: {
     assertAllowedChars(dto.occupation, 'Occupation', LOAN_PURPOSE_RE, LOAN_PURPOSE_CHARS);
   }
 
+  // Alternate contact NAME was previously stored with no validation at all.
+  if (dto.altContactName != null && dto.altContactName !== '') {
+    assertAllowedChars(dto.altContactName, 'Contact name', PERSON_NAME_RE, PERSON_NAME_CHARS);
+  }
+
   // Alternate contact is optional; when provided it must be a valid 10-digit number
   if (dto.altContact != null && dto.altContact !== '') {
     if (!PHONE_RE.test(dto.altContact.trim())) {
@@ -72,7 +79,7 @@ export function validateCustomerFields(dto: {
     }
   }
 
-  if (dto.email?.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(dto.email.trim())) {
+  if (dto.email?.trim() && !EMAIL_RE.test(dto.email.trim())) {
     throw new BadRequestException('Email address is invalid');
   }
 

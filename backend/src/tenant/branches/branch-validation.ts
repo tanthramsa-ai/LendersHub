@@ -11,11 +11,11 @@ import {
   PERSON_NAME_CHARS,
   CITY_CHARS,
   ADDRESS_CHARS,
+  EMAIL_RE,
 } from '../common/text-validation';
 
 
 const PHONE_RE = /^\d{10}$/;
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export const BRANCH_NAME_MIN = 4;
 export const BRANCH_NAME_MAX = 100;

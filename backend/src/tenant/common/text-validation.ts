@@ -43,6 +43,14 @@ export const CITY_RE = /^[a-zA-Z\s\-.']+$/;
 /** Street address: place-name set plus # for door numbers — e.g. "#4, 12/3 MG Road". */
 export const ADDRESS_RE = /^[a-zA-Z0-9\s\-.,'&()/#]+$/;
 
+/**
+ * Email. The previous pattern (`^[^\s@]+@[^\s@]+\.[^\s@]+$`) accepted anything
+ * that wasn't whitespace or "@" after the dot, so "user@gmail.com!" and
+ * "x@y.com#" passed. This requires real domain labels and a letters-only TLD of
+ * at least two characters, which also rules out "a@b..com" and "a@b.c".
+ */
+export const EMAIL_RE = /^[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$/;
+
 // Human-readable descriptions, kept beside each set so an error message can
 // never drift from the pattern it describes.
 export const PLACE_NAME_CHARS = "letters, numbers, spaces and & - . , ' ( ) /";
