@@ -166,6 +166,94 @@ describe('TenantCollectionsService', () => {
     });
   });
 
+  describe('undoCollection — RBAC & status recompute (Aug_13 sheet item)', () => {
+    it('rejects an AGENT attempting to undo — matches the loan-detail undo gate', async () => {
+      await expect(
+        svc.undoCollection(makeUser({ role: 'AGENT' }), 'inst-1'),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(poolConnect).not.toHaveBeenCalled();
+    });
+
+    it('rejects a STAFF attempting to undo', async () => {
+      await expect(
+        svc.undoCollection(makeUser({ role: 'STAFF' }), 'inst-1'),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it.each(['MANAGER', 'ADMIN', 'OWNER'] as const)('allows %s to reach the undo query', async (role) => {
+      query
+        .mockResolvedValueOnce(undefined) // SET search_path
+        .mockResolvedValueOnce(undefined) // BEGIN
+        .mockResolvedValueOnce({ rows: [] }) // installment lookup finds nothing
+        .mockResolvedValueOnce(undefined); // ROLLBACK (via finally)
+      await expect(svc.undoCollection(makeUser({ role }), 'inst-1')).rejects.toThrow(/not found/i);
+    });
+
+    it('rejects when there is no active (non-cancelled) collection to undo', async () => {
+      query
+        .mockResolvedValueOnce(undefined) // SET search_path
+        .mockResolvedValueOnce(undefined) // BEGIN
+        .mockResolvedValueOnce({ rows: [{ id: 'inst-1', loan_id: 'loan-1', loan_number: 'LN-1', paid_amount: '0', total_amount: '450', is_past_due: false }] })
+        .mockResolvedValueOnce({ rows: [] }) // no non-cancelled payment
+        .mockResolvedValueOnce(undefined); // ROLLBACK
+
+      await expect(svc.undoCollection(makeUser({ role: 'MANAGER' }), 'inst-1')).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('fully reverts a payment, soft-cancels it (not deletes), and falls back to OVERDUE when past due', async () => {
+      query
+        .mockResolvedValueOnce(undefined) // SET search_path
+        .mockResolvedValueOnce(undefined) // BEGIN
+        .mockResolvedValueOnce({ rows: [{ id: 'inst-1', loan_id: 'loan-1', loan_number: 'LN-1', paid_amount: '450', total_amount: '450', is_past_due: true }] })
+        .mockResolvedValueOnce({ rows: [{ id: 'payment-1', amount: '450', collection_status: 'COLLECTED' }] })
+        .mockResolvedValueOnce(undefined) // UPDATE installments
+        .mockResolvedValueOnce(undefined) // UPDATE payments SET cancelled_at
+        .mockResolvedValueOnce(undefined) // audit INSERT
+        .mockResolvedValueOnce(undefined); // COMMIT
+
+      const result = await svc.undoCollection(makeUser({ role: 'OWNER' }), 'inst-1');
+
+      expect(result).toEqual({ success: true, installmentId: 'inst-1', paidAmount: 0, installmentStatus: 'OVERDUE' });
+      const cancelCall = query.mock.calls.find((c) => String(c[0]).includes('cancelled_at = NOW()'));
+      expect(cancelCall![1]).toEqual(['payment-1']);
+      // The payment row is soft-cancelled, never deleted.
+      expect(query.mock.calls.some((c) => String(c[0]).includes('DELETE FROM payments'))).toBe(false);
+    });
+
+    it('recomputes PARTIALLY_PAID when the undone payment only covered part of the balance', async () => {
+      // 450 owed, 450 already paid (two payments: an earlier 250, then a 200 top-up).
+      // Undoing the most recent (200) leaves 250 paid — still short of the 450 total.
+      query
+        .mockResolvedValueOnce(undefined) // SET search_path
+        .mockResolvedValueOnce(undefined) // BEGIN
+        .mockResolvedValueOnce({ rows: [{ id: 'inst-1', loan_id: 'loan-1', loan_number: 'LN-1', paid_amount: '450', total_amount: '450', is_past_due: false }] })
+        .mockResolvedValueOnce({ rows: [{ id: 'payment-2', amount: '200', collection_status: 'COLLECTED' }] })
+        .mockResolvedValueOnce(undefined) // UPDATE installments
+        .mockResolvedValueOnce(undefined) // UPDATE payments SET cancelled_at
+        .mockResolvedValueOnce(undefined) // audit INSERT
+        .mockResolvedValueOnce(undefined); // COMMIT
+
+      const result = await svc.undoCollection(makeUser({ role: 'ADMIN' }), 'inst-1');
+
+      expect(result).toEqual({ success: true, installmentId: 'inst-1', paidAmount: 250, installmentStatus: 'PARTIALLY_PAID' });
+    });
+
+    it('allows undo even after office Confirmation (product decision — no CONFIRMED-status gate)', async () => {
+      query
+        .mockResolvedValueOnce(undefined) // SET search_path
+        .mockResolvedValueOnce(undefined) // BEGIN
+        .mockResolvedValueOnce({ rows: [{ id: 'inst-1', loan_id: 'loan-1', loan_number: 'LN-1', paid_amount: '450', total_amount: '450', is_past_due: false }] })
+        .mockResolvedValueOnce({ rows: [{ id: 'payment-1', amount: '450', collection_status: 'CONFIRMED' }] })
+        .mockResolvedValueOnce(undefined) // UPDATE installments
+        .mockResolvedValueOnce(undefined) // UPDATE payments SET cancelled_at
+        .mockResolvedValueOnce(undefined) // audit INSERT
+        .mockResolvedValueOnce(undefined); // COMMIT
+
+      const result = await svc.undoCollection(makeUser({ role: 'OWNER' }), 'inst-1');
+      expect(result.success).toBe(true);
+    });
+  });
+
   describe('resolvePeriod (spec §11 "Provide an option to choose W/D/M")', () => {
     it('accepts D, W, M in any case and rejects anything else', async () => {
       const anyService = svc as unknown as { resolvePeriod: (p?: string) => string };
@@ -195,6 +283,73 @@ describe('TenantCollectionsService', () => {
       expect(anyService().rangeForView('month', '2026-08-15')).toEqual({ start: '2026-08-01', end: '2026-08-31' });
       // February in a non-leap year.
       expect(anyService().rangeForView('month', '2026-02-10')).toEqual({ start: '2026-02-01', end: '2026-02-28' });
+    });
+  });
+
+  describe('applyCollectionSettlement — Partial Collected status (Aug_13 sheet item)', () => {
+    type SettlementResult = { success: true; paymentId: string | null; collectionStatus: 'COLLECTED' | 'PARTIALLY_COLLECTED' };
+    const anyService = () => svc as unknown as {
+      applyCollectionSettlement: (
+        client: unknown,
+        user: TenantJwtPayload,
+        inst: { loan_id: string; loan_number: string },
+        settleRows: { id: string; balance: string; due_date: string }[],
+        dto: { amount: number; paymentMethod: string; referenceNumber?: string; idempotencyKey?: string },
+        paymentDate: string,
+        installmentId: string,
+      ) => Promise<SettlementResult>;
+    };
+
+    it('marks the installment COLLECTED when the payment covers the full balance owed', async () => {
+      query.mockResolvedValue({ rows: [{ id: 'payment-1' }] }); // every INSERT/UPDATE call in the loop
+      const result = await anyService().applyCollectionSettlement(
+        client,
+        makeUser(),
+        { loan_id: 'loan-1', loan_number: 'LN-1' },
+        [{ id: 'inst-1', balance: '500.00', due_date: '2026-08-10' }],
+        { amount: 500, paymentMethod: 'CASH' },
+        '2026-08-10',
+        'inst-1',
+      );
+      expect(result).toEqual({ success: true, paymentId: 'payment-1', collectionStatus: 'COLLECTED' });
+      const insertCall = query.mock.calls.find((c) => String(c[0]).includes('INSERT INTO payments'));
+      expect(insertCall![1]).toContain('COLLECTED');
+    });
+
+    it('marks the installment PARTIALLY_COLLECTED when the payment is short of the balance owed', async () => {
+      query.mockResolvedValue({ rows: [{ id: 'payment-2' }] });
+      const result = await anyService().applyCollectionSettlement(
+        client,
+        makeUser(),
+        { loan_id: 'loan-1', loan_number: 'LN-1' },
+        [{ id: 'inst-1', balance: '500.00', due_date: '2026-08-10' }],
+        { amount: 300, paymentMethod: 'CASH' },
+        '2026-08-10',
+        'inst-1',
+      );
+      expect(result).toEqual({ success: true, paymentId: 'payment-2', collectionStatus: 'PARTIALLY_COLLECTED' });
+      const insertCall = query.mock.calls.find((c) => String(c[0]).includes('INSERT INTO payments'));
+      expect(insertCall![1]).toContain('PARTIALLY_COLLECTED');
+    });
+
+    it('reports COLLECTED for the primary installment even when an earlier pending row is left short (oldest-first settlement)', async () => {
+      // 300 is split oldest-first across two rows owing 200 and 500: the older
+      // row (not the requested installmentId) is fully paid, the primary
+      // requested installment absorbs the rest and is only partially covered.
+      query.mockResolvedValue({ rows: [{ id: 'payment-x' }] });
+      const result = await anyService().applyCollectionSettlement(
+        client,
+        makeUser(),
+        { loan_id: 'loan-1', loan_number: 'LN-1' },
+        [
+          { id: 'inst-older', balance: '200.00', due_date: '2026-08-01' },
+          { id: 'inst-primary', balance: '500.00', due_date: '2026-08-10' },
+        ],
+        { amount: 300, paymentMethod: 'CASH' },
+        '2026-08-10',
+        'inst-primary',
+      );
+      expect(result.collectionStatus).toBe('PARTIALLY_COLLECTED');
     });
   });
 

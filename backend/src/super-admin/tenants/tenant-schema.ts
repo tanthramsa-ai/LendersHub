@@ -185,6 +185,11 @@ export function tenantSchemaDDL(s: string): string[] {
     `ALTER TABLE ${q}."customers" ADD COLUMN IF NOT EXISTS branch_id UUID REFERENCES ${q}."branches" (id) ON DELETE SET NULL`,
     `ALTER TABLE ${q}."loans"     ADD COLUMN IF NOT EXISTS branch_id UUID REFERENCES ${q}."branches" (id) ON DELETE SET NULL`,
 
+    // ── customer verification status (idempotent). Default ACTIVE so existing
+    // customers aren't retroactively marked unverified; create() sets new rows
+    // to IN_PROGRESS explicitly regardless of this default.
+    `ALTER TABLE ${q}."customers" ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'ACTIVE'`,
+
     // ── loan_type_id FK on loans (idempotent) ────────────────────────────────
     `ALTER TABLE ${q}."loans" ADD COLUMN IF NOT EXISTS loan_type_id UUID REFERENCES ${q}."loan_types" (id) ON DELETE SET NULL`,
 

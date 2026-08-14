@@ -4,10 +4,10 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
-  getCustomer, updateCustomer, getBranches, activateCustomer, deactivateCustomer, deleteCustomer,
+  getCustomer, updateCustomer, getBranches, activateCustomer, deactivateCustomer, deleteCustomer, verifyCustomer,
   getLoans, loanDetailPath,
   CustomerDetail, TenantBranch, UpdateCustomerPayload, Loan,
-  getTenantSession, CUSTOMER_ROLES, USER_ADMIN_ROLES,
+  getTenantSession, CUSTOMER_ROLES, USER_ADMIN_ROLES, MANAGER_ROLES,
 } from '@/services/tenant-api';
 import { sanitizeLocalityInput, sanitizeOccupationInput, sanitizePanInput, sanitizeLoanPurposeInput } from '@/lib/quick-add-customer';
 
@@ -64,6 +64,7 @@ export default function CustomerDetailPage() {
   const session = getTenantSession();
   const canEdit = CUSTOMER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
   const canAdmin = USER_ADMIN_ROLES.includes(session?.user.role ?? 'CUSTOMER');
+  const canVerify = MANAGER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
 
   const [customer, setCustomer] = useState<CustomerDetail | null>(null);
   const [loans, setLoans] = useState<Loan[]>([]);
@@ -74,6 +75,7 @@ export default function CustomerDetailPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [toggling, setToggling] = useState(false);
+  const [verifying, setVerifying] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [loanFilter, setLoanFilter] = useState<'all' | 'active' | 'npa'>('all');
@@ -180,6 +182,16 @@ export default function CustomerDetailPage() {
       setCustomer({ ...customer, isActive: res.isActive });
     } catch {}
     setToggling(false);
+  }
+
+  async function handleVerify() {
+    if (!customer) return;
+    setVerifying(true);
+    try {
+      const res = await verifyCustomer(id);
+      setCustomer({ ...customer, status: res.status });
+    } catch {}
+    setVerifying(false);
   }
 
   async function handleDelete() {
@@ -324,6 +336,9 @@ export default function CustomerDetailPage() {
             <span className={`px-2.5 py-0.5 rounded text-xs font-semibold ${customer.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
               {customer.isActive ? 'Active' : 'Inactive'}
             </span>
+            <span className={`px-2.5 py-0.5 rounded text-xs font-semibold ${customer.status === 'ACTIVE' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
+              {customer.status === 'ACTIVE' ? 'Verified' : 'In-Progress'}
+            </span>
           </div>
           <p className="text-sm text-gray-500 mt-0.5">Customer since {fmtDate(customer.createdAt)}</p>
         </div>
@@ -335,6 +350,15 @@ export default function CustomerDetailPage() {
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
               Edit
+            </button>
+          )}
+          {canVerify && customer.status === 'IN_PROGRESS' && (
+            <button
+              onClick={handleVerify}
+              disabled={verifying}
+              className="px-4 py-2 rounded-lg text-sm font-semibold bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 transition-colors disabled:opacity-50"
+            >
+              {verifying ? '…' : 'Verify & Activate'}
             </button>
           )}
           {canAdmin && (

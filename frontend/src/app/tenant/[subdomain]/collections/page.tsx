@@ -19,13 +19,18 @@ function fmtDate(d: string) {
   return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
 }
 
+const PAGE_SIZE = 10;
+
 /** Collection Reminder / Pending Collections list — same shape, different source. */
 function CollectionList({
-  title, subtitle, items, total, totalAmount, loading, error, accent, subdomain, emptyText,
+  title, subtitle, items, total, totalAmount, loading, error, accent, subdomain, emptyText, page, onPageChange,
 }: {
   title: string; subtitle: string; items: CollectionItem[]; total: number; totalAmount: number;
   loading: boolean; error: string | null; accent: string; subdomain: string; emptyText: string;
+  page: number; onPageChange: (p: number) => void;
 }) {
+  const hasPrev = page > 1;
+  const hasNext = page * PAGE_SIZE < total;
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
       <div className="px-5 py-4 border-b border-gray-100 flex items-start justify-between gap-3">
@@ -76,10 +81,34 @@ function CollectionList({
         </ul>
       )}
 
-      {!loading && !error && total > items.length && (
-        <p className="px-5 py-3 text-xs text-gray-400 border-t border-gray-50">
-          Showing {items.length} of {total}
-        </p>
+      {!loading && !error && total > 0 && (
+        <div className="px-5 py-3 border-t border-gray-50 flex items-center justify-between gap-3">
+          <p className="text-xs text-gray-400">
+            Showing {items.length === 0 ? 0 : (page - 1) * PAGE_SIZE + 1}–{(page - 1) * PAGE_SIZE + items.length} of {total}
+          </p>
+          {(hasPrev || hasNext) && (
+            <div className="flex gap-1">
+              <button
+                type="button"
+                onClick={() => onPageChange(page - 1)}
+                disabled={!hasPrev}
+                aria-label="Previous page"
+                className="px-2.5 py-1 text-xs rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
+              >
+                «
+              </button>
+              <button
+                type="button"
+                onClick={() => onPageChange(page + 1)}
+                disabled={!hasNext}
+                aria-label="Next page"
+                className="px-2.5 py-1 text-xs rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
+              >
+                »
+              </button>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -93,18 +122,20 @@ export default function CollectionsPage() {
   const isAgent = (session?.user.role ?? '') === 'AGENT';
 
   const [period, setPeriod] = useState<CollectionPeriod>('D');
+  const [reminderPage, setReminderPage] = useState(1);
+  const [pendingPage, setPendingPage] = useState(1);
   const [reminder, setReminder] = useState<{ data: CollectionItem[]; total: number; totalAmount: number }>({ data: [], total: 0, totalAmount: 0 });
   const [pending, setPending] = useState<{ data: CollectionItem[]; total: number; totalAmount: number }>({ data: [], total: 0, totalAmount: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // `cancelled` guards against a slower earlier period landing after a newer one.
+    // `cancelled` guards against a slower earlier period/page landing after a newer one.
     let cancelled = false;
     // Sequential rather than Promise.all: both hit the same tenant pool and the
     // lists are small, so serialising keeps connection pressure predictable.
-    getCollectionReminder(period, 1, 10)
-      .then(async (r) => ({ r, q: await getPendingCollections(period, 1, 10) }))
+    getCollectionReminder(period, reminderPage, PAGE_SIZE)
+      .then(async (r) => ({ r, q: await getPendingCollections(period, pendingPage, PAGE_SIZE) }))
       .then(({ r, q }) => {
         if (cancelled) return;
         setReminder({ data: r.data, total: r.total, totalAmount: r.totalAmount });
@@ -118,12 +149,14 @@ export default function CollectionsPage() {
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [period]);
+  }, [period, reminderPage, pendingPage]);
 
   function selectPeriod(p: CollectionPeriod) {
     if (p === period) return;
     setLoading(true);
     setPeriod(p);
+    setReminderPage(1);
+    setPendingPage(1);
   }
 
   const scopeNote = isAgent ? 'your assigned collections' : 'all users';
@@ -161,6 +194,7 @@ export default function CollectionsPage() {
           items={reminder.data} total={reminder.total} totalAmount={reminder.totalAmount}
           loading={loading} error={error} accent={BRAND} subdomain={subdomain}
           emptyText="Nothing due in this period."
+          page={reminderPage} onPageChange={setReminderPage}
         />
         <CollectionList
           title="Pending Collections"
@@ -168,6 +202,7 @@ export default function CollectionsPage() {
           items={pending.data} total={pending.total} totalAmount={pending.totalAmount}
           loading={loading} error={error} accent={ACCENT} subdomain={subdomain}
           emptyText="No pending collections in this period."
+          page={pendingPage} onPageChange={setPendingPage}
         />
       </div>
 

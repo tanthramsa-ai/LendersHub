@@ -720,16 +720,20 @@ export class TenantCollectionsService {
       const instParams: unknown[] = [start, end];
       const instSelf = this.selfScope(user, instParams);
       const instRes = await client.query<{
-        scheduled: string; collected: string; confirmed: string; pending: string;
+        scheduled: string; collected: string; confirmed: string; partially_collected: string; pending: string;
         expected: string; collected_amount: string; confirmed_amount: string;
       }>(
         `SELECT
-           COUNT(*) FILTER (WHERE cs = 'SCHEDULED') AS scheduled,
+           -- "Scheduled" = not yet due, nothing collected against it yet.
+           COUNT(*) FILTER (WHERE cs = 'SCHEDULED' AND due_date >= CURRENT_DATE) AS scheduled,
            COUNT(*) FILTER (WHERE cs = 'COLLECTED') AS collected,
            COUNT(*) FILTER (WHERE cs = 'CONFIRMED') AS confirmed,
-           COUNT(*) FILTER (WHERE cs <> 'CONFIRMED') AS pending,
+           COUNT(*) FILTER (WHERE cs = 'PARTIALLY_COLLECTED') AS partially_collected,
+           -- "Pending" = still owed as of today and not yet touched by any
+           -- collection action: scheduled items whose due date has passed.
+           COUNT(*) FILTER (WHERE cs = 'SCHEDULED' AND due_date < CURRENT_DATE) AS pending,
            COALESCE(SUM(i.total_amount), 0) AS expected,
-           COALESCE(SUM(i.paid_amount) FILTER (WHERE cs = 'COLLECTED'), 0) AS collected_amount,
+           COALESCE(SUM(i.paid_amount) FILTER (WHERE cs IN ('COLLECTED','PARTIALLY_COLLECTED')), 0) AS collected_amount,
            COALESCE(SUM(i.paid_amount) FILTER (WHERE cs = 'CONFIRMED'), 0) AS confirmed_amount
          FROM (
            SELECT i.*, ${this.collectionStatusExpr('i')} AS cs
@@ -739,11 +743,18 @@ export class TenantCollectionsService {
         instParams,
       );
       const row = instRes.rows[0];
+      // Mutually exclusive buckets (spec: "4 Scheduled, 3 Completed, 1 Pending"):
+      // completed rolls up Collected + Confirmed (both mean the money's in,
+      // just at different stages of office confirmation); scheduled/pending/
+      // partiallyCollected are each their own bucket. Every item lands in
+      // exactly one.
       return {
         view, start, end,
         scheduled: parseInt(row.scheduled),
         collected: parseInt(row.collected),
         confirmed: parseInt(row.confirmed),
+        completed: parseInt(row.collected) + parseInt(row.confirmed),
+        partiallyCollected: parseInt(row.partially_collected),
         pending: parseInt(row.pending),
         amountExpected: parseFloat(row.expected),
         amountCollected: parseFloat(row.collected_amount),
@@ -937,25 +948,29 @@ export class TenantCollectionsService {
     dto: RecordCollectionPaymentDto & { idempotencyKey?: string },
     paymentDate: string,
     installmentId: string,
-  ): Promise<{ success: true; paymentId: string | null; collectionStatus: 'COLLECTED' }> {
+  ): Promise<{ success: true; paymentId: string | null; collectionStatus: 'COLLECTED' | 'PARTIALLY_COLLECTED' }> {
       let remaining = dto.amount;
       let primaryPaymentId: string | null = null;
+      let primaryStatus: 'COLLECTED' | 'PARTIALLY_COLLECTED' = 'COLLECTED';
       for (const row of settleRows) {
         if (remaining <= 0) break;
         const rowBalance = parseFloat(row.balance);
         const applied = Math.min(remaining, rowBalance);
         if (applied <= 0) continue;
         remaining = Math.round((remaining - applied) * 100) / 100;
+        // Short of what was still owed on this installment at collection time
+        // (not the installment's original total) => a partial collection.
+        const rowStatus: 'COLLECTED' | 'PARTIALLY_COLLECTED' = applied < rowBalance ? 'PARTIALLY_COLLECTED' : 'COLLECTED';
 
         const payRes = await client.query<{ id: string }>(
           `INSERT INTO payments
              (loan_id, installment_id, amount, payment_method, reference_number, collected_by, payment_date,
               collection_status, idempotency_key)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,'COLLECTED',$8)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
            RETURNING id`,
           [
             inst.loan_id, row.id, applied, dto.paymentMethod, dto.referenceNumber ?? null,
-            user.sub, paymentDate,
+            user.sub, paymentDate, rowStatus,
             // Only the payment tied to the requested installment carries the
             // idempotency key; settlement of older pending rows in the same
             // submission is inherent to that one request.
@@ -963,7 +978,7 @@ export class TenantCollectionsService {
           ],
         );
         primaryPaymentId ??= payRes.rows[0].id;
-        if (row.id === installmentId) primaryPaymentId = payRes.rows[0].id;
+        if (row.id === installmentId) { primaryPaymentId = payRes.rows[0].id; primaryStatus = rowStatus; }
 
         await client.query(
           `UPDATE installments
@@ -980,7 +995,7 @@ export class TenantCollectionsService {
 
         await this.recordAudit(client, {
           paymentId: payRes.rows[0].id, installmentId: row.id, loanId: inst.loan_id,
-          fromStatus: 'SCHEDULED', toStatus: 'COLLECTED', amount: applied,
+          fromStatus: 'SCHEDULED', toStatus: rowStatus, amount: applied,
           performedBy: user.sub, reference: dto.referenceNumber,
         });
       }
@@ -993,7 +1008,7 @@ export class TenantCollectionsService {
         metadata: { amount: dto.amount, paymentMethod: dto.paymentMethod, installmentId, source: 'collections' },
       });
 
-      return { success: true, paymentId: primaryPaymentId, collectionStatus: 'COLLECTED' as const };
+      return { success: true, paymentId: primaryPaymentId, collectionStatus: primaryStatus };
   }
 
   /**
@@ -1048,6 +1063,86 @@ export class TenantCollectionsService {
         await client.query('COMMIT');
         committed = true;
         return { success: true, paymentId, collectionStatus: 'CONFIRMED' as const };
+      } finally {
+        if (!committed) await client.query('ROLLBACK');
+      }
+    });
+  }
+
+  /**
+   * Undo a collection (Aug_13 sheet item — undo was only reachable from the
+   * older loan-detail-page flow, not from the Collection Calendar). Manager/
+   * Owner/Admin-only, allowed even after office Confirmation per product
+   * decision: a confirmed collection can still be a genuine mistake.
+   *
+   * Soft-cancels the payment (cancelled_at) rather than deleting it, so the
+   * audit trail and collection_status derivation (collectionStatusExpr
+   * already filters cancelled_at IS NULL) both fall back to whatever the
+   * next most recent payment implies — no separate "undo" status needed.
+   */
+  async undoCollection(user: TenantJwtPayload, installmentId: string) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) {
+      throw new ForbiddenException('Only Owner, Manager or Admin can undo a collection');
+    }
+    await this.ensureCollectionWorkflow(user.schemaName);
+    return this.withSchema(user.schemaName, async (client) => {
+      await client.query('BEGIN');
+      let committed = false;
+      try {
+        const instRes = await client.query<{
+          id: string; loan_id: string; loan_number: string; paid_amount: string; total_amount: string; is_past_due: boolean;
+        }>(
+          `SELECT i.id, i.loan_id, l.loan_number, i.paid_amount, i.total_amount, (i.due_date < CURRENT_DATE) AS is_past_due
+           FROM installments i JOIN loans l ON l.id = i.loan_id
+           WHERE i.id = $1 FOR UPDATE`,
+          [installmentId],
+        );
+        if (!instRes.rows[0]) throw new NotFoundException('Installment not found');
+        const inst = instRes.rows[0];
+
+        // FOR UPDATE: a concurrent confirm (or a second manager double-tapping
+        // undo) on the same payment must see this transaction's result rather
+        // than both racing on the cancelled_at check.
+        const payRes = await client.query<{ id: string; amount: string; collection_status: string }>(
+          `SELECT id, amount, collection_status FROM payments
+            WHERE installment_id = $1 AND cancelled_at IS NULL
+            ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
+          [installmentId],
+        );
+        if (!payRes.rows[0]) throw new BadRequestException('No collection recorded on this installment to undo');
+        const payment = payRes.rows[0];
+
+        const remainingPaid = Math.max(0, parseFloat(inst.paid_amount) - parseFloat(payment.amount));
+        const totalAmount = parseFloat(inst.total_amount);
+        const newStatus = remainingPaid >= totalAmount ? 'PAID'
+          : remainingPaid > 0 ? 'PARTIALLY_PAID'
+          : (inst.is_past_due ? 'OVERDUE' : 'PENDING');
+
+        await client.query(
+          `UPDATE installments
+             SET paid_amount = $1, status = $2::installment_status,
+                 paid_at = CASE WHEN $2::installment_status = 'PAID' THEN paid_at ELSE NULL END
+           WHERE id = $3`,
+          [remainingPaid, newStatus, installmentId],
+        );
+        await client.query(`UPDATE payments SET cancelled_at = NOW() WHERE id = $1`, [payment.id]);
+
+        await this.recordAudit(client, {
+          paymentId: payment.id, installmentId, loanId: inst.loan_id,
+          fromStatus: payment.collection_status, toStatus: 'CANCELLED', amount: parseFloat(payment.amount),
+          performedBy: user.sub,
+        });
+        await this.activity.record(client, user, {
+          action: 'collection.undone',
+          entityType: 'loan',
+          entityId: inst.loan_id,
+          entityLabel: inst.loan_number,
+          metadata: { installmentId, undonePaymentId: payment.id, undoneAmount: parseFloat(payment.amount), fromStatus: payment.collection_status },
+        });
+
+        await client.query('COMMIT');
+        committed = true;
+        return { success: true, installmentId, paidAmount: remainingPaid, installmentStatus: newStatus };
       } finally {
         if (!committed) await client.query('ROLLBACK');
       }

@@ -12,6 +12,7 @@ import {
 } from '@/services/tenant-api';
 import { CloseLoanModal, CloseCommentBanner, ReopenLoanModal } from '@/components/CloseLoanModal';
 import { EditLoanModal } from '@/components/EditLoanModal';
+import { AddInstallmentModal } from '@/components/AddInstallmentModal';
 import { refreshNotificationBell } from '@/lib/notifications-bus';
 
 function fmt(n: number) {
@@ -121,6 +122,7 @@ export default function AgentRiskLoanDetailPage() {
   const [branches, setBranches] = useState<TenantBranch[]>([]);
   const [showEditLoan, setShowEditLoan] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [showAddInstallment, setShowAddInstallment] = useState(false);
   const [editError, setEditError] = useState('');
 
   const load = useCallback(async () => {
@@ -473,15 +475,34 @@ export default function AgentRiskLoanDetailPage() {
               </div>
             );
           })}
+          {canClose && loan.status !== 'CLOSED' && (
+            <button
+              type="button"
+              onClick={() => setShowAddInstallment(true)}
+              title="Add an extra installment to the schedule (not a payment)"
+              className="w-full aspect-square rounded-lg border-2 border-dashed border-gray-300 text-gray-400 hover:border-blue-400 hover:text-blue-500 transition-colors flex items-center justify-center"
+            >
+              <span className="text-lg font-bold leading-none">+</span>
+            </button>
+          )}
         </div>
 
         {canRecord && loan.status !== 'CLOSED' && (
           <p className="mt-3 text-xs text-gray-400">
             Click an overdue or pending month to record a payment.
             {canClose && ' Click a paid month to undo it.'}
+            {canClose && ' The dashed + tile adds a new installment to the schedule; it does not record a payment.'}
           </p>
         )}
       </div>
+
+      {showAddInstallment && (
+        <AddInstallmentModal
+          loanId={id}
+          onCancel={() => setShowAddInstallment(false)}
+          onAdded={() => { setShowAddInstallment(false); load(); }}
+        />
+      )}
 
       {/* Documents */}
       {(loan.securityDocUrl || loan.promissoryNoteUrl) && (

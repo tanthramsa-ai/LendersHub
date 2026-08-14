@@ -142,7 +142,7 @@ export class TenantCustomersService {
       const dataRes = await client.query(`
           SELECT c.id, c.customer_code, c.first_name, c.last_name, c.email, c.phone,
                  c.pan_number, c.credit_score, c.city, c.state, c.locality, c.branch_id,
-                 c.is_active, c.created_at,
+                 c.is_active, c.status, c.created_at,
                  b.name AS branch_name,
                  (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status = 'DISBURSED') AS active_loans,
                  (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status = 'CLOSED') AS closed_loans,
@@ -171,6 +171,7 @@ export class TenantCustomersService {
           branchId: r.branch_id,
           branchName: r.branch_name,
           isActive: r.is_active,
+          status: r.status,
           activeLoans: parseInt(r.active_loans),
           closedLoans: parseInt(r.closed_loans),
           hasNpaLoan: r.has_npa_loan,
@@ -213,7 +214,7 @@ export class TenantCustomersService {
         occupation: r.occupation, loanPurpose: r.loan_purpose,
         altContact: r.alt_contact, altContactName: r.alt_contact_name,
         altContactRelation: r.alt_contact_relation,
-        creditScore: r.credit_score, isActive: r.is_active,
+        creditScore: r.credit_score, isActive: r.is_active, status: r.status,
         branchId: r.branch_id, branchName: r.branch_name, branchCode: r.branch_code,
         createdAt: r.created_at, updatedAt: r.updated_at,
         totalLoans: parseInt(r.total_loans),
@@ -285,8 +286,8 @@ export class TenantCustomersService {
           address, locality, city, state, pincode,
           occupation, loan_purpose,
           alt_contact, alt_contact_name, alt_contact_relation,
-          credit_score, branch_id, created_by
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+          credit_score, branch_id, created_by, status
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,'IN_PROGRESS')
         RETURNING *
       `, [
         customerCode, dto.firstName, dto.lastName, dto.email ?? null, dto.phone,
@@ -308,8 +309,30 @@ export class TenantCustomersService {
       return {
         id: r.id, customerCode: r.customer_code,
         firstName: r.first_name, lastName: r.last_name,
-        email: r.email, phone: r.phone,
+        email: r.email, phone: r.phone, status: r.status,
       };
+    });
+  }
+
+  /** Manager-only manual verification (Aug_13 sheet item): flips a customer from IN_PROGRESS to ACTIVE. No document check — a judgment call. */
+  async verify(user: TenantJwtPayload, id: string) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) {
+      throw new ForbiddenException('Only Owner, Manager or Admin can verify a customer');
+    }
+    return this.withSchema(user.schemaName, async (client) => {
+      const res = await client.query(
+        `UPDATE customers SET status = 'ACTIVE', updated_at = NOW() WHERE id = $1 RETURNING id, status, customer_code, first_name, last_name`,
+        [id],
+      );
+      if (!res.rows[0]) throw new NotFoundException('Customer not found');
+      const r = res.rows[0];
+      await this.activity.record(client, user, {
+        action: 'customer.verified',
+        entityType: 'customer',
+        entityId: r.id,
+        entityLabel: `${r.customer_code} — ${r.first_name} ${r.last_name ?? ''}`.trim(),
+      });
+      return { id: r.id, status: r.status };
     });
   }
 

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
-  getCalendarItems, getCalendarSummary, getCollectionDetail, collectPayment, confirmCollection,
+  getCalendarItems, getCalendarSummary, getCollectionDetail, collectPayment, confirmCollection, undoCollection,
   getTenantSession,
   CalendarView, CalendarCollectionItem, CalendarSummary, CollectionDetail,
   MANAGER_ROLES,
@@ -55,13 +55,16 @@ const DUE_BUCKET_BADGE: Record<string, { label: string; cls: string }> = {
 const COLLECTION_STATUS_BADGE: Record<string, { label: string; cls: string }> = {
   SCHEDULED: { label: '○ Scheduled', cls: 'bg-gray-100 text-gray-600' },
   COLLECTED: { label: '✓ Collected', cls: 'bg-amber-100 text-amber-700' },
+  PARTIALLY_COLLECTED: { label: '◐ Partial', cls: 'bg-orange-100 text-orange-700' },
   CONFIRMED: { label: '✓✓ Confirmed', cls: 'bg-green-100 text-green-700' },
   CANCELLED: { label: '✕ Cancelled', cls: 'bg-gray-200 text-gray-500' },
 };
 
 // The status a KPI card filters the grid to. 'ALL' clears the filter
-// (Expected has no single status — it's every item in range).
-type KpiFilter = 'ALL' | 'SCHEDULED' | 'COLLECTED' | 'CONFIRMED' | 'NOT_CONFIRMED';
+// (Expected has no single status — it's every item in range). 'COMPLETED' and
+// 'PENDING' are rollups mirroring the backend's mutually-exclusive summary
+// buckets (getCalendarSummary), not raw collectionStatus values.
+type KpiFilter = 'ALL' | 'SCHEDULED' | 'COLLECTED' | 'PARTIALLY_COLLECTED' | 'CONFIRMED' | 'COMPLETED' | 'PENDING';
 
 function StatCard({
   label, value, accent, filter, active, onSelect,
@@ -87,6 +90,7 @@ function StatCard({
 const CELL_ACCENT: Record<string, string> = {
   SCHEDULED: '#0F4C81',
   COLLECTED: '#D97706',
+  PARTIALLY_COLLECTED: '#EA580C',
   CONFIRMED: '#10B981',
   CANCELLED: '#9CA3AF',
 };
@@ -214,6 +218,7 @@ export default function CollectionsCalendarPage() {
   const [acting, setActing] = useState(false);
   const [actionErr, setActionErr] = useState('');
   const [actionMsg, setActionMsg] = useState('');
+  const [showUndoConfirm, setShowUndoConfirm] = useState(false);
 
   const load = useCallback((v: CalendarView, d: string) => {
     return Promise.all([getCalendarItems(v, d), getCalendarSummary(v, d)])
@@ -241,6 +246,7 @@ export default function CollectionsCalendarPage() {
     if (v === view) return;
     setLoading(true);
     setView(v);
+    setDate(todayStr());
   }
 
   function changeDate(d: string) {
@@ -257,10 +263,13 @@ export default function CollectionsCalendarPage() {
 
   // Mirrors the backend's own definitions exactly (tenant-collections.service.ts
   // getCalendarSummary), so a card's count always matches what the grid shows
-  // after filtering to it.
+  // after filtering to it. dueBucket === 'OVERDUE' is the same "due_date <
+  // CURRENT_DATE" cutoff the backend uses to split Scheduled from Pending.
   const filteredItems = items.filter((it) => {
     if (kpiFilter === 'ALL') return true;
-    if (kpiFilter === 'NOT_CONFIRMED') return it.collectionStatus !== 'CONFIRMED';
+    if (kpiFilter === 'COMPLETED') return it.collectionStatus === 'COLLECTED' || it.collectionStatus === 'CONFIRMED';
+    if (kpiFilter === 'SCHEDULED') return it.collectionStatus === 'SCHEDULED' && it.dueBucket !== 'OVERDUE';
+    if (kpiFilter === 'PENDING') return it.collectionStatus === 'SCHEDULED' && it.dueBucket === 'OVERDUE';
     return it.collectionStatus === kpiFilter;
   });
 
@@ -268,7 +277,7 @@ export default function CollectionsCalendarPage() {
     setOpenId(installmentId);
     setDetail(null);
     setDetailLoading(true);
-    setActionErr(''); setActionMsg('');
+    setActionErr(''); setActionMsg(''); setShowUndoConfirm(false);
     try {
       const d = await getCollectionDetail(installmentId);
       setDetail(d);
@@ -281,7 +290,7 @@ export default function CollectionsCalendarPage() {
   }
 
   function closeDrawer() {
-    setOpenId(null); setDetail(null); setAmount(''); setReference(''); setActionErr(''); setActionMsg('');
+    setOpenId(null); setDetail(null); setAmount(''); setReference(''); setActionErr(''); setActionMsg(''); setShowUndoConfirm(false);
   }
 
   async function handleCollect() {
@@ -313,6 +322,21 @@ export default function CollectionsCalendarPage() {
       await load(view, date);
     } catch (e) {
       setActionErr(e instanceof Error ? e.message : 'Confirmation failed');
+    } finally {
+      setActing(false);
+    }
+  }
+
+  async function handleUndo() {
+    if (!openId) return;
+    setActing(true); setActionErr(''); setActionMsg('');
+    try {
+      await undoCollection(openId);
+      setActionMsg('Collection undone.');
+      await openCollection(openId);
+      await load(view, date);
+    } catch (e) {
+      setActionErr(e instanceof Error ? e.message : 'Undo failed');
     } finally {
       setActing(false);
     }
@@ -354,7 +378,9 @@ export default function CollectionsCalendarPage() {
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => changeDate(shiftDate(date, view, -1))} className="w-8 h-8 flex items-center justify-center rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-500">‹</button>
-          <button onClick={() => changeDate(todayStr())} className="text-xs font-medium px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">Today</button>
+          <button onClick={() => changeDate(todayStr())} className="text-xs font-medium px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">
+            {view === 'day' ? 'Today' : view === 'week' ? 'This Week' : 'This Month'}
+          </button>
           <button onClick={() => changeDate(shiftDate(date, view, 1))} className="w-8 h-8 flex items-center justify-center rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-500">›</button>
           <span className="text-sm font-medium text-gray-700 ml-1">{summary ? rangeLabel(summary.start, summary.end) : ''}</span>
         </div>
@@ -367,9 +393,9 @@ export default function CollectionsCalendarPage() {
       {summary && (
         <div className="grid grid-cols-4 sm:grid-cols-4 lg:grid-cols-7 gap-2">
           <StatCard label="Scheduled" value={summary.scheduled} filter="SCHEDULED" active={kpiFilter === 'SCHEDULED'} onSelect={toggleKpiFilter} />
-          <StatCard label="Collected" value={summary.collected} accent="#D97706" filter="COLLECTED" active={kpiFilter === 'COLLECTED'} onSelect={toggleKpiFilter} />
-          <StatCard label="Confirmed" value={summary.confirmed} accent="#10B981" filter="CONFIRMED" active={kpiFilter === 'CONFIRMED'} onSelect={toggleKpiFilter} />
-          <StatCard label="Pending" value={summary.pending} accent={ACCENT} filter="NOT_CONFIRMED" active={kpiFilter === 'NOT_CONFIRMED'} onSelect={toggleKpiFilter} />
+          <StatCard label="Completed" value={summary.completed} accent="#10B981" filter="COMPLETED" active={kpiFilter === 'COMPLETED'} onSelect={toggleKpiFilter} />
+          <StatCard label="Partial" value={summary.partiallyCollected} accent="#EA580C" filter="PARTIALLY_COLLECTED" active={kpiFilter === 'PARTIALLY_COLLECTED'} onSelect={toggleKpiFilter} />
+          <StatCard label="Pending" value={summary.pending} accent={ACCENT} filter="PENDING" active={kpiFilter === 'PENDING'} onSelect={toggleKpiFilter} />
           <StatCard label="Expected" value={fmt(summary.amountExpected)} filter="ALL" active={kpiFilter === 'ALL'} onSelect={toggleKpiFilter} />
           <StatCard label="Collected ₹" value={fmt(summary.amountCollected)} accent="#D97706" filter="COLLECTED" active={kpiFilter === 'COLLECTED'} onSelect={toggleKpiFilter} />
           <StatCard label="Confirmed ₹" value={fmt(summary.amountConfirmed)} accent="#10B981" filter="CONFIRMED" active={kpiFilter === 'CONFIRMED'} onSelect={toggleKpiFilter} />
@@ -493,6 +519,44 @@ export default function CollectionsCalendarPage() {
                     >
                       {acting ? 'Confirming…' : 'Confirm Receipt'}
                     </button>
+                  </div>
+                )}
+
+                {/* Undo — Manager/Owner/Admin-only, enforced server-side too. Allowed even
+                    after office Confirmation; nothing to undo once still SCHEDULED. */}
+                {isManager && detail.installment.collectionStatus !== 'SCHEDULED' && (
+                  <div className="border border-red-100 rounded-xl p-4 space-y-2">
+                    {showUndoConfirm ? (
+                      <>
+                        <p className="text-sm text-gray-700">
+                          This reverts the most recently collected payment on this installment back to its previous status.
+                        </p>
+                        <div className="flex gap-2">
+                          <button
+                            disabled={acting}
+                            onClick={() => setShowUndoConfirm(false)}
+                            className="flex-1 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-40"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            disabled={acting}
+                            onClick={handleUndo}
+                            className="flex-1 py-2 text-sm font-semibold text-white bg-red-600 hover:bg-red-700 rounded-lg disabled:opacity-40"
+                          >
+                            {acting ? 'Undoing…' : 'Undo Collection'}
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <button
+                        disabled={acting}
+                        onClick={() => setShowUndoConfirm(true)}
+                        className="w-full py-2 text-sm font-semibold text-red-600 hover:bg-red-50 rounded-lg disabled:opacity-40"
+                      >
+                        Undo Collection
+                      </button>
+                    )}
                   </div>
                 )}
 

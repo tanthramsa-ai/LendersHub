@@ -30,6 +30,10 @@ const DATABASE_URL =
 function tenantSchemaDDL(s) {
   const q = `"${s}"`;
   return [
+    // Customer verification status (In-Progress -> Active). Default ACTIVE so
+    // existing customers aren't retroactively marked unverified.
+    `ALTER TABLE ${q}."customers" ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'ACTIVE'`,
+
     `DO $$ BEGIN ALTER TYPE ${q}.user_role ADD VALUE IF NOT EXISTS 'OWNER'; EXCEPTION WHEN others THEN NULL; END $$`,
     `DO $$ BEGIN ALTER TYPE ${q}.user_role ADD VALUE IF NOT EXISTS 'MANAGER'; EXCEPTION WHEN others THEN NULL; END $$`,
     `DO $$ BEGIN ALTER TYPE ${q}.user_role ADD VALUE IF NOT EXISTS 'AGENT'; EXCEPTION WHEN others THEN NULL; END $$`,

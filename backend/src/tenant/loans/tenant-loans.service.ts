@@ -1061,7 +1061,7 @@ export class TenantLoansService {
   }
 
   async create(user: TenantJwtPayload, dto: CreateLoanDto) {
-    if (!['ADMIN', 'MANAGER', ...FIELD_ROLES].includes(user.role as UserRole)) throw new ForbiddenException('Only Admins, Managers, Agents or Staff can create loans');
+    if (![...MANAGER_ROLES, ...FIELD_ROLES].includes(user.role as UserRole)) throw new ForbiddenException('Only Owners, Admins, Managers, Agents or Staff can create loans');
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.interestRate < 0 || dto.interestRate > 100) throw new BadRequestException('Invalid interest rate');
     if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
@@ -1924,7 +1924,7 @@ export class TenantLoansService {
   }
 
   async createWeeklyLoan(user: TenantJwtPayload, dto: CreateWeeklyLoanDto) {
-    if (!['ADMIN', 'MANAGER', ...FIELD_ROLES].includes(user.role as UserRole)) throw new ForbiddenException('Only Admins, Managers, Agents or Staff can create loans');
+    if (![...MANAGER_ROLES, ...FIELD_ROLES].includes(user.role as UserRole)) throw new ForbiddenException('Only Owners, Admins, Managers, Agents or Staff can create loans');
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.termWeeks < 1 || dto.termWeeks > 99) throw new BadRequestException('Term must be 1–99 weeks');
     if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
@@ -2171,7 +2171,7 @@ export class TenantLoansService {
   }
 
   async createDailyLoan(user: TenantJwtPayload, dto: CreateDailyLoanDto) {
-    if (!['ADMIN', 'MANAGER', ...FIELD_ROLES].includes(user.role as UserRole)) throw new ForbiddenException('Only Admins, Managers, Agents or Staff can create loans');
+    if (![...MANAGER_ROLES, ...FIELD_ROLES].includes(user.role as UserRole)) throw new ForbiddenException('Only Owners, Admins, Managers, Agents or Staff can create loans');
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.termDays < 1 || dto.termDays > 3650) throw new BadRequestException('Term must be 1–3650 days');
     if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
@@ -2409,7 +2409,7 @@ export class TenantLoansService {
   }
 
   async createMonthlyLoan(user: TenantJwtPayload, dto: CreateMonthlyLoanDto) {
-    if (!['ADMIN', 'MANAGER', ...FIELD_ROLES].includes(user.role as UserRole)) throw new ForbiddenException('Only Admins, Managers, Agents or Staff can create loans');
+    if (![...MANAGER_ROLES, ...FIELD_ROLES].includes(user.role as UserRole)) throw new ForbiddenException('Only Owners, Admins, Managers, Agents or Staff can create loans');
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
     if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
@@ -2639,7 +2639,7 @@ export class TenantLoansService {
   }
 
   async createAgentRiskLoan(user: TenantJwtPayload, dto: CreateAgentRiskLoanDto) {
-    if (!['ADMIN', 'MANAGER', ...FIELD_ROLES].includes(user.role as UserRole)) throw new ForbiddenException('Only Admins, Managers, Agents or Staff can create loans');
+    if (![...MANAGER_ROLES, ...FIELD_ROLES].includes(user.role as UserRole)) throw new ForbiddenException('Only Owners, Admins, Managers, Agents or Staff can create loans');
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
     if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
@@ -2855,7 +2855,7 @@ export class TenantLoansService {
   }
 
   async createTermLoan(user: TenantJwtPayload, dto: CreateTermLoanDto) {
-    if (!['ADMIN', 'MANAGER', ...FIELD_ROLES].includes(user.role as UserRole)) throw new ForbiddenException('Only Admins, Managers, Agents or Staff can create loans');
+    if (![...MANAGER_ROLES, ...FIELD_ROLES].includes(user.role as UserRole)) throw new ForbiddenException('Only Owners, Admins, Managers, Agents or Staff can create loans');
     if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
     if (dto.interestRate < 0 || dto.interestRate > 100) throw new BadRequestException('Invalid interest rate');
     if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
