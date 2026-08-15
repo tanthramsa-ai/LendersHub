@@ -4,7 +4,7 @@ import { NpaBadge } from '@/components/NpaBadge';
 import { useEffect, useState } from 'react';
 import { useParams, useRouter, useSearchParams, usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { getTermLoan, closeLoan, reopenLoan, recordPayment, undoInstallmentPayment, deleteInstallment, approveLoan, rejectLoan, approveCloseLoan, assignLoanAgent, getOfficers, updateTermLoan, getBranches, getTenantSession, MANAGER_ROLES, LOAN_DETAIL_PAYMENT_ROLES, TermLoanDetail, TermInstallment, Officer, TenantBranch } from '@/services/tenant-api';
+import { getTermLoan, closeLoan, reopenLoan, recordPayment, undoInstallmentPayment, deleteInstallment, approveLoan, rejectLoan, approveCloseLoan, assignLoanAgent, getOfficers, updateTermLoan, getBranches, getTenantSession, MANAGER_ROLES, LOAN_DETAIL_PAYMENT_ROLES, COLLECTION_ROLES, TermLoanDetail, TermInstallment, Officer, TenantBranch } from '@/services/tenant-api';
 import { CloseLoanModal, CloseCommentBanner, ReopenLoanModal } from '@/components/CloseLoanModal';
 import { ApproveLoanModal } from '@/components/ApproveLoanModal';
 import { EditLoanModal } from '@/components/EditLoanModal';
@@ -65,6 +65,7 @@ export default function TermLoanDetailPage() {
   const pathname = usePathname();
   const session = getTenantSession();
   const canClose = MANAGER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
+  const canAddInstallment = COLLECTION_ROLES.includes(session?.user.role ?? 'CUSTOMER');
   const canPay = LOAN_DETAIL_PAYMENT_ROLES.includes(session?.user.role ?? 'CUSTOMER');
 
   const [loan, setLoan] = useState<TermLoanDetail | null>(null);
@@ -404,7 +405,7 @@ export default function TermLoanDetailPage() {
               </button>
             </div>
           ))}
-          {canClose && isActive && loan.installments.some((i) => i.status === 'OVERDUE') && (
+          {canAddInstallment && isActive && loan.installments.some((i) => i.status === 'OVERDUE') && (
             <button
               type="button"
               onClick={() => setShowAddInstallment(true)}
