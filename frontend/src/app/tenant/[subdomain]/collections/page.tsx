@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
-  getCollectionReminder, getPendingCollections, getTenantSession,
+  getCollectionReminder, getPendingCollections,
   CollectionItem, CollectionPeriod, COLLECTION_PERIODS,
 } from '@/services/tenant-api';
 
@@ -118,9 +118,6 @@ export default function CollectionsPage() {
   const params = useParams<{ subdomain: string }>();
   const subdomain = params.subdomain;
 
-  const session = getTenantSession();
-  const isAgent = (session?.user.role ?? '') === 'AGENT';
-
   const [period, setPeriod] = useState<CollectionPeriod>('D');
   const [reminderPage, setReminderPage] = useState(1);
   const [pendingPage, setPendingPage] = useState(1);
@@ -159,7 +156,6 @@ export default function CollectionsPage() {
     setPendingPage(1);
   }
 
-  const scopeNote = isAgent ? 'your assigned collections' : 'all users';
   const windowNote = period === 'D' ? 'today' : period === 'W' ? 'the next 7 days' : 'the next 30 days';
 
   return (
@@ -190,7 +186,7 @@ export default function CollectionsPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <CollectionList
           title="Collection Reminder"
-          subtitle={`Falling due ${windowNote} · ${scopeNote}`}
+          subtitle={`Falling due ${windowNote} · all users`}
           items={reminder.data} total={reminder.total} totalAmount={reminder.totalAmount}
           loading={loading} error={error} accent={BRAND} subdomain={subdomain}
           emptyText="Nothing due in this period."
@@ -198,7 +194,7 @@ export default function CollectionsPage() {
         />
         <CollectionList
           title="Pending Collections"
-          subtitle={`Outstanding through ${windowNote} · ${scopeNote}`}
+          subtitle={`Outstanding through ${windowNote} · all users`}
           items={pending.data} total={pending.total} totalAmount={pending.totalAmount}
           loading={loading} error={error} accent={ACCENT} subdomain={subdomain}
           emptyText="No pending collections in this period."

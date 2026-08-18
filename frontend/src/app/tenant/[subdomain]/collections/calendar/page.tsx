@@ -352,7 +352,7 @@ export default function CollectionsCalendarPage() {
         <div>
           <h1 className="text-xl font-bold text-gray-900">Collection Calendar</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            {isManager ? 'All agents’ scheduled, collected and confirmed collections' : 'Your scheduled collections — tap one to collect'}
+            {isManager ? 'All agents’ scheduled, collected and confirmed collections' : 'Everyone’s scheduled collections — tap one to collect'}
           </p>
         </div>
         <Link href={`/tenant/${subdomain}/collections`} className="text-xs font-medium px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">

@@ -60,15 +60,18 @@ export class TenantCollectionsService {
   }
 
   /**
-   * An AGENT only ever sees their own book; STAFF and the manager roles see
-   * every user's collections. Returns '' for the unscoped roles.
-   * Pushes user.sub onto `params` (bound, never interpolated).
+   * All roles — including AGENT — see every user's collections here. Product
+   * decision (QA sheet "New Req"): the customer directory was already
+   * tenant-wide for agents (see tenant-customers.service.ts list()); this
+   * closes the gap so Collection Reminder, Pending Collections, calendar and
+   * stats match that same tenant-wide visibility instead of stopping at the
+   * agent's own assigned book. Recording a payment (recordCollection) still
+   * has its own separate ownership check — visibility and who's allowed to
+   * act on a collection are different questions, and only the latter stays
+   * agent-restricted.
    */
-  private selfScope(user: TenantJwtPayload, params: unknown[]): string {
-    if (user.role !== 'AGENT') return '';
-    params.push(user.sub);
-    const p = `$${params.length}`;
-    return `AND (i.assigned_to = ${p} OR l.loan_officer_id = ${p})`;
+  private selfScope(): string {
+    return '';
   }
 
   private async ensureAssignedTo(schemaName: string): Promise<void> {
@@ -149,10 +152,9 @@ export class TenantCollectionsService {
     const { start, end } = this.rangeFor(p);
     await this.ensureAssignedTo(user.schemaName);
     return this.withSchema(user.schemaName, async (client) => {
-      // Every figure below is scoped the same way as the lists: an AGENT sees
-      // only their own book, STAFF/managers see all users'.
+      // Every figure below is tenant-wide, same as the lists (selfScope()).
       const dueParams: unknown[] = [start, end];
-      const dueSelf = this.selfScope(user, dueParams);
+      const dueSelf = this.selfScope();
       // Sequential: a single pg connection cannot run queries concurrently.
       const dueRes = await client.query<{ count: string; amount: string }>(
         `SELECT COUNT(*) AS count, COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS amount
@@ -161,7 +163,7 @@ export class TenantCollectionsService {
         dueParams,
       );
       const overdueParams: unknown[] = [];
-      const overdueSelf = this.selfScope(user, overdueParams);
+      const overdueSelf = this.selfScope();
       const overdueRes = await client.query<{ count: string; amount: string }>(
         `SELECT COUNT(*) AS count, COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS amount
            FROM installments i JOIN loans l ON l.id = i.loan_id
@@ -171,7 +173,7 @@ export class TenantCollectionsService {
       // Payments carry no assigned_to, so the agent scope keys off the loan
       // officer or the installment the payment settled.
       const collectedParams: unknown[] = [start, end];
-      const collectedSelf = this.selfScope(user, collectedParams);
+      const collectedSelf = this.selfScope();
       const collectedRes = await client.query<{ amount: string }>(
         `SELECT COALESCE(SUM(p.amount), 0) AS amount
            FROM payments p
@@ -181,7 +183,7 @@ export class TenantCollectionsService {
         collectedParams,
       );
       const pendingParams: unknown[] = [end];
-      const pendingSelf = this.selfScope(user, pendingParams);
+      const pendingSelf = this.selfScope();
       const pendingRes = await client.query<{ count: string; amount: string }>(
         `SELECT COUNT(*) AS count, COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS amount
            FROM installments i JOIN loans l ON l.id = i.loan_id
@@ -486,7 +488,7 @@ export class TenantCollectionsService {
       const where = `WHERE i.due_date BETWEEN $1 AND $2 AND i.status IN ('PENDING','PARTIALLY_PAID') AND l.status IN ('APPROVED','DISBURSED')`;
 
       const dataParams: unknown[] = [start, end, limit, offset];
-      const selfFilter = this.selfScope(user, dataParams);
+      const selfFilter = this.selfScope();
       let searchFilter = '';
       if (search) {
         dataParams.push(`%${search}%`);
@@ -494,7 +496,7 @@ export class TenantCollectionsService {
         searchFilter = `AND (c.first_name || ' ' || c.last_name ILIKE ${s} OR l.loan_number ILIKE ${s} OR c.phone ILIKE ${s})`;
       }
       const countParams: unknown[] = [start, end];
-      const countSelf = this.selfScope(user, countParams);
+      const countSelf = this.selfScope();
       let countFilter = '';
       if (search) {
         countParams.push(`%${search}%`);
@@ -550,7 +552,7 @@ export class TenantCollectionsService {
       const where = `WHERE i.due_date <= $1 AND i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE') AND l.status IN ('APPROVED','DISBURSED')`;
 
       const dataParams: unknown[] = [end, limit, offset];
-      const selfFilter = this.selfScope(user, dataParams);
+      const selfFilter = this.selfScope();
       let searchFilter = '';
       if (search) {
         dataParams.push(`%${search}%`);
@@ -558,7 +560,7 @@ export class TenantCollectionsService {
         searchFilter = `AND (c.first_name || ' ' || c.last_name ILIKE ${s} OR l.loan_number ILIKE ${s} OR c.phone ILIKE ${s})`;
       }
       const countParams: unknown[] = [end];
-      const countSelf = this.selfScope(user, countParams);
+      const countSelf = this.selfScope();
       let countFilter = '';
       if (search) {
         countParams.push(`%${search}%`);
@@ -652,7 +654,7 @@ export class TenantCollectionsService {
     return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
   }
 
-  /** Collection Calendar — the agent's (or, for staff/managers, everyone's) items for a Day/Week/Month range. */
+  /** Collection Calendar — everyone's items for a Day/Week/Month range (tenant-wide for every role). */
   async getCalendarItems(user: TenantJwtPayload, view: 'day' | 'week' | 'month', date: string) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new BadRequestException('date must be YYYY-MM-DD');
     await this.ensureAssignedTo(user.schemaName);
@@ -660,7 +662,7 @@ export class TenantCollectionsService {
     const { start, end } = this.rangeForView(view, date);
     return this.withSchema(user.schemaName, async (client) => {
       const params: unknown[] = [start, end];
-      const selfFilter = this.selfScope(user, params);
+      const selfFilter = this.selfScope();
 
       const res = await client.query(
         // due_date cast to text: the pg driver returns DATE columns as JS Date
@@ -719,7 +721,7 @@ export class TenantCollectionsService {
     const { start, end } = this.rangeForView(view, date);
     return this.withSchema(user.schemaName, async (client) => {
       const instParams: unknown[] = [start, end];
-      const instSelf = this.selfScope(user, instParams);
+      const instSelf = this.selfScope();
       const instRes = await client.query<{
         scheduled: string; collected: string; confirmed: string; partially_collected: string; pending: string;
         expected: string; collected_amount: string; confirmed_amount: string;
@@ -775,7 +777,7 @@ export class TenantCollectionsService {
     await this.ensureCollectionWorkflow(user.schemaName);
     return this.withSchema(user.schemaName, async (client) => {
       const params: unknown[] = [installmentId];
-      const selfFilter = this.selfScope(user, params);
+      const selfFilter = this.selfScope();
       const instRes = await client.query(
         `SELECT i.id, i.installment_number, i.due_date, i.total_amount, i.paid_amount,
                 i.total_amount - i.paid_amount AS balance, i.status AS installment_status,
