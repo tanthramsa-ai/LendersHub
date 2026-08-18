@@ -8,7 +8,7 @@ import {
   getDailyLoan, recordPayment, undoInstallmentPayment, deleteInstallment, closeLoan, reopenLoan, resolveMissedInstallment,
   approveLoan, rejectLoan, approveCloseLoan, assignLoanAgent, getOfficers, updateDailyLoan, getBranches,
   DailyLoanDetail, DailyInstallment, MissResolution, Officer, TenantBranch,
-  getTenantSession, LOAN_DETAIL_PAYMENT_ROLES, MANAGER_ROLES,
+  getTenantSession, LOAN_DETAIL_PAYMENT_ROLES, MANAGER_ROLES, COLLECTION_ROLES,
 } from '@/services/tenant-api';
 import { CloseLoanModal, CloseCommentBanner, ReopenLoanModal } from '@/components/CloseLoanModal';
 import { ApproveLoanModal } from '@/components/ApproveLoanModal';
@@ -125,6 +125,7 @@ export default function DailyLoanDetailPage() {
   const session = getTenantSession();
   const canRecord = LOAN_DETAIL_PAYMENT_ROLES.includes(session?.user.role ?? 'CUSTOMER');
   const canClose = MANAGER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
+  const canAddInstallment = COLLECTION_ROLES.includes(session?.user.role ?? 'CUSTOMER');
 
   const [loan, setLoan] = useState<DailyLoanDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -557,7 +558,7 @@ export default function DailyLoanDetailPage() {
             );
           })}
 
-          {canClose && ['APPROVED', 'DISBURSED'].includes(loan.status) && loan.installments.some((i) => i.status === 'OVERDUE' || (i.status === 'PENDING' && new Date(i.dueDate) < today)) && (
+          {canAddInstallment && ['APPROVED', 'DISBURSED'].includes(loan.status) && loan.installments.some((i) => i.status === 'OVERDUE' || (i.status === 'PENDING' && new Date(i.dueDate) < today)) && (
             <button
               type="button"
               onClick={() => setShowAddInstallment(true)}

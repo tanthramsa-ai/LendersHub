@@ -1629,13 +1629,14 @@ export class TenantLoansService {
   /**
    * Extends a loan's schedule with one extra installment, appended after the last one at
    * whatever date the loan's own cycle would naturally land on next (no manual date entry).
-   * Treated as an edit to the loan record (not a "create loan" action), so — matching Update
-   * Loan=No for Agent/Staff — this is restricted to MANAGER_ROLES only, unlike the create-loan
-   * endpoints which also allow FIELD_ROLES.
+   * Open to the same roles as loan creation (Owner/Admin/Manager/Agent/Staff), unlike editing
+   * a loan's terms which is Manager-tier only — this only fires once something is already
+   * missed (see the is_missed check below), so it's a corrective action on the schedule
+   * rather than a change to the loan's terms.
    */
   async addInstallment(user: TenantJwtPayload, loanId: string, dto: { totalAmount: number }) {
-    if (!MANAGER_ROLES.includes(user.role as UserRole)) {
-      throw new ForbiddenException('Only Owner, Manager or Admin can add an installment');
+    if (![...MANAGER_ROLES, ...FIELD_ROLES].includes(user.role as UserRole)) {
+      throw new ForbiddenException('Only Owners, Admins, Managers, Agents or Staff can add an installment');
     }
     if (typeof dto.totalAmount !== 'number' || dto.totalAmount <= 0) {
       throw new BadRequestException('totalAmount must be a positive number');
