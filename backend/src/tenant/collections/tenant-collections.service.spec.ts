@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { TenantCollectionsService } from './tenant-collections.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
+import { TenantLedgerPostingService } from '../ledger/tenant-ledger-posting.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 
 // Collection workflow (SCHEDULED -> COLLECTED -> CONFIRMED) tests, spec §16 step 11.
@@ -37,6 +38,7 @@ describe('TenantCollectionsService', () => {
   let poolConnect: jest.Mock;
   let prisma: PrismaService;
   let activity: TenantActivityLogService;
+  let ledgerPosting: TenantLedgerPostingService;
   let svc: TenantCollectionsService;
 
   beforeEach(() => {
@@ -45,7 +47,12 @@ describe('TenantCollectionsService', () => {
     poolConnect = jest.fn().mockResolvedValue({ ...client, release: jest.fn() });
     prisma = { pool: { connect: poolConnect }, $executeRawUnsafe: jest.fn().mockResolvedValue(undefined) } as unknown as PrismaService;
     activity = { record: jest.fn().mockResolvedValue(undefined) } as unknown as TenantActivityLogService;
-    svc = new TenantCollectionsService(prisma, activity);
+    ledgerPosting = {
+      postWithClient: jest.fn().mockResolvedValue({ id: 'lt1' }),
+      reverseWithClient: jest.fn().mockResolvedValue({ id: 'lt2' }),
+      findByPaymentIdWithClient: jest.fn().mockResolvedValue(null),
+    } as unknown as TenantLedgerPostingService;
+    svc = new TenantCollectionsService(prisma, activity, ledgerPosting);
   });
 
   describe('collectPayment — validation & RBAC (spec §13)', () => {
@@ -252,6 +259,40 @@ describe('TenantCollectionsService', () => {
       const result = await svc.undoCollection(makeUser({ role: 'OWNER' }), 'inst-1');
       expect(result.success).toBe(true);
     });
+
+    it('reverses the linked ledger transaction when one exists for the undone payment', async () => {
+      query
+        .mockResolvedValueOnce(undefined) // SET search_path
+        .mockResolvedValueOnce(undefined) // BEGIN
+        .mockResolvedValueOnce({ rows: [{ id: 'inst-1', loan_id: 'loan-1', loan_number: 'LN-1', paid_amount: '450', total_amount: '450', is_past_due: false }] })
+        .mockResolvedValueOnce({ rows: [{ id: 'payment-1', amount: '450', collection_status: 'COLLECTED' }] })
+        .mockResolvedValueOnce(undefined) // UPDATE installments
+        .mockResolvedValueOnce(undefined) // UPDATE payments SET cancelled_at
+        .mockResolvedValueOnce(undefined) // audit INSERT
+        .mockResolvedValueOnce(undefined); // COMMIT
+      (ledgerPosting.findByPaymentIdWithClient as jest.Mock).mockResolvedValueOnce({ id: 'lt-1' });
+
+      await svc.undoCollection(makeUser({ role: 'OWNER' }), 'inst-1');
+
+      expect(ledgerPosting.findByPaymentIdWithClient).toHaveBeenCalledWith(expect.objectContaining({ query }), 'tenant_acme', 'payment-1');
+      expect(ledgerPosting.reverseWithClient).toHaveBeenCalledWith(expect.objectContaining({ query }), expect.anything(), 'lt-1', 'Collection undone');
+    });
+
+    it('skips the ledger reversal when the payment never posted a ledger transaction', async () => {
+      query
+        .mockResolvedValueOnce(undefined) // SET search_path
+        .mockResolvedValueOnce(undefined) // BEGIN
+        .mockResolvedValueOnce({ rows: [{ id: 'inst-1', loan_id: 'loan-1', loan_number: 'LN-1', paid_amount: '450', total_amount: '450', is_past_due: false }] })
+        .mockResolvedValueOnce({ rows: [{ id: 'payment-1', amount: '450', collection_status: 'COLLECTED' }] })
+        .mockResolvedValueOnce(undefined) // UPDATE installments
+        .mockResolvedValueOnce(undefined) // UPDATE payments SET cancelled_at
+        .mockResolvedValueOnce(undefined) // audit INSERT
+        .mockResolvedValueOnce(undefined); // COMMIT
+
+      await svc.undoCollection(makeUser({ role: 'OWNER' }), 'inst-1');
+
+      expect(ledgerPosting.reverseWithClient).not.toHaveBeenCalled();
+    });
   });
 
   describe('resolvePeriod (spec §11 "Provide an option to choose W/D/M")', () => {
@@ -292,8 +333,8 @@ describe('TenantCollectionsService', () => {
       applyCollectionSettlement: (
         client: unknown,
         user: TenantJwtPayload,
-        inst: { loan_id: string; loan_number: string },
-        settleRows: { id: string; balance: string; due_date: string }[],
+        inst: { loan_id: string; loan_number: string; customer_id?: string },
+        settleRows: { id: string; balance: string; due_date: string; principal_amount?: string; interest_amount?: string }[],
         dto: { amount: number; paymentMethod: string; referenceNumber?: string; idempotencyKey?: string },
         paymentDate: string,
         installmentId: string,
@@ -311,7 +352,7 @@ describe('TenantCollectionsService', () => {
         '2026-08-10',
         'inst-1',
       );
-      expect(result).toEqual({ success: true, paymentId: 'payment-1', collectionStatus: 'COLLECTED' });
+      expect(result).toEqual({ success: true, paymentId: 'payment-1', receiptNumber: expect.any(String), collectionStatus: 'COLLECTED' });
       const insertCall = query.mock.calls.find((c) => String(c[0]).includes('INSERT INTO payments'));
       expect(insertCall![1]).toContain('COLLECTED');
     });
@@ -327,7 +368,7 @@ describe('TenantCollectionsService', () => {
         '2026-08-10',
         'inst-1',
       );
-      expect(result).toEqual({ success: true, paymentId: 'payment-2', collectionStatus: 'PARTIALLY_COLLECTED' });
+      expect(result).toEqual({ success: true, paymentId: 'payment-2', receiptNumber: expect.any(String), collectionStatus: 'PARTIALLY_COLLECTED' });
       const insertCall = query.mock.calls.find((c) => String(c[0]).includes('INSERT INTO payments'));
       expect(insertCall![1]).toContain('PARTIALLY_COLLECTED');
     });
@@ -350,6 +391,35 @@ describe('TenantCollectionsService', () => {
         'inst-primary',
       );
       expect(result.collectionStatus).toBe('PARTIALLY_COLLECTED');
+    });
+
+    it('posts a COLLECTION ledger transaction split proportionally to the installment principal:interest ratio', async () => {
+      query.mockResolvedValue({ rows: [{ id: 'payment-3' }] });
+      await anyService().applyCollectionSettlement(
+        client,
+        makeUser({ sub: 'agent-9' }),
+        { loan_id: 'loan-1', loan_number: 'LN-1', customer_id: 'cust-1' },
+        [{ id: 'inst-1', balance: '1000.00', due_date: '2026-08-10', principal_amount: '850.00', interest_amount: '150.00' }],
+        { amount: 400, paymentMethod: 'CASH', referenceNumber: 'ref-1' },
+        '2026-08-10',
+        'inst-1',
+      );
+
+      expect(ledgerPosting.postWithClient).toHaveBeenCalledTimes(1);
+      const [, calledUser, calledInput] = (ledgerPosting.postWithClient as jest.Mock).mock.calls[0];
+      expect(calledUser.sub).toBe('agent-9');
+      expect(calledInput).toMatchObject({
+        transactionType: 'COLLECTION',
+        loanId: 'loan-1',
+        customerId: 'cust-1',
+        agentId: 'agent-9',
+        paymentId: 'payment-3',
+        paymentChannel: 'AGENT_CASH', // CASH collected via the agent flow maps to AGENT_CASH
+        externalReference: 'ref-1',
+      });
+      // 400 applied against an 850:150 (85%:15%) installment split.
+      expect(calledInput.principalAmount).toBe(340);
+      expect(calledInput.interestAmount).toBe(60);
     });
   });
 

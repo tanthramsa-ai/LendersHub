@@ -576,6 +576,9 @@ export default function CollectionsCalendarPage() {
                           <p className="text-gray-400 mt-0.5">
                             {h.method} · {new Date(h.createdAt).toLocaleString('en-IN')} · by {h.collectedByName ?? '—'}
                           </p>
+                          {h.receiptNumber && (
+                            <p className="text-gray-400 font-mono">Receipt: {h.receiptNumber}</p>
+                          )}
                           {h.confirmedAt && (
                             <p className="text-gray-400">
                               Confirmed: {fmt(h.confirmedAmount ?? h.amount)} by {h.confirmedByName ?? '—'} on {new Date(h.confirmedAt).toLocaleString('en-IN')}

@@ -5,7 +5,12 @@ import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  // rawBody:true retains req.rawBody (Buffer) alongside the normally-parsed
+  // body on every request — needed by the payment webhook controller to
+  // verify a provider's HMAC signature against the exact bytes it sent
+  // (re-serializing the parsed JSON would not reproduce an identical byte
+  // sequence and would make every signature check fail).
+  const app = await NestFactory.create(AppModule, { rawBody: true });
 
   app.enableCors({
     origin: [
@@ -16,6 +21,7 @@ async function bootstrap() {
       // Vercel preview/auto-suffixed deployments (e.g. lenders-hub-eight.vercel.app)
       /^https:\/\/lenders-hub[a-z0-9-]*\.vercel\.app$/,
       'http://localhost:3000',
+      'http://localhost:3002', // .claude/launch.json's "lendershub-frontend" preview port
       'http://localhost:3010',
       'http://localhost:3020',
     ],

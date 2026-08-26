@@ -5,8 +5,8 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   getLedgerCredits, getLedgerDebits, getLedgerPrincipal, getLedgerTransactions,
-  addLedgerTransaction, getCustomers, getTenantSession, MANAGER_ROLES,
-  LedgerEntry, PrincipalTxn, ManualTransaction,
+  addLedgerTransaction, getCustomers, getTenantSession, MANAGER_ROLES, LEDGER_ROLES,
+  getLedgerDashboard, LedgerEntry, PrincipalTxn, ManualTransaction, LedgerDashboard,
 } from '@/services/tenant-api';
 
 type Tab = 'credits' | 'debits' | 'principal' | 'transactions';
@@ -30,11 +30,33 @@ const CATEGORIES = [
   'AGENT_TRANSFER', 'CUSTOMER_TRANSFER', 'EXPENSE', 'OTHER',
 ];
 
+const CARD_TONES = {
+  default: 'bg-gray-50 border-gray-100 text-gray-900',
+  blue: 'bg-blue-50 border-blue-100 text-blue-700',
+  green: 'bg-green-50 border-green-100 text-green-700',
+  red: 'bg-red-50 border-red-100 text-red-700',
+  orange: 'bg-orange-50 border-orange-100 text-orange-700',
+} as const;
+
+function DashboardCard({ label, value, tone = 'default' }: { label: string; value: number; tone?: keyof typeof CARD_TONES }) {
+  return (
+    <div className={`border rounded-xl p-3 ${CARD_TONES[tone]}`}>
+      <p className="text-xs opacity-70">{label}</p>
+      <p className="text-lg font-bold mt-1">{fmt(value)}</p>
+    </div>
+  );
+}
+
 export default function LedgerPage() {
   const params = useParams<{ subdomain: string }>();
   const subdomain = params.subdomain;
   const session = getTenantSession();
   const canAdd = MANAGER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
+  const canViewDashboard = LEDGER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
+
+  const [dashboard, setDashboard] = useState<LedgerDashboard | null>(null);
+  const [dashboardLoading, setDashboardLoading] = useState(false);
+  const [dashboardErr, setDashboardErr] = useState('');
 
   const [tab, setTab] = useState<Tab>('credits');
   const [month, setMonth] = useState(thisMonth());
@@ -90,6 +112,16 @@ export default function LedgerPage() {
 
   useEffect(() => { setPage(1); }, [tab, month, applyMonth]);
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!canViewDashboard) return;
+    setDashboardLoading(true);
+    getLedgerDashboard()
+      .then(setDashboard)
+      .catch((e: unknown) => setDashboardErr(e instanceof Error ? e.message : 'Failed to load dashboard'))
+      .finally(() => setDashboardLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!txnEntitySearch || txnEntitySearch.length < 2 || txnEntityType !== 'customer') {
@@ -149,6 +181,40 @@ export default function LedgerPage() {
           </button>
         )}
       </div>
+
+      {/* Dashboard — sourced from the immutable ledger_transactions posting engine
+          plus funder capital (Total Fund / Available Fund), not fund_transactions
+          (below, still the old manual credits/debits UI). */}
+      {canViewDashboard && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-gray-700">Dashboard</h2>
+            {dashboard && <span className="text-xs text-gray-400">{dashboard.month}</span>}
+          </div>
+          {dashboardErr && <p className="text-sm text-red-600 bg-red-50 p-2 rounded">{dashboardErr}</p>}
+          {dashboardLoading && !dashboard ? (
+            <div className="py-8 text-center text-gray-400 text-sm">Loading…</div>
+          ) : dashboard ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+              {dashboard.fundTrackingAvailable && (
+                <>
+                  <DashboardCard label="Total Fund" value={dashboard.totalFund ?? 0} tone="blue" />
+                  <DashboardCard label="Available Fund" value={dashboard.availableFund ?? 0} tone="blue" />
+                </>
+              )}
+              <DashboardCard label="Total Disbursed" value={dashboard.totalDisbursed} />
+              <DashboardCard label="Outstanding Principal" value={dashboard.outstandingPrincipal} tone="blue" />
+              <DashboardCard label="Principal Collected (month)" value={dashboard.principalCollected} tone="green" />
+              <DashboardCard label="Interest Collected (month)" value={dashboard.interestCollected} tone="green" />
+              <DashboardCard label="Total Collections (month)" value={dashboard.totalCollections} tone="green" />
+              <DashboardCard label="Today's Collection" value={dashboard.todaysCollection} />
+              <DashboardCard label="This Month's Collection" value={dashboard.thisMonthsCollection} />
+              <DashboardCard label="Overdue / NPA Principal" value={dashboard.overdueNpaPrincipal} tone="red" />
+              <DashboardCard label="Agent Collections Pending Reconciliation" value={dashboard.agentCollectionPendingReconciliation} tone="orange" />
+            </div>
+          ) : null}
+        </div>
+      )}
 
       {/* Month filter */}
       <div className="flex flex-wrap items-center gap-3">

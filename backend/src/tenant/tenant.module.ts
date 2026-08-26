@@ -26,6 +26,17 @@ import { TenantNotificationsService } from './notifications/tenant-notifications
 import { TenantNotificationsController } from './notifications/tenant-notifications.controller';
 import { TenantLedgerService } from './ledger/tenant-ledger.service';
 import { TenantLedgerController } from './ledger/tenant-ledger.controller';
+import { TenantLedgerPostingService } from './ledger/tenant-ledger-posting.service';
+import { TenantLedgerReportService } from './ledger/tenant-ledger-report.service';
+import { TenantLedgerReportController } from './ledger/tenant-ledger-report.controller';
+import { TenantFundersService } from './funders/tenant-funders.service';
+import { TenantFundersController } from './funders/tenant-funders.controller';
+import { TenantReconciliationService } from './reconciliation/tenant-reconciliation.service';
+import { TenantReconciliationController } from './reconciliation/tenant-reconciliation.controller';
+import { TenantPaymentWebhookService } from './payments/tenant-payment-webhook.service';
+import { TenantPaymentWebhookController } from './payments/tenant-payment-webhook.controller';
+import { TenantReportsService } from './reports/tenant-reports.service';
+import { TenantReportsController } from './reports/tenant-reports.controller';
 import { TenantActivityLogService } from './activity-log/tenant-activity-log.service';
 import { TenantActivityLogController } from './activity-log/tenant-activity-log.controller';
 import { TenantPermissionsService } from './permissions/tenant-permissions.service';
@@ -50,6 +61,12 @@ import { TenantPermissionsController } from './permissions/tenant-permissions.co
     TenantAccountsService,
     TenantNotificationsService,
     TenantLedgerService,
+    TenantLedgerPostingService,
+    TenantLedgerReportService,
+    TenantFundersService,
+    TenantReconciliationService,
+    TenantPaymentWebhookService,
+    TenantReportsService,
     TenantActivityLogService,
     TenantPermissionsService,
   ],
@@ -66,6 +83,11 @@ import { TenantPermissionsController } from './permissions/tenant-permissions.co
     TenantAccountsController,
     TenantNotificationsController,
     TenantLedgerController,
+    TenantLedgerReportController,
+    TenantFundersController,
+    TenantReconciliationController,
+    TenantPaymentWebhookController,
+    TenantReportsController,
     TenantActivityLogController,
     TenantPermissionsController,
   ],

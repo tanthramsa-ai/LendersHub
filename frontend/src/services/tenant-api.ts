@@ -23,7 +23,12 @@ async function tenantFetch<T>(path: string, options?: RequestInit): Promise<T> {
       : (raw ?? `Request failed: ${res.status}`);
     throw new Error(message);
   }
-  return res.json() as Promise<T>;
+  // A NestJS handler returning `null`/`undefined` (e.g. "no snapshot for this
+  // date yet") sends an empty body (Content-Length: 0), not the string
+  // "null" — res.json() throws on that. Parse manually so a legitimately
+  // empty response resolves to `null` instead of crashing every caller.
+  const text = await res.text();
+  return (text ? JSON.parse(text) : null) as T;
 }
 
 export type UserRole = 'OWNER' | 'ADMIN' | 'MANAGER' | 'AGENT' | 'STAFF' | 'CUSTOMER';
@@ -42,6 +47,9 @@ export const MANAGER_ROLES: UserRole[] = ['OWNER', 'ADMIN', 'MANAGER'];
 
 /** Only Owner and Admin can add/edit/deactivate users (Manager cannot) */
 export const USER_ADMIN_ROLES: UserRole[] = ['OWNER', 'ADMIN'];
+
+/** Ledger dashboard/reporting: Owner and Admin only, matching the backend's LEDGER_ROLES gate */
+export const LEDGER_ROLES: UserRole[] = ['OWNER', 'ADMIN'];
 
 /** Roles that can VIEW loan pages (includes STAFF who can see but not create) */
 export const LOAN_ROLES: UserRole[] = ['OWNER', 'ADMIN', 'MANAGER', 'AGENT', 'STAFF'];
@@ -1328,7 +1336,7 @@ export function getCalendarSummary(view: CalendarView, date: string) {
 }
 
 export interface CollectionHistoryEntry {
-  id: string; amount: number; method: string; referenceNumber: string | null;
+  id: string; amount: number; method: string; referenceNumber: string | null; receiptNumber: string | null;
   paymentDate: string; createdAt: string; collectionStatus: CollectionWorkflowStatus;
   confirmedAmount: number | null; confirmedAt: string | null;
   collectedByName: string | null; confirmedByName: string | null;
@@ -1356,7 +1364,7 @@ export function collectPayment(
   installmentId: string,
   dto: { amount: number; paymentMethod: string; referenceNumber?: string; paymentDate?: string; idempotencyKey?: string },
 ) {
-  return tenantFetch<{ success: true; paymentId: string; collectionStatus: 'COLLECTED' | 'PARTIALLY_COLLECTED'; duplicate?: boolean }>(
+  return tenantFetch<{ success: true; paymentId: string; receiptNumber?: string; collectionStatus: 'COLLECTED' | 'PARTIALLY_COLLECTED'; duplicate?: boolean }>(
     `/api/v1/tenant/collections/${installmentId}/collect`,
     { method: 'POST', body: JSON.stringify(dto) },
   );
@@ -1890,6 +1898,332 @@ export function addLedgerTransaction(dto: {
 }) {
   return tenantFetch<ManualTransaction>('/api/v1/tenant/ledger/transactions', {
     method: 'POST', body: JSON.stringify(dto),
+  });
+}
+
+// ── Financial Ledger — dashboard (ledger_transactions source of truth) ────────
+
+export interface LedgerDashboard {
+  month: string;
+  fundTrackingAvailable: boolean;
+  totalFund?: number;
+  availableFund?: number;
+  totalDisbursed: number;
+  outstandingPrincipal: number;
+  principalCollected: number;
+  interestCollected: number;
+  totalCollections: number;
+  todaysCollection: number;
+  thisMonthsCollection: number;
+  overdueNpaPrincipal: number;
+  agentCollectionPendingReconciliation: number;
+}
+
+export function getLedgerDashboard(month?: string) {
+  const params = new URLSearchParams();
+  if (month) params.set('month', month);
+  const qs = params.toString();
+  return tenantFetch<LedgerDashboard>(`/api/v1/tenant/ledger-transactions/dashboard${qs ? `?${qs}` : ''}`);
+}
+
+/** A ledger line with the joined display names the Collection Ledger / Daily Ledger views show. */
+export interface LedgerLineDetailed extends LedgerLine {
+  loanNumber: string | null;
+  customerName: string | null;
+  agentName: string | null;
+  receiptNumber: string | null;
+  createdByName: string | null;
+}
+
+export interface DailyLedgerView {
+  date: string;
+  openingOutstandingPrincipal: number;
+  newDisbursements: number;
+  principalCollections: number;
+  adjustments: number;
+  closingOutstandingPrincipal: number;
+  interestCollected: number;
+  cashBankMovement: number;
+  transactions: LedgerLineDetailed[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export function listLedgerTransactions(
+  filters: { type?: string; loanId?: string; customerId?: string; status?: string; from?: string; to?: string } = {},
+  page = 1, limit = 50,
+) {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+  if (filters.type) params.set('type', filters.type);
+  if (filters.loanId) params.set('loanId', filters.loanId);
+  if (filters.customerId) params.set('customerId', filters.customerId);
+  if (filters.status) params.set('status', filters.status);
+  if (filters.from) params.set('from', filters.from);
+  if (filters.to) params.set('to', filters.to);
+  return tenantFetch<{ data: LedgerLineDetailed[]; total: number; page: number; limit: number }>(
+    `/api/v1/tenant/ledger-transactions?${params}`,
+  );
+}
+
+export function getDailyLedger(date: string, page = 1, limit = 50) {
+  const params = new URLSearchParams({ date, page: String(page), limit: String(limit) });
+  return tenantFetch<DailyLedgerView>(`/api/v1/tenant/ledger-transactions/daily?${params}`);
+}
+
+export function postLedgerAdjustment(dto: {
+  transactionDate?: string; loanId?: string; customerId?: string;
+  principalAmount?: number; interestAmount?: number; feeAmount?: number; otherAmount?: number;
+  paymentChannel?: string; externalReference?: string; remarks: string;
+}) {
+  return tenantFetch<LedgerLine>('/api/v1/tenant/ledger-transactions/adjustments', {
+    method: 'POST', body: JSON.stringify(dto),
+  });
+}
+
+export function reverseLedgerTransaction(id: string, reason: string) {
+  return tenantFetch<LedgerLine>(`/api/v1/tenant/ledger-transactions/${id}/reverse`, {
+    method: 'POST', body: JSON.stringify({ reason }),
+  });
+}
+
+// ── Funders (explicit loan funding allocation) ──────────────────────────────────
+
+export interface Funder {
+  id: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  isActive: boolean;
+  balance: number;
+  allocatedPrincipal: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type FunderTransactionType = 'CONTRIBUTION' | 'WITHDRAWAL' | 'ADJUSTMENT';
+
+export interface FunderTransaction {
+  id: string;
+  funderId: string;
+  transactionDate: string;
+  transactionType: FunderTransactionType;
+  amount: number;
+  referenceNumber: string | null;
+  notes: string | null;
+  status: 'PENDING' | 'POSTED' | 'REVERSED';
+  reversalOfId: string | null;
+  createdBy: string | null;
+  createdAt: string;
+}
+
+export interface LoanFunderAllocations {
+  loanId: string;
+  loanNumber: string;
+  principal: number;
+  allocated: number;
+  unallocated: number;
+  allocations: { funderId: string; funderName: string; amount: number }[];
+}
+
+export function getFunders(page = 1, limit = 50, activeOnly?: boolean) {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+  if (activeOnly) params.set('activeOnly', 'true');
+  return tenantFetch<{ data: Funder[]; total: number; page: number; limit: number }>(`/api/v1/tenant/funders?${params}`);
+}
+
+export function createFunder(dto: { name: string; email?: string; phone?: string }) {
+  return tenantFetch<Funder>('/api/v1/tenant/funders', { method: 'POST', body: JSON.stringify(dto) });
+}
+
+export function updateFunder(id: string, dto: { name?: string; email?: string; phone?: string; isActive?: boolean }) {
+  return tenantFetch<Funder>(`/api/v1/tenant/funders/${id}`, { method: 'PATCH', body: JSON.stringify(dto) });
+}
+
+export function getFunderDetail(id: string, page = 1, limit = 50) {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+  return tenantFetch<{ funder: Funder; transactions: FunderTransaction[]; total: number; page: number; limit: number }>(
+    `/api/v1/tenant/funders/${id}?${params}`,
+  );
+}
+
+export function postFunderTransaction(funderId: string, dto: {
+  transactionDate?: string; transactionType: FunderTransactionType; amount: number;
+  referenceNumber?: string; notes?: string;
+}) {
+  return tenantFetch<FunderTransaction>(`/api/v1/tenant/funders/${funderId}/transactions`, {
+    method: 'POST', body: JSON.stringify(dto),
+  });
+}
+
+export function reverseFunderTransaction(funderId: string, txnId: string, reason: string) {
+  return tenantFetch<FunderTransaction>(`/api/v1/tenant/funders/${funderId}/transactions/${txnId}/reverse`, {
+    method: 'POST', body: JSON.stringify({ reason }),
+  });
+}
+
+export function getLoanFunderAllocations(loanId: string) {
+  return tenantFetch<LoanFunderAllocations>(`/api/v1/tenant/funders/loan/${loanId}/allocations`);
+}
+
+export function setLoanFunderAllocations(loanId: string, allocations: { funderId: string; amount: number }[]) {
+  return tenantFetch<LoanFunderAllocations>(`/api/v1/tenant/funders/loan/${loanId}/allocations`, {
+    method: 'PUT', body: JSON.stringify({ allocations }),
+  });
+}
+
+// ── Reconciliation workspace + daily snapshots ──────────────────────────────────
+
+export interface LedgerLine {
+  id: string;
+  transactionDate: string;
+  businessDate: string;
+  transactionType: string;
+  loanId: string | null;
+  customerId: string | null;
+  paymentId: string | null;
+  principalAmount: number;
+  interestAmount: number;
+  feeAmount: number;
+  otherAmount: number;
+  totalAmount: number;
+  paymentChannel: string | null;
+  externalReference: string | null;
+  status: 'PENDING' | 'POSTED' | 'REVERSED' | 'RECONCILED';
+  reversalOfId: string | null;
+  settledAt: string | null;
+  settlementReference: string | null;
+  remarks: string | null;
+  createdAt: string;
+}
+
+export interface DailySnapshot {
+  id: string;
+  businessDate: string;
+  openingOutstandingPrincipal: number;
+  newDisbursementPrincipal: number;
+  principalCollected: number;
+  interestCollected: number;
+  adjustments: number;
+  closingOutstandingPrincipal: number;
+  availableFund: number;
+  generatedAt: string;
+  lockedAt: string | null;
+}
+
+export function getUnreconciledCollections(page = 1, limit = 50) {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+  return tenantFetch<{ data: LedgerLine[]; total: number; totalAmount: number; page: number; limit: number }>(
+    `/api/v1/tenant/reconciliation/unreconciled-collections?${params}`,
+  );
+}
+
+export function reconcileTransactions(transactionIds: string[], settlementReference?: string) {
+  return tenantFetch<{ reconciled: number; transactions: LedgerLine[] }>('/api/v1/tenant/reconciliation/reconcile', {
+    method: 'POST', body: JSON.stringify({ transactionIds, settlementReference }),
+  });
+}
+
+export function getReversedTransactions(page = 1, limit = 50) {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+  return tenantFetch<{ data: LedgerLine[]; total: number; page: number; limit: number }>(
+    `/api/v1/tenant/reconciliation/reversed-transactions?${params}`,
+  );
+}
+
+export function getPartiallyAllocated(page = 1, limit = 50) {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+  return tenantFetch<{ data: LedgerLine[]; total: number; page: number; limit: number }>(
+    `/api/v1/tenant/reconciliation/partially-allocated?${params}`,
+  );
+}
+
+export function getSnapshots(page = 1, limit = 30) {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+  return tenantFetch<{ data: DailySnapshot[]; total: number; page: number; limit: number }>(
+    `/api/v1/tenant/reconciliation/snapshots?${params}`,
+  );
+}
+
+export function getSnapshot(date: string) {
+  return tenantFetch<DailySnapshot | null>(`/api/v1/tenant/reconciliation/snapshots/${date}`);
+}
+
+export function generateSnapshot(date: string) {
+  return tenantFetch<DailySnapshot>(`/api/v1/tenant/reconciliation/snapshots/${date}/generate`, { method: 'POST' });
+}
+
+export function lockDay(date: string) {
+  return tenantFetch<DailySnapshot>(`/api/v1/tenant/reconciliation/snapshots/${date}/lock`, { method: 'POST' });
+}
+
+export function unlockDay(date: string) {
+  return tenantFetch<DailySnapshot>(`/api/v1/tenant/reconciliation/snapshots/${date}/unlock`, { method: 'POST' });
+}
+
+// ── Direct Payments (webhook ingestion + manual matching) ───────────────────────
+// No payment provider has been chosen yet — only a "generic" reference adapter
+// exists server-side for testing the ingestion → matching → ledger pipeline.
+// See backend/src/tenant/payments/webhook-adapters/generic-webhook-adapter.ts.
+
+export interface WebhookProviderConfig {
+  provider: string;
+  configured: boolean;
+  webhookUrl: string;
+}
+
+export interface IncomingPaymentEvent {
+  id: string;
+  provider: string;
+  externalReference: string;
+  amount: number;
+  currency: string;
+  paymentMethod: string | null;
+  payerName: string | null;
+  payerContact: string | null;
+  occurredAt: string | null;
+  status: 'RECEIVED' | 'POSTED' | 'REJECTED';
+  matchedLoanId: string | null;
+  matchedInstallmentId: string | null;
+  rejectionReason: string | null;
+  receivedAt: string;
+  processedAt: string | null;
+}
+
+export function getWebhookConfig() {
+  return tenantFetch<WebhookProviderConfig[]>('/api/v1/tenant/payments/webhook-config');
+}
+
+export function setWebhookSecret(provider: string, secret: string) {
+  return tenantFetch<{ success: true }>(`/api/v1/tenant/payments/webhook-config/${provider}/secret`, {
+    method: 'POST', body: JSON.stringify({ secret }),
+  });
+}
+
+export function getUnmatchedPayments(page = 1, limit = 50) {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+  return tenantFetch<{ data: IncomingPaymentEvent[]; total: number; page: number; limit: number }>(
+    `/api/v1/tenant/payments/unmatched?${params}`,
+  );
+}
+
+export function getProcessedPayments(page = 1, limit = 50) {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+  return tenantFetch<{ data: IncomingPaymentEvent[]; total: number; page: number; limit: number }>(
+    `/api/v1/tenant/payments/processed?${params}`,
+  );
+}
+
+export function matchPaymentEvent(eventId: string, loanId: string, installmentId?: string) {
+  return tenantFetch<{ success: true; paymentId: string; ledgerTransactionId: string }>(
+    `/api/v1/tenant/payments/${eventId}/match`,
+    { method: 'POST', body: JSON.stringify({ loanId, installmentId }) },
+  );
+}
+
+export function rejectPaymentEvent(eventId: string, reason: string) {
+  return tenantFetch<IncomingPaymentEvent>(`/api/v1/tenant/payments/${eventId}/reject`, {
+    method: 'POST', body: JSON.stringify({ reason }),
   });
 }
 

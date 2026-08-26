@@ -2,7 +2,17 @@ import { Injectable, NotFoundException, BadRequestException, ForbiddenException 
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
+import { TenantLedgerPostingService, LedgerPaymentChannel, splitPrincipalInterest } from '../ledger/tenant-ledger-posting.service';
 import { FIELD_ROLES, MANAGER_ROLES, UserRole } from '../common/roles';
+import { nextReceiptNumber } from '../common/receipt-number';
+
+/** Field collection (agent-facing) gets an AGENT_ prefix on cash/UPI so the ledger
+ * distinguishes money collected in the field from money paid directly to the office. */
+function ledgerChannelForCollection(paymentMethod: RecordCollectionPaymentDto['paymentMethod']): LedgerPaymentChannel {
+  if (paymentMethod === 'CASH') return 'AGENT_CASH';
+  if (paymentMethod === 'UPI') return 'AGENT_UPI';
+  return paymentMethod;
+}
 
 export type CollectionPeriod = 'D' | 'W' | 'M';
 
@@ -18,6 +28,7 @@ export class TenantCollectionsService {
   constructor(
     private prisma: PrismaService,
     private activity: TenantActivityLogService,
+    private ledgerPosting: TenantLedgerPostingService,
   ) {}
 
   // In-memory cache — avoids repeated ALTER TABLE calls per schema per process lifetime
@@ -802,7 +813,7 @@ export class TenantCollectionsService {
         [inst.loan_id, inst.installment_number - 1],
       );
       const historyRes = await client.query(
-        `SELECT p.id, p.amount, p.payment_method, p.reference_number, p.payment_date, p.created_at,
+        `SELECT p.id, p.amount, p.payment_method, p.reference_number, p.receipt_number, p.payment_date, p.created_at,
                 p.collection_status, p.confirmed_amount, p.confirmed_at,
                 u.first_name || ' ' || u.last_name AS collected_by_name,
                 cu.first_name || ' ' || cu.last_name AS confirmed_by_name
@@ -840,7 +851,7 @@ export class TenantCollectionsService {
         totalAmountDue: Math.round((pending.amount + currentBalance) * 100) / 100,
         history: historyRes.rows.map((h) => ({
           id: h.id, amount: parseFloat(h.amount), method: h.payment_method,
-          referenceNumber: h.reference_number, paymentDate: h.payment_date, createdAt: h.created_at,
+          referenceNumber: h.reference_number, receiptNumber: h.receipt_number, paymentDate: h.payment_date, createdAt: h.created_at,
           collectionStatus: h.collection_status,
           confirmedAmount: h.confirmed_amount !== null ? parseFloat(h.confirmed_amount) : null,
           confirmedAt: h.confirmed_at, collectedByName: h.collected_by_name, confirmedByName: h.confirmed_by_name,
@@ -886,7 +897,7 @@ export class TenantCollectionsService {
         ownerFilter = `AND (i.assigned_to = $2 OR l.loan_officer_id = $2)`;
       }
       const instRes = await client.query(
-        `SELECT i.*, l.id AS loan_id, l.status AS loan_status, l.loan_number
+        `SELECT i.*, l.id AS loan_id, l.status AS loan_status, l.loan_number, l.customer_id
          FROM installments i JOIN loans l ON l.id = i.loan_id
          WHERE i.id = $1 ${ownerFilter}`,
         ownerParams,
@@ -926,8 +937,8 @@ export class TenantCollectionsService {
         // Oldest-first settlement across this installment and any earlier unpaid
         // ones, so the ₹400-short partial in spec §9 stays outstanding rather
         // than silently applying to the wrong installment.
-        const settleRes = await client.query<{ id: string; balance: string; due_date: string }>(
-          `SELECT id, total_amount - paid_amount AS balance, due_date
+        const settleRes = await client.query<{ id: string; balance: string; due_date: string; principal_amount: string; interest_amount: string }>(
+          `SELECT id, total_amount - paid_amount AS balance, due_date, principal_amount, interest_amount
              FROM installments
             WHERE loan_id = $1 AND due_date <= $2 AND status IN ('PENDING','PARTIALLY_PAID','OVERDUE')
             ORDER BY due_date ASC`,
@@ -947,14 +958,15 @@ export class TenantCollectionsService {
   private async applyCollectionSettlement(
     client: import('pg').PoolClient,
     user: TenantJwtPayload,
-    inst: { loan_id: string; loan_number: string },
-    settleRows: { id: string; balance: string; due_date: string }[],
+    inst: { loan_id: string; loan_number: string; customer_id: string },
+    settleRows: { id: string; balance: string; due_date: string; principal_amount: string; interest_amount: string }[],
     dto: RecordCollectionPaymentDto & { idempotencyKey?: string },
     paymentDate: string,
     installmentId: string,
-  ): Promise<{ success: true; paymentId: string | null; collectionStatus: 'COLLECTED' | 'PARTIALLY_COLLECTED' }> {
+  ): Promise<{ success: true; paymentId: string | null; receiptNumber: string | null; collectionStatus: 'COLLECTED' | 'PARTIALLY_COLLECTED' }> {
       let remaining = dto.amount;
       let primaryPaymentId: string | null = null;
+      let primaryReceiptNumber: string | null = null;
       let primaryStatus: 'COLLECTED' | 'PARTIALLY_COLLECTED' = 'COLLECTED';
       for (const row of settleRows) {
         if (remaining <= 0) break;
@@ -966,14 +978,15 @@ export class TenantCollectionsService {
         // (not the installment's original total) => a partial collection.
         const rowStatus: 'COLLECTED' | 'PARTIALLY_COLLECTED' = applied < rowBalance ? 'PARTIALLY_COLLECTED' : 'COLLECTED';
 
+        const receiptNumber = await nextReceiptNumber(client);
         const payRes = await client.query<{ id: string }>(
           `INSERT INTO payments
-             (loan_id, installment_id, amount, payment_method, reference_number, collected_by, payment_date,
+             (loan_id, installment_id, amount, payment_method, reference_number, receipt_number, collected_by, payment_date,
               collection_status, idempotency_key)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
            RETURNING id`,
           [
-            inst.loan_id, row.id, applied, dto.paymentMethod, dto.referenceNumber ?? null,
+            inst.loan_id, row.id, applied, dto.paymentMethod, dto.referenceNumber ?? null, receiptNumber,
             user.sub, paymentDate, rowStatus,
             // Only the payment tied to the requested installment carries the
             // idempotency key; settlement of older pending rows in the same
@@ -982,7 +995,8 @@ export class TenantCollectionsService {
           ],
         );
         primaryPaymentId ??= payRes.rows[0].id;
-        if (row.id === installmentId) { primaryPaymentId = payRes.rows[0].id; primaryStatus = rowStatus; }
+        primaryReceiptNumber ??= receiptNumber;
+        if (row.id === installmentId) { primaryPaymentId = payRes.rows[0].id; primaryReceiptNumber = receiptNumber; primaryStatus = rowStatus; }
 
         await client.query(
           `UPDATE installments
@@ -1002,6 +1016,30 @@ export class TenantCollectionsService {
           fromStatus: 'SCHEDULED', toStatus: rowStatus, amount: applied,
           performedBy: user.sub, reference: dto.referenceNumber,
         });
+
+        // Financial source of truth: one immutable COLLECTION ledger transaction
+        // per settled installment row, in the same DB transaction as the payment
+        // insert + installment update above — all three commit or roll back together.
+        const { principal, interest } = splitPrincipalInterest(
+          applied, parseFloat(row.principal_amount), parseFloat(row.interest_amount),
+        );
+        await this.ledgerPosting.postWithClient(client, user, {
+          transactionDate: paymentDate,
+          transactionType: 'COLLECTION',
+          loanId: inst.loan_id,
+          customerId: inst.customer_id,
+          agentId: user.sub,
+          paymentId: payRes.rows[0].id,
+          principalAmount: principal,
+          interestAmount: interest,
+          paymentChannel: ledgerChannelForCollection(dto.paymentMethod),
+          externalReference: dto.referenceNumber,
+          // Idempotency belongs to the whole collectPayment submission, not one
+          // settled row — dto.idempotencyKey is already scoped to the payments
+          // insert above (only the primary installment's row gets it there).
+          idempotencyKey: row.id === installmentId && dto.idempotencyKey ? `ledger:${dto.idempotencyKey}:${row.id}` : undefined,
+          remarks: `Collection for installment ${row.id}`,
+        });
       }
 
       await this.activity.record(client, user, {
@@ -1012,7 +1050,7 @@ export class TenantCollectionsService {
         metadata: { amount: dto.amount, paymentMethod: dto.paymentMethod, installmentId, source: 'collections' },
       });
 
-      return { success: true, paymentId: primaryPaymentId, collectionStatus: primaryStatus };
+      return { success: true, paymentId: primaryPaymentId, receiptNumber: primaryReceiptNumber, collectionStatus: primaryStatus };
   }
 
   /**
@@ -1131,6 +1169,14 @@ export class TenantCollectionsService {
         );
         await client.query(`UPDATE payments SET cancelled_at = NOW() WHERE id = $1`, [payment.id]);
 
+        // Mirror the operational undo into the ledger: reverse whichever
+        // COLLECTION transaction this payment produced, rather than deleting
+        // or editing it — same immutability rule as everywhere else in the ledger.
+        const linkedTxn = await this.ledgerPosting.findByPaymentIdWithClient(client, user.schemaName, payment.id);
+        if (linkedTxn) {
+          await this.ledgerPosting.reverseWithClient(client, user, linkedTxn.id, 'Collection undone');
+        }
+
         await this.recordAudit(client, {
           paymentId: payment.id, installmentId, loanId: inst.loan_id,
           fromStatus: payment.collection_status, toStatus: 'CANCELLED', amount: parseFloat(payment.amount),
@@ -1190,7 +1236,7 @@ export class TenantCollectionsService {
     if (!dto.amount || dto.amount <= 0) throw new BadRequestException('Amount must be positive');
     return this.withSchema(user.schemaName, async (client) => {
       const instRes = await client.query(
-        `SELECT i.*, l.id AS loan_id, l.status AS loan_status, l.loan_number
+        `SELECT i.*, l.id AS loan_id, l.status AS loan_status, l.loan_number, l.customer_id
          FROM installments i JOIN loans l ON l.id = i.loan_id WHERE i.id = $1`,
         [installmentId],
       );
@@ -1205,34 +1251,64 @@ export class TenantCollectionsService {
 
       const paymentDate = dto.paymentDate ?? new Date().toISOString().slice(0, 10);
 
-      await client.query(
-        `INSERT INTO payments (loan_id, installment_id, amount, payment_method, reference_number, collected_by, payment_date)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [inst.loan_id, installmentId, dto.amount, dto.paymentMethod, dto.referenceNumber ?? null, user.sub, paymentDate],
-      );
+      // BEGIN/COMMIT: the payment insert, installment update and ledger post
+      // must land together — a failure partway through must not leave the
+      // ledger (or the installment balance) out of sync with the payment.
+      await client.query('BEGIN');
+      let committed = false;
+      try {
+        const receiptNumber = await nextReceiptNumber(client);
+        const payRes = await client.query<{ id: string }>(
+          `INSERT INTO payments (loan_id, installment_id, amount, payment_method, reference_number, receipt_number, collected_by, payment_date)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+           RETURNING id`,
+          [inst.loan_id, installmentId, dto.amount, dto.paymentMethod, dto.referenceNumber ?? null, receiptNumber, user.sub, paymentDate],
+        );
 
-      await client.query(
-        `UPDATE installments
-         SET paid_amount = paid_amount + $1,
-             status = CASE
-               WHEN paid_amount + $1 >= total_amount THEN 'PAID'
-               WHEN paid_amount + $1 > 0             THEN 'PARTIALLY_PAID'
-               ELSE status
-             END,
-             paid_at = CASE WHEN paid_amount + $1 >= total_amount THEN NOW() ELSE paid_at END
-         WHERE id = $2`,
-        [dto.amount, installmentId],
-      );
+        await client.query(
+          `UPDATE installments
+           SET paid_amount = paid_amount + $1,
+               status = CASE
+                 WHEN paid_amount + $1 >= total_amount THEN 'PAID'
+                 WHEN paid_amount + $1 > 0             THEN 'PARTIALLY_PAID'
+                 ELSE status
+               END,
+               paid_at = CASE WHEN paid_amount + $1 >= total_amount THEN NOW() ELSE paid_at END
+           WHERE id = $2`,
+          [dto.amount, installmentId],
+        );
 
-      await this.activity.record(client, user, {
-        action: 'payment.recorded',
-        entityType: 'loan',
-        entityId: inst.loan_id,
-        entityLabel: inst.loan_number,
-        metadata: { amount: dto.amount, paymentMethod: dto.paymentMethod, installmentId, source: 'collections' },
-      });
+        const { principal, interest } = splitPrincipalInterest(
+          dto.amount, parseFloat(inst.principal_amount), parseFloat(inst.interest_amount),
+        );
+        await this.ledgerPosting.postWithClient(client, user, {
+          transactionDate: paymentDate,
+          transactionType: 'COLLECTION',
+          loanId: inst.loan_id,
+          customerId: inst.customer_id,
+          agentId: user.sub,
+          paymentId: payRes.rows[0].id,
+          principalAmount: principal,
+          interestAmount: interest,
+          paymentChannel: ledgerChannelForCollection(dto.paymentMethod),
+          externalReference: dto.referenceNumber,
+          remarks: `Collection for installment ${installmentId}`,
+        });
 
-      return { success: true };
+        await this.activity.record(client, user, {
+          action: 'payment.recorded',
+          entityType: 'loan',
+          entityId: inst.loan_id,
+          entityLabel: inst.loan_number,
+          metadata: { amount: dto.amount, paymentMethod: dto.paymentMethod, installmentId, source: 'collections' },
+        });
+
+        await client.query('COMMIT');
+        committed = true;
+        return { success: true, paymentId: payRes.rows[0].id, receiptNumber };
+      } finally {
+        if (!committed) await client.query('ROLLBACK');
+      }
     });
   }
 

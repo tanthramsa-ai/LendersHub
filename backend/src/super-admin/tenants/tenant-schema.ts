@@ -135,6 +135,7 @@ export function tenantSchemaDDL(s: string): string[] {
        amount           NUMERIC(14,2) NOT NULL,
        payment_method   ${q}.payment_method NOT NULL DEFAULT 'CASH',
        reference_number TEXT,
+       receipt_number   TEXT,
        collected_by     UUID         REFERENCES ${q}."users" (id) ON DELETE SET NULL,
        payment_date     DATE         NOT NULL DEFAULT CURRENT_DATE,
        created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
@@ -199,6 +200,9 @@ export function tenantSchemaDDL(s: string): string[] {
     `ALTER TABLE ${q}."loans" ADD COLUMN IF NOT EXISTS npa_marked_at TIMESTAMPTZ`,
     `ALTER TABLE ${q}."loans" ADD COLUMN IF NOT EXISTS npa_marked_by UUID REFERENCES ${q}."users" (id) ON DELETE SET NULL`,
     `ALTER TABLE ${q}."loans" ADD COLUMN IF NOT EXISTS npa_reason TEXT`,
+
+    // ── receipt_number on payments (idempotent) — requirements doc §5.4/§7.3/§7.4 ──
+    `ALTER TABLE ${q}."payments" ADD COLUMN IF NOT EXISTS receipt_number TEXT`,
 
     // ── loan_type_id FK on loans (idempotent) ────────────────────────────────
     `ALTER TABLE ${q}."loans" ADD COLUMN IF NOT EXISTS loan_type_id UUID REFERENCES ${q}."loan_types" (id) ON DELETE SET NULL`,
@@ -308,6 +312,147 @@ export function tenantSchemaDDL(s: string): string[] {
      )`,
     `CREATE INDEX IF NOT EXISTS idx_${s}_ft_date  ON ${q}."fund_transactions" (transaction_date DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_${s}_ft_type  ON ${q}."fund_transactions" (type, transaction_date DESC)`,
+
+    // ── ledger_transactions (immutable financial transaction ledger — source of
+    // truth for principal/interest/fee splits, disbursements, collections,
+    // adjustments and reversals. Distinct from fund_transactions, which only
+    // covers ad-hoc manual credit/debit entries). Amounts on a posted row are
+    // never edited; corrections are separate reversal rows linked via
+    // reversal_of_id, with the original's status flipped to REVERSED. ─────────
+    `CREATE TABLE IF NOT EXISTS ${q}."ledger_transactions" (
+       id                UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+       transaction_date  DATE          NOT NULL DEFAULT CURRENT_DATE,
+       business_date     DATE          NOT NULL DEFAULT CURRENT_DATE,
+       transaction_type  TEXT          NOT NULL CHECK (transaction_type IN ('DISBURSEMENT','COLLECTION','REFUND','ADJUSTMENT','FEE','OTHER')),
+       loan_id           UUID          REFERENCES ${q}."loans" (id) ON DELETE SET NULL,
+       customer_id       UUID          REFERENCES ${q}."customers" (id) ON DELETE SET NULL,
+       agent_id          UUID          REFERENCES ${q}."users" (id) ON DELETE SET NULL,
+       payment_id        UUID          REFERENCES ${q}."payments" (id) ON DELETE SET NULL,
+       principal_amount  NUMERIC(14,2) NOT NULL DEFAULT 0,
+       interest_amount   NUMERIC(14,2) NOT NULL DEFAULT 0,
+       fee_amount        NUMERIC(14,2) NOT NULL DEFAULT 0,
+       other_amount      NUMERIC(14,2) NOT NULL DEFAULT 0,
+       total_amount      NUMERIC(14,2) NOT NULL,
+       payment_channel   TEXT          CHECK (payment_channel IN ('AGENT_CASH','AGENT_UPI','BANK_TRANSFER','UPI','PAYMENT_GATEWAY','CASH','CHEQUE','NEFT','RTGS','OTHER')),
+       external_reference TEXT,
+       status            TEXT          NOT NULL DEFAULT 'POSTED' CHECK (status IN ('PENDING','POSTED','REVERSED','RECONCILED')),
+       idempotency_key   TEXT,
+       reversal_of_id    UUID          REFERENCES ${q}."ledger_transactions" (id) ON DELETE SET NULL,
+       settled_at          TIMESTAMPTZ,
+       settlement_reference TEXT,
+       remarks           TEXT,
+       created_by        UUID          REFERENCES ${q}."users" (id) ON DELETE SET NULL,
+       created_at        TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+       CONSTRAINT ck_${s}_lt_total_matches_components
+         CHECK (total_amount = principal_amount + interest_amount + fee_amount + other_amount)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_${s}_lt_txn_date  ON ${q}."ledger_transactions" (transaction_date DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_${s}_lt_biz_date  ON ${q}."ledger_transactions" (business_date DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_${s}_lt_type      ON ${q}."ledger_transactions" (transaction_type)`,
+    `CREATE INDEX IF NOT EXISTS idx_${s}_lt_loan      ON ${q}."ledger_transactions" (loan_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_${s}_lt_customer  ON ${q}."ledger_transactions" (customer_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_${s}_lt_payment   ON ${q}."ledger_transactions" (payment_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_${s}_lt_status    ON ${q}."ledger_transactions" (status)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_${s}_lt_idempotency ON ${q}."ledger_transactions" (idempotency_key) WHERE idempotency_key IS NOT NULL`,
+
+    // ── funders + funder capital ledger + explicit loan funding allocation ────
+    // (ledger requirements doc §6.1/§6.2/§9 — explicit allocation model: each
+    // disbursement is manually assigned to one or more specific funders,
+    // rather than pooled or auto-split pro-rata.)
+    `CREATE TABLE IF NOT EXISTS ${q}."funders" (
+       id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+       name        TEXT        NOT NULL,
+       email       TEXT,
+       phone       TEXT,
+       is_active   BOOLEAN     NOT NULL DEFAULT TRUE,
+       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+       updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_${s}_funders_active ON ${q}."funders" (is_active)`,
+
+    `CREATE TABLE IF NOT EXISTS ${q}."funder_transactions" (
+       id                UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+       funder_id         UUID          NOT NULL REFERENCES ${q}."funders" (id) ON DELETE RESTRICT,
+       transaction_date  DATE          NOT NULL DEFAULT CURRENT_DATE,
+       transaction_type  TEXT          NOT NULL CHECK (transaction_type IN ('CONTRIBUTION','WITHDRAWAL','ADJUSTMENT')),
+       amount            NUMERIC(14,2) NOT NULL,
+       reference_number  TEXT,
+       notes             TEXT,
+       status            TEXT          NOT NULL DEFAULT 'POSTED' CHECK (status IN ('PENDING','POSTED','REVERSED')),
+       reversal_of_id    UUID          REFERENCES ${q}."funder_transactions" (id) ON DELETE SET NULL,
+       created_by        UUID          REFERENCES ${q}."users" (id) ON DELETE SET NULL,
+       created_at        TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+       updated_at        TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_${s}_funder_txn_funder ON ${q}."funder_transactions" (funder_id, transaction_date DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_${s}_funder_txn_status ON ${q}."funder_transactions" (status)`,
+
+    `CREATE TABLE IF NOT EXISTS ${q}."loan_funder_allocations" (
+       id          UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+       loan_id     UUID          NOT NULL REFERENCES ${q}."loans" (id) ON DELETE CASCADE,
+       funder_id   UUID          NOT NULL REFERENCES ${q}."funders" (id) ON DELETE RESTRICT,
+       amount      NUMERIC(14,2) NOT NULL CHECK (amount > 0),
+       created_by  UUID          REFERENCES ${q}."users" (id) ON DELETE SET NULL,
+       created_at  TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+       CONSTRAINT uq_${s}_lfa_loan_funder UNIQUE (loan_id, funder_id)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_${s}_lfa_loan   ON ${q}."loan_funder_allocations" (loan_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_${s}_lfa_funder ON ${q}."loan_funder_allocations" (funder_id)`,
+
+    // ── daily_ledger_snapshot (day-end materialization + informational lock —
+    // requirements doc §6.5/§7.2. Generating a snapshot never blocks new
+    // postings; locked_at is purely a reporting/audit marker, not enforced
+    // by the posting engine.) ────────────────────────────────────────────────
+    `CREATE TABLE IF NOT EXISTS ${q}."daily_ledger_snapshot" (
+       id                            UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+       business_date                 DATE          NOT NULL,
+       opening_outstanding_principal NUMERIC(14,2) NOT NULL DEFAULT 0,
+       new_disbursement_principal    NUMERIC(14,2) NOT NULL DEFAULT 0,
+       principal_collected           NUMERIC(14,2) NOT NULL DEFAULT 0,
+       interest_collected            NUMERIC(14,2) NOT NULL DEFAULT 0,
+       adjustments                   NUMERIC(14,2) NOT NULL DEFAULT 0,
+       closing_outstanding_principal NUMERIC(14,2) NOT NULL DEFAULT 0,
+       available_fund                NUMERIC(14,2) NOT NULL DEFAULT 0,
+       generated_by                  UUID          REFERENCES ${q}."users" (id) ON DELETE SET NULL,
+       generated_at                  TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+       locked_at                     TIMESTAMPTZ,
+       locked_by                     UUID          REFERENCES ${q}."users" (id) ON DELETE SET NULL,
+       CONSTRAINT uq_${s}_dls_date UNIQUE (business_date)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_${s}_dls_date ON ${q}."daily_ledger_snapshot" (business_date DESC)`,
+
+    // ── incoming_payment_events (direct payment webhook staging — requirements
+    // doc §7.4/§11 "POST /api/payments/webhook". Every received event lands here
+    // first; matching to a loan/installment and posting the resulting ledger
+    // transaction is a separate, manual step (Phase 6 scope decision — no
+    // provider chosen yet, so no automatic reference-based matching either).
+    // Unique on (provider, external_reference): a redelivered webhook for the
+    // same payment is recognized and ignored rather than double-posted.) ──────
+    `CREATE TABLE IF NOT EXISTS ${q}."incoming_payment_events" (
+       id                     UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+       provider               TEXT          NOT NULL,
+       external_reference     TEXT          NOT NULL,
+       amount                 NUMERIC(14,2) NOT NULL,
+       currency               TEXT          NOT NULL DEFAULT 'INR',
+       payment_method         TEXT,
+       payer_name             TEXT,
+       payer_contact          TEXT,
+       occurred_at            TIMESTAMPTZ,
+       raw_payload            JSONB         NOT NULL,
+       status                 TEXT          NOT NULL DEFAULT 'RECEIVED' CHECK (status IN ('RECEIVED','POSTED','REJECTED')),
+       matched_loan_id        UUID          REFERENCES ${q}."loans" (id) ON DELETE SET NULL,
+       matched_installment_id UUID          REFERENCES ${q}."installments" (id) ON DELETE SET NULL,
+       matched_customer_id    UUID          REFERENCES ${q}."customers" (id) ON DELETE SET NULL,
+       payment_id             UUID          REFERENCES ${q}."payments" (id) ON DELETE SET NULL,
+       ledger_transaction_id  UUID          REFERENCES ${q}."ledger_transactions" (id) ON DELETE SET NULL,
+       rejection_reason       TEXT,
+       processed_by           UUID          REFERENCES ${q}."users" (id) ON DELETE SET NULL,
+       processed_at           TIMESTAMPTZ,
+       received_at            TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+       CONSTRAINT uq_${s}_ipe_provider_ref UNIQUE (provider, external_reference)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_${s}_ipe_status   ON ${q}."incoming_payment_events" (status)`,
+    `CREATE INDEX IF NOT EXISTS idx_${s}_ipe_received ON ${q}."incoming_payment_events" (received_at DESC)`,
 
     // ── activity_log (per-tenant activity trail: loans, customers, users, etc.) ─
     `CREATE TABLE IF NOT EXISTS ${q}."activity_log" (
