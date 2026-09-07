@@ -6,7 +6,8 @@ import Link from 'next/link';
 import {
   getDashboardStats, getRecentActivity, getActiveLoans, getMonthlyTrend,
   getTenantSession, loanDetailPath,
-  DashboardStats, ActivityItem, ActiveLoan, MonthlyTrend,
+  collectionsAwaitingConfirmation, confirmCollection,
+  DashboardStats, ActivityItem, ActiveLoan, MonthlyTrend, AwaitingConfirmation,
   MANAGER_ROLES, LOAN_ROLES,
 } from '@/services/tenant-api';
 
@@ -58,6 +59,13 @@ export default function TenantDashboardPage() {
   const [trend, setTrend] = useState<MonthlyTrend[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Collections an agent has banked that still need a manager's approval.
+  const [awaiting, setAwaiting] = useState<AwaitingConfirmation[]>([]);
+  const [awaitingTotal, setAwaitingTotal] = useState(0);
+  const [awaitingAmount, setAwaitingAmount] = useState(0);
+  const [approving, setApproving] = useState<string | null>(null);
+  const [approveError, setApproveError] = useState('');
+
   useEffect(() => {
     setLoading(true);
     Promise.all([getDashboardStats(), getRecentActivity(), getActiveLoans(1, 10), getMonthlyTrend(12)])
@@ -71,6 +79,39 @@ export default function TenantDashboardPage() {
       .catch(console.error)
       .finally(() => setLoading(false));
   }, []);
+
+  // Manager-only: the endpoint is gated to Owner/Manager/Admin, so asking as
+  // anyone else would just 403.
+  useEffect(() => {
+    if (!isManager) return;
+    loadAwaiting();
+  }, [isManager]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function loadAwaiting() {
+    try {
+      const res = await collectionsAwaitingConfirmation(1, 20);
+      setAwaiting(res.data);
+      setAwaitingTotal(res.total);
+      setAwaitingAmount(res.totalAmount);
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  async function handleApprove(paymentId: string) {
+    setApproving(paymentId);
+    setApproveError('');
+    try {
+      await confirmCollection(paymentId);
+      // Re-read rather than dropping the row locally: another manager may have
+      // approved something else in the meantime, and the total has to stay true.
+      await loadAwaiting();
+    } catch (e: unknown) {
+      setApproveError((e as Error).message);
+    } finally {
+      setApproving(null);
+    }
+  }
 
   async function loadMoreLoans(page: number) {
     const l = await getActiveLoans(page, 10);
@@ -199,6 +240,80 @@ export default function TenantDashboardPage() {
           </div>
         ))}
       </div>
+
+      {/* Awaiting approval — the manager's half of the collection workflow.
+          An agent's collection sits at COLLECTED until someone here approves it,
+          and until this existed the only way to find one was to already know it
+          was there and drill into that installment in the Collection Calendar. */}
+      {isManager && awaitingTotal > 0 && (
+        <div className="bg-white rounded-xl shadow-sm border border-amber-200 overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-4 bg-amber-50 border-b border-amber-100">
+            <div>
+              <h2 className="text-sm font-bold text-gray-900">
+                Awaiting your approval
+                <span className="ml-2 px-2 py-0.5 rounded-full bg-amber-500 text-white text-xs font-semibold">{awaitingTotal}</span>
+              </h2>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Collected by agents and not yet confirmed — {fmtCurrency(awaitingAmount)} in total
+              </p>
+            </div>
+            <Link href={`/tenant/${subdomain}/collections/calendar`} className="text-xs font-medium px-3 py-1.5 rounded-lg border border-amber-300 text-amber-800 hover:bg-amber-100">
+              Collection Calendar
+            </Link>
+          </div>
+
+          {approveError && <p className="px-5 py-2 text-xs text-red-600 bg-red-50">{approveError}</p>}
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-gray-500 text-xs">
+                <tr>
+                  <th className="text-left px-5 py-2 font-medium">COLLECTED</th>
+                  <th className="text-left px-3 py-2 font-medium">CUSTOMER</th>
+                  <th className="text-left px-3 py-2 font-medium">LOAN</th>
+                  <th className="text-left px-3 py-2 font-medium">AGENT</th>
+                  <th className="text-left px-3 py-2 font-medium">METHOD</th>
+                  <th className="text-right px-3 py-2 font-medium">AMOUNT</th>
+                  <th className="px-5 py-2" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {awaiting.map((a) => (
+                  <tr key={a.paymentId} className="hover:bg-gray-50">
+                    <td className="px-5 py-3 text-gray-500 whitespace-nowrap">{fmtDate(a.collectedAt)}</td>
+                    <td className="px-3 py-3 font-medium text-gray-900 whitespace-nowrap">{a.customerName ?? '—'}</td>
+                    <td className="px-3 py-3 whitespace-nowrap">
+                      {a.loanId && a.loanNumber ? (
+                        <Link href={`/tenant/${subdomain}/${loanDetailPath(a.cycleType, a.loanId)}`} className="text-blue-600 hover:underline">
+                          {a.loanNumber}
+                        </Link>
+                      ) : '—'}
+                      {a.installmentNumber != null && <span className="text-gray-400"> · #{a.installmentNumber}</span>}
+                    </td>
+                    <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{a.collectedByName ?? '—'}</td>
+                    <td className="px-3 py-3 text-gray-500 whitespace-nowrap">{a.paymentMethod.replace('_', ' ')}</td>
+                    <td className="px-3 py-3 text-right font-semibold text-gray-900 whitespace-nowrap">₹{a.amount.toLocaleString('en-IN')}</td>
+                    <td className="px-5 py-3 text-right">
+                      <button
+                        onClick={() => handleApprove(a.paymentId)}
+                        disabled={approving === a.paymentId}
+                        className="px-3 py-1.5 rounded-lg bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white text-xs font-semibold transition-colors"
+                      >
+                        {approving === a.paymentId ? 'Approving…' : 'Approve'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {awaitingTotal > awaiting.length && (
+            <p className="px-5 py-3 text-xs text-gray-500 border-t border-gray-100">
+              Showing the {awaiting.length} longest-waiting of {awaitingTotal}. Approve these to see the rest.
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Chart + Activity row — hidden for collectors */}
       {!isCollector && (

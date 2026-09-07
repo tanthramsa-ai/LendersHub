@@ -110,6 +110,69 @@ describe('TenantCollectionsService', () => {
     });
   });
 
+  describe('awaitingConfirmation — the manager approval queue', () => {
+    it('rejects an AGENT — an agent must not see, let alone work, the approval queue', async () => {
+      await expect(
+        svc.awaitingConfirmation(makeUser({ role: 'AGENT' })),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(poolConnect).not.toHaveBeenCalled();
+    });
+
+    it('rejects STAFF', async () => {
+      await expect(svc.awaitingConfirmation(makeUser({ role: 'STAFF' }))).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it.each(['MANAGER', 'ADMIN', 'OWNER'] as const)('lets %s read the queue', async (role) => {
+      query
+        .mockResolvedValueOnce({ rows: [] }) // SET search_path
+        .mockResolvedValueOnce({ rows: [{
+          id: 'pay1', amount: '500.00', payment_method: 'CASH', reference_number: null, receipt_number: 'RCPT1',
+          payment_date: '2026-09-07', created_at: '2026-09-07T09:00:00Z',
+          installment_id: 'inst1', installment_number: 3, due_date: '2026-09-01',
+          loan_id: 'loan1', loan_number: 'WL-1', cycle_type: 'WEEKLY',
+          customer_name: 'Priya Sharma', collected_by_name: 'Agent A',
+        }] })
+        .mockResolvedValueOnce({ rows: [{ total: '1', amount: '500.00' }] });
+
+      const res = await svc.awaitingConfirmation(makeUser({ role }));
+
+      expect(res.total).toBe(1);
+      expect(res.totalAmount).toBe(500);
+      expect(res.data[0]).toEqual(expect.objectContaining({
+        paymentId: 'pay1', amount: 500, customerName: 'Priya Sharma',
+        collectedByName: 'Agent A', loanNumber: 'WL-1', installmentNumber: 3,
+      }));
+    });
+
+    it('asks only for COLLECTED collections that were not undone, oldest first', async () => {
+      query
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [{ total: '0', amount: '0' }] });
+
+      await svc.awaitingConfirmation(makeUser({ role: 'MANAGER' }));
+
+      const listQuery = query.mock.calls.map((c) => String(c[0])).find((q) => q.includes('FROM payments p'));
+      expect(listQuery).toBeDefined();
+      expect(listQuery).toContain("collection_status = 'COLLECTED'");
+      // An undone collection keeps its row for the audit trail; it must not
+      // come back as something still to approve.
+      expect(listQuery).toContain('cancelled_at IS NULL');
+      expect(listQuery).toContain('ORDER BY p.created_at ASC');
+    });
+
+    it('caps the page size so a caller cannot ask for the whole table', async () => {
+      query
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [{ total: '0', amount: '0' }] });
+
+      const res = await svc.awaitingConfirmation(makeUser({ role: 'OWNER' }), 1, 5000);
+
+      expect(res.limit).toBe(100);
+    });
+  });
+
   describe('confirmPayment — RBAC & idempotency (spec §5, §15 edge cases 8-10)', () => {
     it('rejects an AGENT attempting to confirm — collection agents can never self-confirm', async () => {
       await expect(
