@@ -3,6 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
 import { LEDGER_ROLES, UserRole } from '../common/roles';
+import { ensureReceiptNumberColumn } from '../common/receipt-number';
 
 export type LedgerTransactionType = 'DISBURSEMENT' | 'COLLECTION' | 'REFUND' | 'ADJUSTMENT' | 'FEE' | 'OTHER';
 export type LedgerPaymentChannel = 'AGENT_CASH' | 'AGENT_UPI' | 'BANK_TRANSFER' | 'UPI' | 'PAYMENT_GATEWAY' | 'CASH' | 'CHEQUE' | 'NEFT' | 'RTGS' | 'OTHER';
@@ -167,6 +168,11 @@ export class TenantLedgerPostingService {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_${s}_lt_payment ON ${q}."ledger_transactions" (payment_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_${s}_lt_status ON ${q}."ledger_transactions" (status)`);
     await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_${s}_lt_idempotency ON ${q}."ledger_transactions" (idempotency_key) WHERE idempotency_key IS NOT NULL`);
+    // The ledger reporting views join payments for the receipt number, so the
+    // same provisioning gap that breaks recording a payment also 500s the
+    // Collection Ledger and Daily Ledger. Every ledger read already calls
+    // through here, which makes this the one place that covers them all.
+    await ensureReceiptNumberColumn(client, schemaName);
     this.ensuredSchemas.add(schemaName);
   }
 

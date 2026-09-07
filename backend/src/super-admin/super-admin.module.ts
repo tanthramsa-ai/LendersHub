@@ -9,6 +9,7 @@ import { DashboardService } from './dashboard/dashboard.service';
 import { DashboardController } from './dashboard/dashboard.controller';
 import { TenantService } from './tenants/tenant.service';
 import { TenantController } from './tenants/tenant.controller';
+import { TenantSchemaRepairService } from './tenants/tenant-schema-repair.service';
 import { EmailService } from './tenants/email.service';
 import { VercelDomainService } from './tenants/vercel-domain.service';
 import { UsersService } from './users/users.service';
@@ -31,6 +32,7 @@ import { AuditLogController } from './audit-log/audit-log.controller';
     SuperAdminTempStrategy,
     DashboardService,
     TenantService,
+    TenantSchemaRepairService,
     EmailService,
     VercelDomainService,
     UsersService,

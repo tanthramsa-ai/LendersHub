@@ -978,7 +978,7 @@ export class TenantCollectionsService {
         // (not the installment's original total) => a partial collection.
         const rowStatus: 'COLLECTED' | 'PARTIALLY_COLLECTED' = applied < rowBalance ? 'PARTIALLY_COLLECTED' : 'COLLECTED';
 
-        const receiptNumber = await nextReceiptNumber(client);
+        const receiptNumber = await nextReceiptNumber(client, user.schemaName);
         const payRes = await client.query<{ id: string }>(
           `INSERT INTO payments
              (loan_id, installment_id, amount, payment_method, reference_number, receipt_number, collected_by, payment_date,
@@ -1257,7 +1257,7 @@ export class TenantCollectionsService {
       await client.query('BEGIN');
       let committed = false;
       try {
-        const receiptNumber = await nextReceiptNumber(client);
+        const receiptNumber = await nextReceiptNumber(client, user.schemaName);
         const payRes = await client.query<{ id: string }>(
           `INSERT INTO payments (loan_id, installment_id, amount, payment_method, reference_number, receipt_number, collected_by, payment_date)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)

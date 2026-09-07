@@ -5,6 +5,7 @@ import { TenantActivityLogService } from '../activity-log/tenant-activity-log.se
 import { TenantLedgerPostingService } from '../ledger/tenant-ledger-posting.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { receiptColumnEnsuredSchemas } from '../common/receipt-number';
 
 function makeUser(overrides: Partial<TenantJwtPayload> = {}): TenantJwtPayload {
   return {
@@ -24,6 +25,7 @@ describe('TenantLoansService', () => {
   let svc: TenantLoansService;
 
   beforeEach(() => {
+    receiptColumnEnsuredSchemas.clear();
     query = jest.fn().mockResolvedValue({ rows: [] });
     client = { query };
     poolConnect = jest.fn().mockResolvedValue({ ...client, release: jest.fn() });
@@ -98,6 +100,56 @@ describe('TenantLoansService', () => {
       await expect(svc.approveLoan(makeUser(), 'loan1')).rejects.toThrow('ledger down');
       expect(query.mock.calls.some((c) => c[0] === 'ROLLBACK')).toBe(true);
       expect(query.mock.calls.some((c) => c[0] === 'COMMIT')).toBe(false);
+    });
+  });
+
+  describe('recordPayment', () => {
+    /** Queue for the happy path: search_path, loan, installment, BEGIN, receipt COUNT, payment INSERT. */
+    function queueOfficePayment() {
+      query
+        .mockResolvedValueOnce({ rows: [] }) // SET search_path
+        .mockResolvedValueOnce({ rows: [{ id: 'loan1', status: 'DISBURSED', customer_id: 'cust1' }] })
+        .mockResolvedValueOnce({ rows: [{
+          id: 'inst17', installment_number: 17, status: 'PENDING',
+          total_amount: '5000.00', paid_amount: '0.00',
+          principal_amount: '5000.00', interest_amount: '0.00',
+        }] })
+        .mockResolvedValueOnce({ rows: [] })              // BEGIN
+        .mockResolvedValueOnce({ rows: [] })              // ensureReceiptNumberColumn's ALTER TABLE
+        .mockResolvedValueOnce({ rows: [{ n: '5' }] })    // receipt number COUNT
+        .mockResolvedValueOnce({ rows: [{ id: 'pay1' }] }); // INSERT payments
+    }
+
+    it('settles the installment and commits', async () => {
+      queueOfficePayment();
+
+      const result = await svc.recordPayment(makeUser(), 'loan1', {
+        installmentId: 'inst17', amount: 5000, paymentMethod: 'CASH',
+      });
+
+      expect(result).toEqual(expect.objectContaining({ id: 'pay1', amount: 5000, installmentsPaid: 1 }));
+      expect(ledgerPosting.postWithClient).toHaveBeenCalledWith(
+        expect.objectContaining({ query }),
+        expect.anything(),
+        expect.objectContaining({
+          transactionType: 'COLLECTION', loanId: 'loan1', customerId: 'cust1',
+          paymentId: 'pay1', principalAmount: 5000, interestAmount: 0,
+        }),
+      );
+      expect(query.mock.calls.some((c) => c[0] === 'COMMIT')).toBe(true);
+      expect(query.mock.calls.some((c) => c[0] === 'ROLLBACK')).toBe(false);
+    });
+
+    it('does not touch installments.updated_at — the column does not exist, and inside the BEGIN a failed UPDATE aborts the whole payment', async () => {
+      queueOfficePayment();
+
+      await svc.recordPayment(makeUser(), 'loan1', {
+        installmentId: 'inst17', amount: 5000, paymentMethod: 'CASH',
+      });
+
+      const updateCall = query.mock.calls.find((c) => String(c[0]).includes('UPDATE installments'));
+      expect(updateCall).toBeDefined();
+      expect(String(updateCall![0])).not.toContain('updated_at');
     });
   });
 });

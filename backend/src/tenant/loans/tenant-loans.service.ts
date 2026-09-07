@@ -3192,7 +3192,7 @@ export class TenantLoansService {
       try {
         if (allocations.length > 0) {
           for (const a of allocations) {
-            receiptNumber = await nextReceiptNumber(client);
+            receiptNumber = await nextReceiptNumber(client, user.schemaName);
             const payRes = await client.query(`
               INSERT INTO payments (loan_id, installment_id, amount, payment_method, reference_number, receipt_number, collected_by, payment_date)
               VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
@@ -3200,18 +3200,11 @@ export class TenantLoansService {
             `, [loanId, a.installmentId, a.amount, dto.paymentMethod, dto.referenceNumber ?? null, receiptNumber, user.sub, paymentDate]);
             paymentId = payRes.rows[0].id;
 
+            // No updated_at here: installments has no such column (see undoPayment).
+            // A failed first attempt with a retry-fallback is not an option inside
+            // this BEGIN — the first error aborts the transaction, so the fallback
+            // would only ever fail with 25P02 and surface as a generic 500.
             await client.query(`
-              UPDATE installments
-              SET paid_amount = paid_amount + $1,
-                  status = CASE
-                    WHEN paid_amount + $1 >= total_amount THEN 'PAID'
-                    WHEN paid_amount + $1 > 0 THEN 'PARTIALLY_PAID'
-                    ELSE status
-                  END,
-                  paid_at = CASE WHEN paid_amount + $1 >= total_amount THEN NOW() ELSE paid_at END,
-                  updated_at = NOW()
-              WHERE id = $2
-            `, [a.amount, a.installmentId]).catch(() => client.query(`
               UPDATE installments
               SET paid_amount = paid_amount + $1,
                   status = CASE
@@ -3221,7 +3214,7 @@ export class TenantLoansService {
                   END,
                   paid_at = CASE WHEN paid_amount + $1 >= total_amount THEN NOW() ELSE paid_at END
               WHERE id = $2
-            `, [a.amount, a.installmentId]));
+            `, [a.amount, a.installmentId]);
 
             const { principal, interest } = splitPrincipalInterest(a.amount, a.principalAmount, a.interestAmount);
             await this.ledgerPosting.postWithClient(client, user, {
@@ -3235,7 +3228,7 @@ export class TenantLoansService {
             });
           }
         } else {
-          receiptNumber = await nextReceiptNumber(client);
+          receiptNumber = await nextReceiptNumber(client, user.schemaName);
           const payRes = await client.query(`
             INSERT INTO payments (loan_id, installment_id, amount, payment_method, reference_number, receipt_number, collected_by, payment_date)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)

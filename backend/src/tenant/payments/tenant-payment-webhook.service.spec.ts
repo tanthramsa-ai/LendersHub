@@ -5,6 +5,7 @@ import { TenantActivityLogService } from '../activity-log/tenant-activity-log.se
 import { TenantLedgerPostingService } from '../ledger/tenant-ledger-posting.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { ForbiddenException, BadRequestException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { receiptColumnEnsuredSchemas } from '../common/receipt-number';
 
 function makeUser(overrides: Partial<TenantJwtPayload> = {}): TenantJwtPayload {
   return {
@@ -27,6 +28,7 @@ describe('TenantPaymentWebhookService', () => {
   let svc: TenantPaymentWebhookService;
 
   beforeEach(() => {
+    receiptColumnEnsuredSchemas.clear();
     query = jest.fn().mockResolvedValue({ rows: [] });
     client = { query };
     poolConnect = jest.fn().mockResolvedValue({ ...client, release: jest.fn() });
@@ -149,6 +151,7 @@ describe('TenantPaymentWebhookService', () => {
         .mockResolvedValueOnce({ rows: [{ id: 'loan1', status: 'DISBURSED', customer_id: 'cust1', loan_number: 'LN-1' }] })
         .mockResolvedValueOnce({ rows: [{ id: 'inst1', total_amount: '500', paid_amount: '0', principal_amount: '450', interest_amount: '50' }] })
         .mockResolvedValueOnce({ rows: [] }) // BEGIN
+        .mockResolvedValueOnce({ rows: [] }) // ensureReceiptNumberColumn's ALTER TABLE
         .mockResolvedValueOnce({ rows: [{ n: '0' }] }) // nextReceiptNumber's SELECT COUNT(*)
         .mockResolvedValueOnce({ rows: [{ id: 'payment1' }] }) // INSERT payments
         .mockResolvedValueOnce({ rows: [] }) // UPDATE installments
@@ -184,6 +187,7 @@ describe('TenantPaymentWebhookService', () => {
         .mockResolvedValueOnce({ rows: [{ id: 'loan1', status: 'DISBURSED', customer_id: 'cust1', loan_number: 'LN-1' }] })
         .mockResolvedValueOnce({ rows: [{ id: 'inst1', total_amount: '500', paid_amount: '0', principal_amount: '450', interest_amount: '50' }] })
         .mockResolvedValueOnce({ rows: [] }) // BEGIN
+        .mockResolvedValueOnce({ rows: [] }) // ensureReceiptNumberColumn's ALTER TABLE
         .mockResolvedValueOnce({ rows: [{ n: '0' }] }) // nextReceiptNumber's SELECT COUNT(*)
         .mockResolvedValueOnce({ rows: [{ id: 'payment1' }] }) // INSERT payments
         .mockResolvedValueOnce({ rows: [] }) // UPDATE installments

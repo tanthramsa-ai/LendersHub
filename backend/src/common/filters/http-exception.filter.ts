@@ -53,6 +53,11 @@ const PG_CODE_MAP: Record<string, { status: number; message: string }> = {
   '22P01': { status: 400, message: 'Floating point exception' },
   '21000': { status: 400, message: 'Invalid enum value' },
   '42P01': { status: 500, message: 'A required database table is missing for this workspace. Please contact support.' },
+  '42703': { status: 500, message: 'A required database column is missing for this workspace. Please contact support.' },  // undefined_column
+  // current_transaction_is_aborted — a statement inside a BEGIN already failed and every
+  // command after it is refused. The real cause is the *earlier* error, which the server
+  // log records just above this one; surfacing 25P02 by name is what points there.
+  '25P02': { status: 500, message: 'This operation was rolled back after an earlier database error. Nothing was saved — please contact support.' },
 };
 
 function messageForPgError(
