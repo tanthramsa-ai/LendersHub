@@ -3153,7 +3153,10 @@ export class TenantLoansService {
       // Allocate the payment across installments: the target installment first, then — if the
       // amount exceeds its outstanding balance — the excess cascades onto subsequent unpaid
       // installments on the same loan (lets a customer clear more than one EMI in one payment).
-      const allocations: { installmentId: string; amount: number; principalAmount: number; interestAmount: number }[] = [];
+      const allocations: {
+        installmentId: string; installmentNumber: number; amount: number;
+        principalAmount: number; interestAmount: number; arrears: boolean;
+      }[] = [];
 
       if (dto.installmentId) {
         const instRes = await client.query(
@@ -3166,32 +3169,61 @@ export class TenantLoansService {
         if (inst.status === 'PAID') throw new BadRequestException('This installment has already been fully paid');
 
         let remaining = dto.amount;
-        const targetOutstanding = parseFloat(inst.total_amount) - parseFloat(inst.paid_amount);
-        const applyToTarget = Math.min(remaining, targetOutstanding);
-        allocations.push({
-          installmentId: inst.id, amount: applyToTarget,
-          principalAmount: parseFloat(inst.principal_amount), interestAmount: parseFloat(inst.interest_amount),
-        });
-        remaining = Math.round((remaining - applyToTarget) * 100) / 100;
 
+        type AllocRow = {
+          id: string; installment_number: number; total_amount: string; paid_amount: string;
+          principal_amount: string; interest_amount: string;
+        };
+        /** Applies as much of what is left as this installment still owes. */
+        const apply = (row: AllocRow, arrears: boolean) => {
+          if (remaining <= 0.01) return;
+          const outstanding = round2(parseFloat(row.total_amount) - parseFloat(row.paid_amount));
+          const amount = Math.min(remaining, outstanding);
+          // A zero allocation would insert a ₹0 payment and then fail the ledger's
+          // non-zero-amount rule, taking the whole collection down with it.
+          if (amount <= 0.005) return;
+          allocations.push({
+            installmentId: row.id, installmentNumber: row.installment_number, amount,
+            principalAmount: parseFloat(row.principal_amount), interestAmount: parseFloat(row.interest_amount),
+            arrears,
+          });
+          remaining = round2(remaining - amount);
+        };
+
+        // Arrears first: money always clears the oldest debt already due before it
+        // touches the row the collector happened to click.
+        //
+        // Without this, the "+" make-up installment could not do the one job it
+        // exists for. It is appended after the last row, and the cascade below only
+        // ever runs forward, so collecting it settled a row dated in the future
+        // while the missed EMI it was making up for stayed overdue — the borrower
+        // paid and the overdue count did not move.
+        //
+        // Only rows already due count as arrears; a future installment is not a
+        // debt yet and must not absorb money ahead of the row being collected.
+        const arrearsRes = await client.query<AllocRow>(
+          `SELECT id, installment_number, total_amount, paid_amount, principal_amount, interest_amount
+             FROM installments
+            WHERE loan_id = $1 AND installment_number < $2
+              AND status IN ('PENDING','PARTIALLY_PAID','OVERDUE')
+              AND due_date <= CURRENT_DATE
+            ORDER BY installment_number ASC`,
+          [loanId, inst.installment_number],
+        );
+        for (const row of arrearsRes.rows) apply(row, true);
+
+        // Then the installment actually being collected.
+        apply(inst as AllocRow, false);
+
+        // Then anything still left carries onto the installments that follow it.
         if (remaining > 0.01) {
-          const nextRes = await client.query<{ id: string; total_amount: string; paid_amount: string; principal_amount: string; interest_amount: string }>(
-            `SELECT id, total_amount, paid_amount, principal_amount, interest_amount FROM installments
+          const nextRes = await client.query<AllocRow>(
+            `SELECT id, installment_number, total_amount, paid_amount, principal_amount, interest_amount FROM installments
              WHERE loan_id = $1 AND installment_number > $2 AND status IN ('PENDING','PARTIALLY_PAID','OVERDUE')
              ORDER BY installment_number ASC`,
             [loanId, inst.installment_number],
           );
-          for (const next of nextRes.rows) {
-            if (remaining <= 0.01) break;
-            const outstanding = parseFloat(next.total_amount) - parseFloat(next.paid_amount);
-            const apply = Math.min(remaining, outstanding);
-            if (apply <= 0) continue;
-            allocations.push({
-              installmentId: next.id, amount: apply,
-              principalAmount: parseFloat(next.principal_amount), interestAmount: parseFloat(next.interest_amount),
-            });
-            remaining = Math.round((remaining - apply) * 100) / 100;
-          }
+          for (const next of nextRes.rows) apply(next, false);
           if (remaining > 0.01) {
             throw new BadRequestException(`Amount exceeds total outstanding on this loan by ₹${remaining.toFixed(2)}`);
           }
@@ -3302,7 +3334,15 @@ export class TenantLoansService {
 
         await client.query('COMMIT');
         committed = true;
-        return { id: paymentId, receiptNumber, amount: dto.amount, paymentDate, installmentsPaid: allocations.length };
+        return {
+          id: paymentId, receiptNumber, amount: dto.amount, paymentDate,
+          installmentsPaid: allocations.length,
+          // Where the money actually landed, so the UI can say so rather than
+          // implying it all went to the installment that was clicked.
+          allocations: allocations.map((a) => ({
+            installmentNumber: a.installmentNumber, amount: round2(a.amount), arrears: a.arrears,
+          })),
+        };
       } finally {
         if (!committed) await client.query('ROLLBACK');
       }

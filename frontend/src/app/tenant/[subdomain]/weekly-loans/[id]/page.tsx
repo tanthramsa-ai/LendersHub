@@ -248,14 +248,25 @@ export default function WeeklyLoanDetailPage() {
     if (isNaN(amount) || amount <= 0) { setPayError('Enter a valid amount'); return; }
     setPaying(true); setPayError('');
     try {
-      await recordPayment(id, {
+      const res = await recordPayment(id, {
         installmentId: payInst.id, amount,
         paymentMethod: payForm.method as 'CASH',
         referenceNumber: payForm.ref || undefined,
         paymentDate: payForm.date || undefined,
       });
       setPayInst(null);
-      setPaySuccess(`Payment of ${fmt(amount)} recorded for Week #${payInst.number}`);
+      // A payment clears older arrears first, so it does not necessarily land on the
+      // installment that was clicked — say where it actually went instead of implying.
+      const elsewhere = (res?.allocations ?? []).filter((a) => a.installmentNumber !== payInst.number);
+      setPaySuccess(
+        elsewhere.length === 0
+          ? `Payment of ${fmt(amount)} recorded for Week #${payInst.number}`
+          : `Payment of ${fmt(amount)} recorded — applied to Week ${elsewhere
+              .map((a) => `#${a.installmentNumber}${a.arrears ? ' (arrears)' : ''} ${fmt(a.amount)}`)
+              .join(', ')}${(res?.allocations ?? []).some((a) => a.installmentNumber === payInst.number)
+                ? ` and #${payInst.number}`
+                : ''}`,
+      );
       refreshNotificationBell();
       await load();
     } catch (e: unknown) {
@@ -591,8 +602,9 @@ export default function WeeklyLoanDetailPage() {
 
         {canRecord && ['APPROVED', 'DISBURSED'].includes(loan.status) && (
           <p className="mt-3 text-xs text-gray-400">
-            Click an overdue or pending installment to record a payment — paying more than what&apos;s
-            due carries the extra onto the next installment automatically.
+            Click an overdue or pending installment to record a payment — anything already
+            overdue is cleared first, oldest first, and whatever is left over carries onto the
+            installments that follow.
             {canClose && ' Click a paid installment to undo it.'}
             {canClose && ' The dashed + tile adds a new installment to the schedule; it does not record a payment.'}
           </p>

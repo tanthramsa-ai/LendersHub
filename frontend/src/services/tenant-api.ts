@@ -619,12 +619,26 @@ export function getWeeklyLoan(id: string) {
   return tenantFetch<WeeklyLoanDetail>(`/api/v1/tenant/loans/${id}`);
 }
 
+/**
+ * A payment clears the oldest arrears before the installment that was clicked, so
+ * the money does not always land where the collector tapped. `allocations` says
+ * where it actually went, which is what the UI reports back to them.
+ */
+export interface PaymentResult {
+  id: string;
+  receiptNumber: string;
+  amount: number;
+  paymentDate: string;
+  installmentsPaid: number;
+  allocations: { installmentNumber: number; amount: number; arrears: boolean }[];
+}
+
 export function recordPayment(loanId: string, dto: {
   installmentId?: string; amount: number;
   paymentMethod: 'CASH' | 'UPI' | 'BANK_TRANSFER' | 'CHEQUE' | 'NEFT' | 'RTGS';
   referenceNumber?: string; paymentDate?: string;
 }) {
-  return tenantFetch<{ id: string; installmentsPaid: number }>(`/api/v1/tenant/loans/${loanId}/payments`, {
+  return tenantFetch<PaymentResult>(`/api/v1/tenant/loans/${loanId}/payments`, {
     method: 'POST', body: JSON.stringify(dto),
   });
 }
