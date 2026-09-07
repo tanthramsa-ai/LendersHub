@@ -418,8 +418,9 @@ export default function TermLoanDetailPage() {
         </div>
         {canPay && isActive && (
           <p className="mt-3 text-xs text-gray-400">
-            Click a pending or overdue installment to record a payment — paying more than what&apos;s
-            due carries the extra onto the next installment automatically.
+            Click a pending or overdue installment to record a payment — anything already
+            overdue is cleared first, oldest first, and whatever is left over carries onto the
+            installments that follow.
             {canClose && ' Click a paid installment to undo it.'}
             {canClose && ' The dashed + tile adds a new installment to the schedule; it does not record a payment.'}
           </p>

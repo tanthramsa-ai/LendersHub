@@ -86,10 +86,35 @@ function buildTooltip(inst: DailyInstallment): string {
   return lines.join('\n');
 }
 
-function computeFinancials(installments: DailyInstallment[]) {
+/**
+ * Principal outstanding is anchored to the loan's contracted principal minus what
+ * has actually been collected (or waived) against it — NOT the sum of principal on
+ * unpaid schedule rows.
+ *
+ * The distinction only shows up once an installment is added with the "+" tile.
+ * Such a row carries its whole amount as principal, so summing unpaid rows counted
+ * it as brand-new principal owed: adding {AMT} pushed outstanding up by {AMT}, and
+ * collecting it pushed it back down, leaving outstanding unchanged after the
+ * borrower had actually paid. The added installment makes up for a missed EMI whose
+ * principal is already outstanding on its own row — counting it again double-counts
+ * the same debt. No new money was lent, so the contract principal is what the
+ * borrower can ever owe.
+ *
+ * This is also the rule ledger_transactions already uses (disbursed principal minus
+ * collected principal), so the loan page and the ledger no longer disagree.
+ *
+ * Interest still comes off the schedule: interest is only owed where a row charges
+ * it, and added rows charge none.
+ *
+ * For an untouched loan the two models are identical — the schedule builder makes
+ * the final row absorb any rounding so the principal columns sum to exactly the
+ * contracted principal.
+ */
+function computeFinancials(installments: DailyInstallment[], loanPrincipal: number) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  let principalOutstanding = 0, interestOutstanding = 0;
+  let interestOutstanding = 0;
   let principalReceived = 0, interestReceived = 0;
+  let waivedPrincipal = 0;
   let paidCount = 0, overdueCount = 0;
 
   for (const i of installments) {
@@ -103,14 +128,17 @@ function computeFinancials(installments: DailyInstallment[]) {
       interestReceived += iPaid;
       principalReceived += pPaid;
       interestOutstanding += i.interest - iPaid;
-      principalOutstanding += i.principal - pPaid;
     } else if (i.status === 'PENDING' || i.status === 'OVERDUE') {
-      principalOutstanding += i.principal;
       interestOutstanding += i.interest;
       const due = new Date(i.dueDate); due.setHours(0, 0, 0, 0);
       if (i.status === 'OVERDUE' || due < today) overdueCount++;
+    } else if (i.status === 'WAIVED') {
+      waivedPrincipal += i.principal;
     }
   }
+
+  // Waived principal is forgiven, not collected, so it leaves outstanding too.
+  const principalOutstanding = Math.max(0, Math.round((loanPrincipal - principalReceived - waivedPrincipal) * 100) / 100);
   return { principalOutstanding, interestOutstanding, principalReceived, interestReceived, paidCount, overdueCount };
 }
 
@@ -225,14 +253,25 @@ export default function DailyLoanDetailPage() {
     if (isNaN(amount) || amount <= 0) { setPayError('Enter a valid amount'); return; }
     setPaying(true); setPayError('');
     try {
-      await recordPayment(id, {
+      const res = await recordPayment(id, {
         installmentId: payInst.id, amount,
         paymentMethod: payForm.method as 'CASH',
         referenceNumber: payForm.ref || undefined,
         paymentDate: payForm.date || undefined,
       });
       setPayInst(null);
-      setPaySuccess(`Payment of ${fmt(amount)} recorded for Day #${payInst.number}`);
+      // A payment clears older arrears first, so it does not necessarily land on the
+      // installment that was clicked — say where it actually went instead of implying.
+      const elsewhere = (res?.allocations ?? []).filter((a) => a.installmentNumber !== payInst.number);
+      setPaySuccess(
+        elsewhere.length === 0
+          ? `Payment of ${fmt(amount)} recorded for Day #${payInst.number}`
+          : `Payment of ${fmt(amount)} recorded — applied to Day ${elsewhere
+              .map((a) => `#${a.installmentNumber}${a.arrears ? ' (arrears)' : ''} ${fmt(a.amount)}`)
+              .join(', ')}${(res?.allocations ?? []).some((a) => a.installmentNumber === payInst.number)
+                ? ` and #${payInst.number}`
+                : ''}`,
+      );
       refreshNotificationBell();
       await load();
     } catch (e: unknown) {
@@ -349,7 +388,7 @@ export default function DailyLoanDetailPage() {
   if (error) return <div className="p-6 text-red-600 text-sm">{error}</div>;
   if (!loan) return null;
 
-  const fin = computeFinancials(loan.installments);
+  const fin = computeFinancials(loan.installments, loan.principal);
   const lastInstallmentNumber = Math.max(0, ...loan.installments.map((i) => i.number));
   const today = new Date(); today.setHours(0, 0, 0, 0);
 
@@ -572,8 +611,9 @@ export default function DailyLoanDetailPage() {
 
         {canRecord && ['APPROVED', 'DISBURSED'].includes(loan.status) && (
           <p className="mt-3 text-xs text-gray-400">
-            Click an overdue or pending installment to record a payment — paying more than what&apos;s
-            due carries the extra onto the next installment automatically.
+            Click an overdue or pending installment to record a payment — anything already
+            overdue is cleared first, oldest first, and whatever is left over carries onto the
+            installments that follow.
             {canClose && ' Click a paid installment to undo it.'}
             {canClose && ' The dashed + tile adds a new installment to the schedule; it does not record a payment.'}
           </p>

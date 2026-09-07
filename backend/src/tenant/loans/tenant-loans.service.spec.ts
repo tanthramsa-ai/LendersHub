@@ -104,7 +104,7 @@ describe('TenantLoansService', () => {
   });
 
   describe('recordPayment', () => {
-    /** Queue for the happy path: search_path, loan, installment, BEGIN, receipt COUNT, payment INSERT. */
+    /** Queue for the happy path: search_path, loan, installment, arrears, BEGIN, receipt COUNT, payment INSERT. */
     function queueOfficePayment() {
       query
         .mockResolvedValueOnce({ rows: [] }) // SET search_path
@@ -114,6 +114,7 @@ describe('TenantLoansService', () => {
           total_amount: '5000.00', paid_amount: '0.00',
           principal_amount: '5000.00', interest_amount: '0.00',
         }] })
+        .mockResolvedValueOnce({ rows: [] })              // arrears lookup (none older and due)
         .mockResolvedValueOnce({ rows: [] })              // BEGIN
         .mockResolvedValueOnce({ rows: [] })              // ensureReceiptNumberColumn's ALTER TABLE
         .mockResolvedValueOnce({ rows: [{ n: '5' }] })    // receipt number COUNT
@@ -138,6 +139,68 @@ describe('TenantLoansService', () => {
       );
       expect(query.mock.calls.some((c) => c[0] === 'COMMIT')).toBe(true);
       expect(query.mock.calls.some((c) => c[0] === 'ROLLBACK')).toBe(false);
+    });
+
+    it('clears older arrears before the installment that was clicked, so a make-up collection moves the overdue count', async () => {
+      // The "+" make-up row is appended after the last installment, and the
+      // carry-forward cascade only runs forward — so before arrears-first, paying
+      // it settled a future-dated row while the missed EMI stayed overdue.
+      query
+        .mockResolvedValueOnce({ rows: [] }) // SET search_path
+        .mockResolvedValueOnce({ rows: [{ id: 'loan1', status: 'DISBURSED', customer_id: 'cust1' }] })
+        .mockResolvedValueOnce({ rows: [{
+          id: 'inst11', installment_number: 11, status: 'PENDING',
+          total_amount: '1000.00', paid_amount: '0.00',
+          principal_amount: '1000.00', interest_amount: '0.00',
+        }] })
+        .mockResolvedValueOnce({ rows: [{ // arrears older than #11 and already due
+          id: 'inst2', installment_number: 2, total_amount: '1030.00', paid_amount: '0.00',
+          principal_amount: '988.00', interest_amount: '42.00',
+        }] })
+        .mockResolvedValueOnce({ rows: [] })              // BEGIN
+        .mockResolvedValueOnce({ rows: [] })              // ensureReceiptNumberColumn
+        .mockResolvedValueOnce({ rows: [{ n: '0' }] })    // receipt COUNT
+        .mockResolvedValueOnce({ rows: [{ id: 'pay1' }] }); // INSERT payments
+
+      const result = await svc.recordPayment(makeUser(), 'loan1', {
+        installmentId: 'inst11', amount: 1000, paymentMethod: 'CASH',
+      });
+
+      // All of it went to the missed EMI, none to the row that was clicked.
+      expect(result.allocations).toEqual([{ installmentNumber: 2, amount: 1000, arrears: true }]);
+      expect(result.installmentsPaid).toBe(1);
+
+      const arrearsQuery = query.mock.calls.find((c) => String(c[0]).includes('installment_number < $2'));
+      expect(arrearsQuery).toBeDefined();
+      // A future installment is not a debt yet and must not jump the queue.
+      expect(String(arrearsQuery![0])).toContain('due_date <= CURRENT_DATE');
+    });
+
+    it('never allocates a zero amount, which the ledger would reject and take the collection down with it', async () => {
+      query
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [{ id: 'loan1', status: 'DISBURSED', customer_id: 'cust1' }] })
+        .mockResolvedValueOnce({ rows: [{
+          id: 'inst11', installment_number: 11, status: 'PENDING',
+          total_amount: '1000.00', paid_amount: '0.00',
+          principal_amount: '1000.00', interest_amount: '0.00',
+        }] })
+        .mockResolvedValueOnce({ rows: [{ // arrears swallow the entire payment
+          id: 'inst2', installment_number: 2, total_amount: '5000.00', paid_amount: '0.00',
+          principal_amount: '5000.00', interest_amount: '0.00',
+        }] })
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [{ n: '0' }] })
+        .mockResolvedValueOnce({ rows: [{ id: 'pay1' }] });
+
+      const result = await svc.recordPayment(makeUser(), 'loan1', {
+        installmentId: 'inst11', amount: 500, paymentMethod: 'CASH',
+      });
+
+      expect(result.allocations).toEqual([{ installmentNumber: 2, amount: 500, arrears: true }]);
+      expect(result.allocations.every((a) => a.amount > 0)).toBe(true);
+      expect(ledgerPosting.postWithClient).toHaveBeenCalledTimes(1);
     });
 
     it('does not touch installments.updated_at — the column does not exist, and inside the BEGIN a failed UPDATE aborts the whole payment', async () => {

@@ -196,14 +196,25 @@ export default function MonthlyLoanDetailPage() {
     if (isNaN(amount) || amount <= 0) { setPayError('Enter a valid amount'); return; }
     setPaying(true); setPayError('');
     try {
-      await recordPayment(id, {
+      const res = await recordPayment(id, {
         installmentId: payInst.id, amount,
         paymentMethod: payForm.method as 'CASH',
         referenceNumber: payForm.ref || undefined,
         paymentDate: payForm.date || undefined,
       });
       setPayInst(null);
-      setPaySuccess(`Payment of ${fmt(amount)} recorded for Month #${payInst.number}`);
+      // A payment clears older arrears first, so it does not necessarily land on the
+      // installment that was clicked — say where it actually went instead of implying.
+      const elsewhere = (res?.allocations ?? []).filter((a) => a.installmentNumber !== payInst.number);
+      setPaySuccess(
+        elsewhere.length === 0
+          ? `Payment of ${fmt(amount)} recorded for Month #${payInst.number}`
+          : `Payment of ${fmt(amount)} recorded — applied to Month ${elsewhere
+              .map((a) => `#${a.installmentNumber}${a.arrears ? ' (arrears)' : ''} ${fmt(a.amount)}`)
+              .join(', ')}${(res?.allocations ?? []).some((a) => a.installmentNumber === payInst.number)
+                ? ` and #${payInst.number}`
+                : ''}`,
+      );
       refreshNotificationBell();
       await load();
     } catch (e: unknown) {
