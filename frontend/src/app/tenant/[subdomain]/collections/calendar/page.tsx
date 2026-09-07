@@ -344,7 +344,11 @@ export default function CollectionsCalendarPage() {
 
   // Most recent COLLECTED (not yet CONFIRMED) payment on this installment —
   // the one a manager/owner would act on.
-  const confirmable = detail?.history.find((h) => h.collectionStatus === 'COLLECTED');
+  // Part-collections are confirmable too — the manager signs off what actually
+  // came in, not only a full installment.
+  const confirmable = detail?.history.find(
+    (h) => h.collectionStatus === 'COLLECTED' || h.collectionStatus === 'PARTIALLY_COLLECTED',
+  );
 
   return (
     <div className="p-4 lg:p-6 space-y-5">

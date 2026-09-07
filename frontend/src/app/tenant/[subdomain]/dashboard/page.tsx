@@ -254,7 +254,8 @@ export default function TenantDashboardPage() {
                 <span className="ml-2 px-2 py-0.5 rounded-full bg-amber-500 text-white text-xs font-semibold">{awaitingTotal}</span>
               </h2>
               <p className="text-xs text-gray-500 mt-0.5">
-                Collected by agents and not yet confirmed — {fmtCurrency(awaitingAmount)} in total
+                Collected by agents and not yet confirmed — {fmtCurrency(awaitingAmount)} in total.
+                Approving records the amount actually received.
               </p>
             </div>
             <Link href={`/tenant/${subdomain}/collections/calendar`} className="text-xs font-medium px-3 py-1.5 rounded-lg border border-amber-300 text-amber-800 hover:bg-amber-100">
@@ -291,7 +292,14 @@ export default function TenantDashboardPage() {
                       {a.installmentNumber != null && <span className="text-gray-400"> · #{a.installmentNumber}</span>}
                     </td>
                     <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{a.collectedByName ?? '—'}</td>
-                    <td className="px-3 py-3 text-gray-500 whitespace-nowrap">{a.paymentMethod.replace('_', ' ')}</td>
+                    <td className="px-3 py-3 text-gray-500 whitespace-nowrap">
+                      {a.paymentMethod.replace('_', ' ')}
+                      {a.collectionStatus === 'PARTIALLY_COLLECTED' && (
+                        <span className="ml-2 px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-semibold align-middle">
+                          PART
+                        </span>
+                      )}
+                    </td>
                     <td className="px-3 py-3 text-right font-semibold text-gray-900 whitespace-nowrap">₹{a.amount.toLocaleString('en-IN')}</td>
                     <td className="px-5 py-3 text-right">
                       <button

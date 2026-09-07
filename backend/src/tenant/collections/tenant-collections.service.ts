@@ -813,7 +813,7 @@ export class TenantCollectionsService {
         [inst.loan_id, inst.installment_number - 1],
       );
       const historyRes = await client.query(
-        `SELECT p.id, p.amount, p.payment_method, p.reference_number, p.receipt_number, p.payment_date, p.created_at,
+        `SELECT p.id, p.amount, p.collection_status, p.payment_method, p.reference_number, p.receipt_number, p.payment_date, p.created_at,
                 p.collection_status, p.confirmed_amount, p.confirmed_at,
                 u.first_name || ' ' || u.last_name AS collected_by_name,
                 cu.first_name || ' ' || cu.last_name AS confirmed_by_name
@@ -1061,7 +1061,8 @@ export class TenantCollectionsService {
    */
   /**
    * Everything an agent has collected that no manager has confirmed yet —
-   * the approval queue.
+   * the approval queue. Includes part-collections: an agent who took less than
+   * the installment's due still handed over money that needs signing off.
    *
    * The confirm action already existed, but only reachable by drilling into one
    * installment inside the Collection Calendar, which means a manager had to
@@ -1093,10 +1094,10 @@ export class TenantCollectionsService {
       // trail and must not reappear as something to approve.
       const approverRoles = MANAGER_ROLES.map((r) => `'${r}'`).join(', ');
       const where =
-        `WHERE p.collection_status = 'COLLECTED' AND p.cancelled_at IS NULL ` +
+        `WHERE p.collection_status IN ('COLLECTED', 'PARTIALLY_COLLECTED') AND p.cancelled_at IS NULL ` +
         `AND (u.role IS NULL OR u.role NOT IN (${approverRoles}))`;
       const dataRes = await client.query(
-        `SELECT p.id, p.amount, p.payment_method, p.reference_number, p.receipt_number,
+        `SELECT p.id, p.amount, p.collection_status, p.payment_method, p.reference_number, p.receipt_number,
                 p.payment_date, p.created_at,
                 i.id AS installment_id, i.installment_number, i.due_date,
                 l.id AS loan_id, l.loan_number, l.cycle_type,
@@ -1123,6 +1124,9 @@ export class TenantCollectionsService {
         data: dataRes.rows.map((r) => ({
           paymentId: r.id as string,
           amount: parseFloat(r.amount as string),
+          // 'PARTIALLY_COLLECTED' when the agent took less than the installment
+          // was due — the manager is approving what actually came in.
+          collectionStatus: r.collection_status as 'COLLECTED' | 'PARTIALLY_COLLECTED',
           paymentMethod: r.payment_method as string,
           referenceNumber: (r.reference_number as string) ?? null,
           receiptNumber: (r.receipt_number as string) ?? null,
@@ -1170,7 +1174,12 @@ export class TenantCollectionsService {
           committed = true;
           return { success: true, paymentId, collectionStatus: 'CONFIRMED' as const, alreadyConfirmed: true };
         }
-        if (payment.collection_status !== 'COLLECTED') {
+        // PARTIALLY_COLLECTED is confirmable too. An agent who collects less than
+        // an installment's due lands there, and confirming only exact COLLECTED
+        // left that money stuck: unconfirmable here and in the Collection
+        // Calendar alike, indefinitely. What a manager signs off is the amount
+        // actually received, which is what confirmed_amount has always recorded.
+        if (!['COLLECTED', 'PARTIALLY_COLLECTED'].includes(payment.collection_status)) {
           throw new BadRequestException(`Cannot confirm a payment in ${payment.collection_status} status`);
         }
 
@@ -1184,7 +1193,7 @@ export class TenantCollectionsService {
 
         await this.recordAudit(client, {
           paymentId, installmentId: payment.installment_id, loanId: payment.loan_id,
-          fromStatus: 'COLLECTED', toStatus: 'CONFIRMED', amount,
+          fromStatus: payment.collection_status as string, toStatus: 'CONFIRMED', amount,
           performedBy: user.sub,
         });
 

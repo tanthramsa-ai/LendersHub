@@ -1388,6 +1388,8 @@ export function collectPayment(
 export interface AwaitingConfirmation {
   paymentId: string;
   amount: number;
+  /** PARTIALLY_COLLECTED when the agent took less than the installment was due. */
+  collectionStatus: 'COLLECTED' | 'PARTIALLY_COLLECTED';
   paymentMethod: string;
   referenceNumber: string | null;
   receiptNumber: string | null;
