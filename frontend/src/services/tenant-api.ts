@@ -1384,6 +1384,41 @@ export function collectPayment(
   );
 }
 
+/** One collection an agent has banked that a manager has not approved yet. */
+export interface AwaitingConfirmation {
+  paymentId: string;
+  amount: number;
+  /** PARTIALLY_COLLECTED when the agent took less than the installment was due. */
+  collectionStatus: 'COLLECTED' | 'PARTIALLY_COLLECTED';
+  paymentMethod: string;
+  referenceNumber: string | null;
+  receiptNumber: string | null;
+  paymentDate: string;
+  collectedAt: string;
+  collectedByName: string | null;
+  installmentId: string | null;
+  installmentNumber: number | null;
+  dueDate: string | null;
+  loanId: string | null;
+  loanNumber: string | null;
+  cycleType: string | null;
+  customerName: string | null;
+}
+
+/**
+ * The approval queue, tenant-wide and oldest first. Manager/Owner/Admin only —
+ * the same gate confirmCollection() itself enforces.
+ */
+export function collectionsAwaitingConfirmation(page = 1, limit = 20) {
+  return tenantFetch<{
+    data: AwaitingConfirmation[];
+    total: number;
+    totalAmount: number;
+    page: number;
+    limit: number;
+  }>(`/api/v1/tenant/collections/awaiting-confirmation?page=${page}&limit=${limit}`);
+}
+
 export function confirmCollection(paymentId: string, confirmedAmount?: number) {
   return tenantFetch<{ success: true; paymentId: string; collectionStatus: 'CONFIRMED'; alreadyConfirmed?: boolean }>(
     `/api/v1/tenant/collections/payments/${paymentId}/confirm`,

@@ -124,6 +124,16 @@ export class TenantCollectionsController {
     return this.svc.collectPayment(req.user, installmentId, dto);
   }
 
+  /** Approval queue: everything collected but not yet confirmed, tenant-wide. */
+  @Get('awaiting-confirmation')
+  awaitingConfirmation(
+    @Req() req: { user: TenantJwtPayload },
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.svc.awaitingConfirmation(req.user, Number(page) || 1, Number(limit) || 20);
+  }
+
   @Post('payments/:paymentId/confirm')
   @HttpCode(HttpStatus.OK)
   confirm(

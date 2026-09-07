@@ -813,7 +813,7 @@ export class TenantCollectionsService {
         [inst.loan_id, inst.installment_number - 1],
       );
       const historyRes = await client.query(
-        `SELECT p.id, p.amount, p.payment_method, p.reference_number, p.receipt_number, p.payment_date, p.created_at,
+        `SELECT p.id, p.amount, p.collection_status, p.payment_method, p.reference_number, p.receipt_number, p.payment_date, p.created_at,
                 p.collection_status, p.confirmed_amount, p.confirmed_at,
                 u.first_name || ' ' || u.last_name AS collected_by_name,
                 cu.first_name || ' ' || cu.last_name AS confirmed_by_name
@@ -1059,6 +1059,96 @@ export class TenantCollectionsService {
    * confirmed_amount/confirmed_by/confirmed_at alongside it and audits the
    * transition, so COLLECTED -> CONFIRMED is always reconstructable.
    */
+  /**
+   * Everything an agent has collected that no manager has confirmed yet —
+   * the approval queue. Includes part-collections: an agent who took less than
+   * the installment's due still handed over money that needs signing off.
+   *
+   * The confirm action already existed, but only reachable by drilling into one
+   * installment inside the Collection Calendar, which means a manager had to
+   * already know a collection was waiting to find it. This is the same set,
+   * gathered tenant-wide so it can be worked from the dashboard.
+   *
+   * Oldest first: money sitting unconfirmed is the point of the queue, so the
+   * one that has been waiting longest is the one to act on.
+   *
+   * Collections recorded by someone who can approve (Owner/Manager/Admin) are
+   * left out. payments.collection_status defaults to 'COLLECTED' on every
+   * insert, including a payment an owner records straight off a loan page, so
+   * without this the queue fills with money the manager banked themselves and
+   * invites the same collection being approved in two places. Agent and staff
+   * collections stay: staff can take money but cannot approve it. A payment
+   * with no collector at all (a matched direct payment, say) also stays — money
+   * nobody is accountable for is exactly what a manager should be looking at.
+   */
+  async awaitingConfirmation(user: TenantJwtPayload, page = 1, limit = 20) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) {
+      throw new ForbiddenException('Only Owner, Manager or Admin can see collections awaiting confirmation');
+    }
+    await this.ensureCollectionWorkflow(user.schemaName);
+    const safeLimit = Math.min(Math.max(1, limit), 100);
+    const offset = (Math.max(1, page) - 1) * safeLimit;
+
+    return this.withSchema(user.schemaName, async (client) => {
+      // cancelled_at IS NULL: an undone collection keeps its row for the audit
+      // trail and must not reappear as something to approve.
+      const approverRoles = MANAGER_ROLES.map((r) => `'${r}'`).join(', ');
+      const where =
+        `WHERE p.collection_status IN ('COLLECTED', 'PARTIALLY_COLLECTED') AND p.cancelled_at IS NULL ` +
+        `AND (u.role IS NULL OR u.role NOT IN (${approverRoles}))`;
+      const dataRes = await client.query(
+        `SELECT p.id, p.amount, p.collection_status, p.payment_method, p.reference_number, p.receipt_number,
+                p.payment_date, p.created_at,
+                i.id AS installment_id, i.installment_number, i.due_date,
+                l.id AS loan_id, l.loan_number, l.cycle_type,
+                c.first_name || ' ' || c.last_name AS customer_name,
+                u.first_name || ' ' || u.last_name AS collected_by_name
+           FROM payments p
+           LEFT JOIN installments i ON i.id = p.installment_id
+           LEFT JOIN loans l       ON l.id = p.loan_id
+           LEFT JOIN customers c   ON c.id = l.customer_id
+           LEFT JOIN users u       ON u.id = p.collected_by
+          ${where}
+          ORDER BY p.created_at ASC
+          LIMIT $1 OFFSET $2`,
+        [safeLimit, offset],
+      );
+      const countRes = await client.query<{ total: string; amount: string }>(
+        `SELECT COUNT(*) AS total, COALESCE(SUM(p.amount), 0) AS amount
+           FROM payments p
+           LEFT JOIN users u ON u.id = p.collected_by
+          ${where}`,
+      );
+
+      return {
+        data: dataRes.rows.map((r) => ({
+          paymentId: r.id as string,
+          amount: parseFloat(r.amount as string),
+          // 'PARTIALLY_COLLECTED' when the agent took less than the installment
+          // was due — the manager is approving what actually came in.
+          collectionStatus: r.collection_status as 'COLLECTED' | 'PARTIALLY_COLLECTED',
+          paymentMethod: r.payment_method as string,
+          referenceNumber: (r.reference_number as string) ?? null,
+          receiptNumber: (r.receipt_number as string) ?? null,
+          paymentDate: r.payment_date as string,
+          collectedAt: r.created_at as string,
+          collectedByName: (r.collected_by_name as string) ?? null,
+          installmentId: (r.installment_id as string) ?? null,
+          installmentNumber: (r.installment_number as number) ?? null,
+          dueDate: (r.due_date as string) ?? null,
+          loanId: (r.loan_id as string) ?? null,
+          loanNumber: (r.loan_number as string) ?? null,
+          cycleType: (r.cycle_type as string) ?? null,
+          customerName: (r.customer_name as string) ?? null,
+        })),
+        total: parseInt(countRes.rows[0].total),
+        totalAmount: parseFloat(countRes.rows[0].amount),
+        page: Math.max(1, page),
+        limit: safeLimit,
+      };
+    });
+  }
+
   async confirmPayment(user: TenantJwtPayload, paymentId: string, confirmedAmount?: number) {
     if (!MANAGER_ROLES.includes(user.role as UserRole)) {
       throw new ForbiddenException('Only Owner, Manager or Admin can confirm a collection');
@@ -1084,7 +1174,12 @@ export class TenantCollectionsService {
           committed = true;
           return { success: true, paymentId, collectionStatus: 'CONFIRMED' as const, alreadyConfirmed: true };
         }
-        if (payment.collection_status !== 'COLLECTED') {
+        // PARTIALLY_COLLECTED is confirmable too. An agent who collects less than
+        // an installment's due lands there, and confirming only exact COLLECTED
+        // left that money stuck: unconfirmable here and in the Collection
+        // Calendar alike, indefinitely. What a manager signs off is the amount
+        // actually received, which is what confirmed_amount has always recorded.
+        if (!['COLLECTED', 'PARTIALLY_COLLECTED'].includes(payment.collection_status)) {
           throw new BadRequestException(`Cannot confirm a payment in ${payment.collection_status} status`);
         }
 
@@ -1098,7 +1193,7 @@ export class TenantCollectionsService {
 
         await this.recordAudit(client, {
           paymentId, installmentId: payment.installment_id, loanId: payment.loan_id,
-          fromStatus: 'COLLECTED', toStatus: 'CONFIRMED', amount,
+          fromStatus: payment.collection_status as string, toStatus: 'CONFIRMED', amount,
           performedBy: user.sub,
         });
 

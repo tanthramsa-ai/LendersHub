@@ -110,6 +110,100 @@ describe('TenantCollectionsService', () => {
     });
   });
 
+  describe('awaitingConfirmation — the manager approval queue', () => {
+    it('rejects an AGENT — an agent must not see, let alone work, the approval queue', async () => {
+      await expect(
+        svc.awaitingConfirmation(makeUser({ role: 'AGENT' })),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(poolConnect).not.toHaveBeenCalled();
+    });
+
+    it('rejects STAFF', async () => {
+      await expect(svc.awaitingConfirmation(makeUser({ role: 'STAFF' }))).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it.each(['MANAGER', 'ADMIN', 'OWNER'] as const)('lets %s read the queue', async (role) => {
+      query
+        .mockResolvedValueOnce({ rows: [] }) // SET search_path
+        .mockResolvedValueOnce({ rows: [{
+          id: 'pay1', amount: '500.00', payment_method: 'CASH', reference_number: null, receipt_number: 'RCPT1',
+          payment_date: '2026-09-07', created_at: '2026-09-07T09:00:00Z',
+          installment_id: 'inst1', installment_number: 3, due_date: '2026-09-01',
+          loan_id: 'loan1', loan_number: 'WL-1', cycle_type: 'WEEKLY',
+          customer_name: 'Priya Sharma', collected_by_name: 'Agent A',
+        }] })
+        .mockResolvedValueOnce({ rows: [{ total: '1', amount: '500.00' }] });
+
+      const res = await svc.awaitingConfirmation(makeUser({ role }));
+
+      expect(res.total).toBe(1);
+      expect(res.totalAmount).toBe(500);
+      expect(res.data[0]).toEqual(expect.objectContaining({
+        paymentId: 'pay1', amount: 500, customerName: 'Priya Sharma',
+        collectedByName: 'Agent A', loanNumber: 'WL-1', installmentNumber: 3,
+      }));
+    });
+
+    it('asks only for live collections that were not undone, oldest first', async () => {
+      query
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [{ total: '0', amount: '0' }] });
+
+      await svc.awaitingConfirmation(makeUser({ role: 'MANAGER' }));
+
+      const listQuery = query.mock.calls.map((c) => String(c[0])).find((q) => q.includes('FROM payments p'));
+      expect(listQuery).toBeDefined();
+      expect(listQuery).toContain("collection_status IN ('COLLECTED', 'PARTIALLY_COLLECTED')");
+      // An undone collection keeps its row for the audit trail; it must not
+      // come back as something still to approve.
+      expect(listQuery).toContain('cancelled_at IS NULL');
+      expect(listQuery).toContain('ORDER BY p.created_at ASC');
+    });
+
+    it('leaves out collections recorded by someone who can approve them', async () => {
+      query
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [{ total: '0', amount: '0' }] });
+
+      await svc.awaitingConfirmation(makeUser({ role: 'MANAGER' }));
+
+      const queries = query.mock.calls.map((c) => String(c[0]));
+      const listQuery = queries.find((q) => q.includes('FROM payments p'));
+      const countQuery = queries.find((q) => q.includes('COUNT(*) AS total'));
+
+      // An owner recording a payment off a loan page also lands at COLLECTED,
+      // and must not show up as money awaiting their own approval.
+      for (const q of [listQuery, countQuery]) {
+        // Order follows the MANAGER_ROLES constant, so assert membership rather
+        // than a literal string that breaks if that list is ever reordered.
+        const notIn = /u\.role NOT IN \(([^)]+)\)/.exec(q!)?.[1] ?? '';
+        expect(notIn).toContain("'OWNER'");
+        expect(notIn).toContain("'ADMIN'");
+        expect(notIn).toContain("'MANAGER'");
+        // Staff can take money but cannot approve it, so their collections stay.
+        expect(notIn).not.toContain("'STAFF'");
+        expect(notIn).not.toContain("'AGENT'");
+        // Unattributed money is exactly what a manager should be looking at.
+        expect(q).toContain('u.role IS NULL');
+      }
+      // The count has to filter identically or the badge disagrees with the rows.
+      expect(countQuery).toContain('LEFT JOIN users u ON u.id = p.collected_by');
+    });
+
+    it('caps the page size so a caller cannot ask for the whole table', async () => {
+      query
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [{ total: '0', amount: '0' }] });
+
+      const res = await svc.awaitingConfirmation(makeUser({ role: 'OWNER' }), 1, 5000);
+
+      expect(res.limit).toBe(100);
+    });
+  });
+
   describe('confirmPayment — RBAC & idempotency (spec §5, §15 edge cases 8-10)', () => {
     it('rejects an AGENT attempting to confirm — collection agents can never self-confirm', async () => {
       await expect(
@@ -170,6 +264,56 @@ describe('TenantCollectionsService', () => {
       expect(updateCall).toBeDefined();
       expect(String(updateCall![0])).not.toMatch(/SET\s+amount\s*=/i); // `amount` column itself is never touched
       expect(updateCall![1]).toEqual(['agent-1', 480, 'payment-1']); // makeUser()'s default sub
+    });
+  });
+
+  describe('confirmPayment — part-collections (manager signs off what was received)', () => {
+    function queueConfirm(status: string, amount: string) {
+      query
+        .mockResolvedValueOnce(undefined) // SET search_path
+        .mockResolvedValueOnce(undefined) // BEGIN
+        .mockResolvedValueOnce({ rows: [{
+          id: 'pay1', loan_id: 'loan1', installment_id: 'inst1',
+          amount, collection_status: status,
+        }] })
+        .mockResolvedValueOnce(undefined) // UPDATE payments
+        .mockResolvedValueOnce(undefined) // audit
+        .mockResolvedValueOnce(undefined); // COMMIT
+    }
+
+    it('confirms a PARTIALLY_COLLECTED payment — it used to be stuck, approvable nowhere', async () => {
+      queueConfirm('PARTIALLY_COLLECTED', '500.00');
+
+      const res = await svc.confirmPayment(makeUser({ role: 'MANAGER' }), 'pay1');
+
+      expect(res).toEqual(expect.objectContaining({ success: true, collectionStatus: 'CONFIRMED' }));
+      const update = query.mock.calls.find((c) => String(c[0]).includes('SET collection_status'));
+      // What is signed off is what actually came in.
+      expect(update![1]).toEqual(expect.arrayContaining([500]));
+    });
+
+    it('records the status it actually came from, so the audit does not claim a full collection', async () => {
+      queueConfirm('PARTIALLY_COLLECTED', '500.00');
+
+      await svc.confirmPayment(makeUser({ role: 'MANAGER' }), 'pay1');
+
+      const audit = query.mock.calls.find((c) => String(c[0]).toLowerCase().includes('collection_audit'));
+      expect(audit).toBeDefined();
+      expect(audit![1]).toEqual(expect.arrayContaining(['PARTIALLY_COLLECTED', 'CONFIRMED']));
+    });
+
+    it('honours an explicit confirmedAmount over the collected figure', async () => {
+      queueConfirm('PARTIALLY_COLLECTED', '500.00');
+
+      await svc.confirmPayment(makeUser({ role: 'MANAGER' }), 'pay1', 450);
+
+      const update = query.mock.calls.find((c) => String(c[0]).includes('SET collection_status'));
+      expect(update![1]).toEqual(expect.arrayContaining([450]));
+    });
+
+    it('still refuses a status that is not a live collection', async () => {
+      queueConfirm('CANCELLED', '500.00');
+      await expect(svc.confirmPayment(makeUser({ role: 'MANAGER' }), 'pay1')).rejects.toThrow(/Cannot confirm/i);
     });
   });
 
