@@ -1070,6 +1070,15 @@ export class TenantCollectionsService {
    *
    * Oldest first: money sitting unconfirmed is the point of the queue, so the
    * one that has been waiting longest is the one to act on.
+   *
+   * Collections recorded by someone who can approve (Owner/Manager/Admin) are
+   * left out. payments.collection_status defaults to 'COLLECTED' on every
+   * insert, including a payment an owner records straight off a loan page, so
+   * without this the queue fills with money the manager banked themselves and
+   * invites the same collection being approved in two places. Agent and staff
+   * collections stay: staff can take money but cannot approve it. A payment
+   * with no collector at all (a matched direct payment, say) also stays — money
+   * nobody is accountable for is exactly what a manager should be looking at.
    */
   async awaitingConfirmation(user: TenantJwtPayload, page = 1, limit = 20) {
     if (!MANAGER_ROLES.includes(user.role as UserRole)) {
@@ -1082,7 +1091,10 @@ export class TenantCollectionsService {
     return this.withSchema(user.schemaName, async (client) => {
       // cancelled_at IS NULL: an undone collection keeps its row for the audit
       // trail and must not reappear as something to approve.
-      const where = `WHERE p.collection_status = 'COLLECTED' AND p.cancelled_at IS NULL`;
+      const approverRoles = MANAGER_ROLES.map((r) => `'${r}'`).join(', ');
+      const where =
+        `WHERE p.collection_status = 'COLLECTED' AND p.cancelled_at IS NULL ` +
+        `AND (u.role IS NULL OR u.role NOT IN (${approverRoles}))`;
       const dataRes = await client.query(
         `SELECT p.id, p.amount, p.payment_method, p.reference_number, p.receipt_number,
                 p.payment_date, p.created_at,
@@ -1101,7 +1113,10 @@ export class TenantCollectionsService {
         [safeLimit, offset],
       );
       const countRes = await client.query<{ total: string; amount: string }>(
-        `SELECT COUNT(*) AS total, COALESCE(SUM(p.amount), 0) AS amount FROM payments p ${where}`,
+        `SELECT COUNT(*) AS total, COALESCE(SUM(p.amount), 0) AS amount
+           FROM payments p
+           LEFT JOIN users u ON u.id = p.collected_by
+          ${where}`,
       );
 
       return {

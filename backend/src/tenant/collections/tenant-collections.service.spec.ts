@@ -161,6 +161,37 @@ describe('TenantCollectionsService', () => {
       expect(listQuery).toContain('ORDER BY p.created_at ASC');
     });
 
+    it('leaves out collections recorded by someone who can approve them', async () => {
+      query
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [{ total: '0', amount: '0' }] });
+
+      await svc.awaitingConfirmation(makeUser({ role: 'MANAGER' }));
+
+      const queries = query.mock.calls.map((c) => String(c[0]));
+      const listQuery = queries.find((q) => q.includes('FROM payments p'));
+      const countQuery = queries.find((q) => q.includes('COUNT(*) AS total'));
+
+      // An owner recording a payment off a loan page also lands at COLLECTED,
+      // and must not show up as money awaiting their own approval.
+      for (const q of [listQuery, countQuery]) {
+        // Order follows the MANAGER_ROLES constant, so assert membership rather
+        // than a literal string that breaks if that list is ever reordered.
+        const notIn = /u\.role NOT IN \(([^)]+)\)/.exec(q!)?.[1] ?? '';
+        expect(notIn).toContain("'OWNER'");
+        expect(notIn).toContain("'ADMIN'");
+        expect(notIn).toContain("'MANAGER'");
+        // Staff can take money but cannot approve it, so their collections stay.
+        expect(notIn).not.toContain("'STAFF'");
+        expect(notIn).not.toContain("'AGENT'");
+        // Unattributed money is exactly what a manager should be looking at.
+        expect(q).toContain('u.role IS NULL');
+      }
+      // The count has to filter identically or the badge disagrees with the rows.
+      expect(countQuery).toContain('LEFT JOIN users u ON u.id = p.collected_by');
+    });
+
     it('caps the page size so a caller cannot ask for the whole table', async () => {
       query
         .mockResolvedValueOnce({ rows: [] })
