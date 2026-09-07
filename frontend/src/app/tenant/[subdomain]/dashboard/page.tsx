@@ -265,7 +265,9 @@ export default function TenantDashboardPage() {
 
           {approveError && <p className="px-5 py-2 text-xs text-red-600 bg-red-50">{approveError}</p>}
 
-          <div className="overflow-x-auto">
+          {/* Desktop: table. Hidden on phones, where it would force a sideways scroll
+              that pushes the Approve action off-screen. */}
+          <div className="hidden sm:block overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-gray-500 text-xs">
                 <tr>
@@ -315,6 +317,49 @@ export default function TenantDashboardPage() {
               </tbody>
             </table>
           </div>
+
+          {/* Mobile: one card per collection, Approve as a checkmark icon so the
+              whole row fits a phone width with no horizontal scroll. */}
+          <ul className="sm:hidden divide-y divide-gray-100">
+            {awaiting.map((a) => (
+              <li key={a.paymentId} className="px-4 py-3 flex items-center gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-gray-900 truncate">{a.customerName ?? '—'}</span>
+                    {a.collectionStatus === 'PARTIALLY_COLLECTED' && (
+                      <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-semibold flex-shrink-0">
+                        PART
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-0.5 truncate">
+                    {a.loanId && a.loanNumber ? (
+                      <Link href={`/tenant/${subdomain}/${loanDetailPath(a.cycleType, a.loanId)}`} className="text-blue-600 hover:underline">
+                        {a.loanNumber}
+                      </Link>
+                    ) : '—'}
+                    {a.installmentNumber != null && <span> · #{a.installmentNumber}</span>}
+                    <span> · {a.collectedByName ?? '—'}</span>
+                    <span> · {a.paymentMethod.replace('_', ' ')}</span>
+                  </div>
+                </div>
+                <span className="font-semibold text-gray-900 whitespace-nowrap">₹{a.amount.toLocaleString('en-IN')}</span>
+                <button
+                  onClick={() => handleApprove(a.paymentId)}
+                  disabled={approving === a.paymentId}
+                  aria-label={`Approve ₹${a.amount.toLocaleString('en-IN')} from ${a.collectedByName ?? 'agent'}`}
+                  title="Approve"
+                  className="flex-shrink-0 w-9 h-9 rounded-full bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white flex items-center justify-center transition-colors"
+                >
+                  {approving === a.paymentId ? (
+                    <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.4 0 0 5.4 0 12h4z" /></svg>
+                  ) : (
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" /></svg>
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
           {awaitingTotal > awaiting.length && (
             <p className="px-5 py-3 text-xs text-gray-500 border-t border-gray-100">
               Showing the {awaiting.length} longest-waiting of {awaitingTotal}. Approve these to see the rest.
