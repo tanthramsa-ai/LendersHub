@@ -79,6 +79,12 @@ function computeFinancials(installments: MonthlyInstallment[], principal: number
       const iPaid = Math.min(i.paid, i.interest);
       interestReceived += iPaid;
       interestOutstanding += i.interest - iPaid;
+      // A part-paid installment whose date has passed is still overdue for the
+      // shortfall. Excluding it hid arrears from the count — and now that a
+      // payment clears the oldest arrears first, part-paid overdue rows are the
+      // normal case rather than a rarity.
+      const partDue = new Date(i.dueDate); partDue.setHours(0, 0, 0, 0);
+      if (partDue < today) overdueCount++;
     } else if (i.status === 'PENDING' || i.status === 'OVERDUE') {
       interestOutstanding += i.interest;
       const due = new Date(i.dueDate); due.setHours(0, 0, 0, 0);

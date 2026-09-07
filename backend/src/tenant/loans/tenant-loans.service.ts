@@ -1971,7 +1971,13 @@ export class TenantLoansService {
                    ELSE 0 END), 0) AS interest_outstanding,
                  COUNT(i.id) AS total_installments,
                  COUNT(i.id) FILTER (WHERE i.status='PAID') AS paid_installments,
-                 COUNT(i.id) FILTER (WHERE i.status='OVERDUE') AS overdue_count,
+                 -- Anything still owing once its date has passed, matching the detail
+                 -- page: a PENDING row can be past due without having been aged to
+                 -- OVERDUE yet, and a PARTIALLY_PAID row is still overdue for the
+                 -- shortfall. Counting only status='OVERDUE' hid both from the list.
+                 COUNT(i.id) FILTER (
+                   WHERE i.status IN ('PENDING','OVERDUE','PARTIALLY_PAID') AND i.due_date < CURRENT_DATE
+                 ) AS overdue_count,
                  ${npaConsecutiveOverdueRunSql('l')} AS npa_overdue_count
           FROM loans l
           JOIN customers c ON c.id = l.customer_id
@@ -2226,7 +2232,13 @@ export class TenantLoansService {
                    ELSE 0 END), 0) AS interest_outstanding,
                  COUNT(i.id) AS total_installments,
                  COUNT(i.id) FILTER (WHERE i.status='PAID') AS paid_installments,
-                 COUNT(i.id) FILTER (WHERE i.status='OVERDUE') AS overdue_count,
+                 -- Anything still owing once its date has passed, matching the detail
+                 -- page: a PENDING row can be past due without having been aged to
+                 -- OVERDUE yet, and a PARTIALLY_PAID row is still overdue for the
+                 -- shortfall. Counting only status='OVERDUE' hid both from the list.
+                 COUNT(i.id) FILTER (
+                   WHERE i.status IN ('PENDING','OVERDUE','PARTIALLY_PAID') AND i.due_date < CURRENT_DATE
+                 ) AS overdue_count,
                  ${npaConsecutiveOverdueRunSql('l')} AS npa_overdue_count
           FROM loans l
           JOIN customers c ON c.id = l.customer_id
@@ -2464,7 +2476,13 @@ export class TenantLoansService {
                    ELSE 0 END), 0) AS interest_outstanding,
                  COUNT(i.id) AS total_installments,
                  COUNT(i.id) FILTER (WHERE i.status='PAID') AS paid_installments,
-                 COUNT(i.id) FILTER (WHERE i.status='OVERDUE') AS overdue_count,
+                 -- Anything still owing once its date has passed, matching the detail
+                 -- page: a PENDING row can be past due without having been aged to
+                 -- OVERDUE yet, and a PARTIALLY_PAID row is still overdue for the
+                 -- shortfall. Counting only status='OVERDUE' hid both from the list.
+                 COUNT(i.id) FILTER (
+                   WHERE i.status IN ('PENDING','OVERDUE','PARTIALLY_PAID') AND i.due_date < CURRENT_DATE
+                 ) AS overdue_count,
                  ${npaConsecutiveOverdueRunSql('l')} AS npa_overdue_count
           FROM loans l
           JOIN customers c ON c.id = l.customer_id
@@ -2694,7 +2712,13 @@ export class TenantLoansService {
                    ELSE 0 END), 0) AS interest_outstanding,
                  COUNT(i.id) AS total_installments,
                  COUNT(i.id) FILTER (WHERE i.status='PAID') AS paid_installments,
-                 COUNT(i.id) FILTER (WHERE i.status='OVERDUE') AS overdue_count,
+                 -- Anything still owing once its date has passed, matching the detail
+                 -- page: a PENDING row can be past due without having been aged to
+                 -- OVERDUE yet, and a PARTIALLY_PAID row is still overdue for the
+                 -- shortfall. Counting only status='OVERDUE' hid both from the list.
+                 COUNT(i.id) FILTER (
+                   WHERE i.status IN ('PENDING','OVERDUE','PARTIALLY_PAID') AND i.due_date < CURRENT_DATE
+                 ) AS overdue_count,
                  ${npaConsecutiveOverdueRunSql('l')} AS npa_overdue_count
           FROM loans l
           JOIN customers c ON c.id = l.customer_id
