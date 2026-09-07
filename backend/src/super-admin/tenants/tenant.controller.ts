@@ -3,6 +3,7 @@ import {
   UseGuards, HttpCode, HttpStatus, ParseIntPipe, DefaultValuePipe,
 } from '@nestjs/common';
 import { TenantService } from './tenant.service';
+import { TenantSchemaRepairService } from './tenant-schema-repair.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { ConfigureSubscriptionDto } from './dto/configure-subscription.dto';
 import { SuperAdminJwtGuard } from '../guards/super-admin-jwt.guard';
@@ -11,7 +12,10 @@ import type { AuditActor } from '../audit-log/audit-log.service';
 @UseGuards(SuperAdminJwtGuard)
 @Controller('api/v1/super-admin/tenants')
 export class TenantController {
-  constructor(private tenants: TenantService) {}
+  constructor(
+    private tenants: TenantService,
+    private schemaRepair: TenantSchemaRepairService,
+  ) {}
 
   private actorFrom(req: any): AuditActor {
     return { id: req.user.id, email: req.user.email };
@@ -29,6 +33,19 @@ export class TenantController {
   @Get('plans')
   getPlans() {
     return this.tenants.getPlans();
+  }
+
+  /**
+   * Re-applies tenantSchemaDDL() to existing tenant schemas — the same pass
+   * that runs on boot, on demand and without a restart. Idempotent.
+   *
+   * `force` re-runs even when the DDL fingerprint is unchanged (for a schema
+   * someone has edited by hand); `subdomain` scopes it to one tenant.
+   */
+  @Post('repair-schemas')
+  @HttpCode(HttpStatus.OK)
+  repairSchemas(@Body() body: { force?: boolean; subdomain?: string } = {}) {
+    return this.schemaRepair.repairAll({ force: body?.force, subdomain: body?.subdomain });
   }
 
   @Post()

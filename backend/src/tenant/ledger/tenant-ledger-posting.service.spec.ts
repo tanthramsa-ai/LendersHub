@@ -62,6 +62,28 @@ describe('TenantLedgerPostingService', () => {
     svc = new TenantLedgerPostingService(prisma, activity);
   });
 
+  describe('ensureTable', () => {
+    // The Collection Ledger and Daily Ledger join payments for the receipt
+    // number, and payments.receipt_number only exists on tenants provisioned
+    // after the ledger shipped — every ledger read funnels through here, so
+    // this is what keeps those pages from 500ing on an older tenant.
+    it('backfills payments.receipt_number alongside the ledger table', async () => {
+      await svc.ensureTable(client as unknown as import('pg').PoolClient, 'tenant_cold');
+
+      const alter = query.mock.calls.find((c) => String(c[0]).includes('ADD COLUMN IF NOT EXISTS receipt_number'));
+      expect(alter).toBeDefined();
+      expect(String(alter![0])).toContain('"tenant_cold"."payments"');
+    });
+
+    it('does not re-run once a schema is warm', async () => {
+      const pgClient = client as unknown as import('pg').PoolClient;
+      await svc.ensureTable(pgClient, 'tenant_warm');
+      const callsAfterFirst = query.mock.calls.length;
+      await svc.ensureTable(pgClient, 'tenant_warm');
+      expect(query.mock.calls.length).toBe(callsAfterFirst);
+    });
+  });
+
   describe('postTransaction', () => {
     it('rejects non-Owner/Admin roles', async () => {
       await expect(
