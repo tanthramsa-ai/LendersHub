@@ -74,6 +74,9 @@ function computeFinancials(installments: MonthlyInstallment[], principal: number
     else if (i.status === 'PARTIALLY_PAID') {
       const iPaid = Math.min(i.paid, i.interest);
       interestReceived += iPaid; interestOutstanding += i.interest - iPaid;
+      // Still overdue for the shortfall once its date has passed.
+      const partDue = new Date(i.dueDate); partDue.setHours(0, 0, 0, 0);
+      if (partDue < today) overdueCount++;
     } else if (i.status === 'PENDING' || i.status === 'OVERDUE') {
       interestOutstanding += i.interest;
       const due = new Date(i.dueDate); due.setHours(0, 0, 0, 0);
