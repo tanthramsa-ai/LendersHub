@@ -1955,9 +1955,17 @@ export class TenantLoansService {
                    + SUM(CASE WHEN i.status='PARTIALLY_PAID' THEN GREATEST(0,i.paid_amount-i.interest_amount) ELSE 0 END), 0) AS principal_received,
                  COALESCE(SUM(CASE WHEN i.status='PAID' THEN i.interest_amount ELSE 0 END)
                    + SUM(CASE WHEN i.status='PARTIALLY_PAID' THEN LEAST(i.paid_amount,i.interest_amount) ELSE 0 END), 0) AS interest_received,
-                 COALESCE(SUM(CASE WHEN i.status IN('PENDING','OVERDUE') THEN i.principal_amount
-                   WHEN i.status='PARTIALLY_PAID' THEN i.principal_amount-GREATEST(0,i.paid_amount-i.interest_amount)
-                   ELSE 0 END), 0) AS principal_outstanding,
+                 -- Anchored to the contracted principal minus what was actually
+                 -- collected or waived, NOT the sum of principal on unpaid rows: an
+                 -- installment added with "+" carries its whole amount as principal,
+                 -- so the old sum counted it as new principal owed and a payment
+                 -- against it left outstanding unchanged. Matches the loan detail
+                 -- page and ledger_transactions' own disbursed-minus-collected rule.
+                 GREATEST(0, l.principal
+                   - COALESCE(SUM(CASE WHEN i.status='PAID' THEN i.principal_amount ELSE 0 END)
+                     + SUM(CASE WHEN i.status='PARTIALLY_PAID' THEN GREATEST(0,i.paid_amount-i.interest_amount) ELSE 0 END), 0)
+                   - COALESCE(SUM(CASE WHEN i.status='WAIVED' THEN i.principal_amount ELSE 0 END), 0)
+                 ) AS principal_outstanding,
                  COALESCE(SUM(CASE WHEN i.status IN('PENDING','OVERDUE') THEN i.interest_amount
                    WHEN i.status='PARTIALLY_PAID' THEN i.interest_amount-LEAST(i.paid_amount,i.interest_amount)
                    ELSE 0 END), 0) AS interest_outstanding,
@@ -2202,9 +2210,17 @@ export class TenantLoansService {
                    + SUM(CASE WHEN i.status='PARTIALLY_PAID' THEN GREATEST(0,i.paid_amount-i.interest_amount) ELSE 0 END), 0) AS principal_received,
                  COALESCE(SUM(CASE WHEN i.status='PAID' THEN i.interest_amount ELSE 0 END)
                    + SUM(CASE WHEN i.status='PARTIALLY_PAID' THEN LEAST(i.paid_amount,i.interest_amount) ELSE 0 END), 0) AS interest_received,
-                 COALESCE(SUM(CASE WHEN i.status IN('PENDING','OVERDUE') THEN i.principal_amount
-                   WHEN i.status='PARTIALLY_PAID' THEN i.principal_amount-GREATEST(0,i.paid_amount-i.interest_amount)
-                   ELSE 0 END), 0) AS principal_outstanding,
+                 -- Anchored to the contracted principal minus what was actually
+                 -- collected or waived, NOT the sum of principal on unpaid rows: an
+                 -- installment added with "+" carries its whole amount as principal,
+                 -- so the old sum counted it as new principal owed and a payment
+                 -- against it left outstanding unchanged. Matches the loan detail
+                 -- page and ledger_transactions' own disbursed-minus-collected rule.
+                 GREATEST(0, l.principal
+                   - COALESCE(SUM(CASE WHEN i.status='PAID' THEN i.principal_amount ELSE 0 END)
+                     + SUM(CASE WHEN i.status='PARTIALLY_PAID' THEN GREATEST(0,i.paid_amount-i.interest_amount) ELSE 0 END), 0)
+                   - COALESCE(SUM(CASE WHEN i.status='WAIVED' THEN i.principal_amount ELSE 0 END), 0)
+                 ) AS principal_outstanding,
                  COALESCE(SUM(CASE WHEN i.status IN('PENDING','OVERDUE') THEN i.interest_amount
                    WHEN i.status='PARTIALLY_PAID' THEN i.interest_amount-LEAST(i.paid_amount,i.interest_amount)
                    ELSE 0 END), 0) AS interest_outstanding,
