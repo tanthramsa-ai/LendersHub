@@ -1099,8 +1099,9 @@ export class TenantLoansService {
 
     return this.withSchema(user.schemaName, async (client) => {
       // Validate customer
-      const custRes = await client.query(`SELECT id FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
+      const custRes = await client.query(`SELECT id, status FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
       if (!custRes.rows[0]) throw new NotFoundException('Customer not found');
+      if (custRes.rows[0].status !== 'ACTIVE') throw new BadRequestException('Customer must be verified by a manager before a loan can be created');
 
       // Generate loan number
       const countRes = await client.query<{ n: string }>(`SELECT COUNT(*) AS n FROM loans`);
@@ -2034,8 +2035,9 @@ export class TenantLoansService {
     const storedRate = isPerDay ? perDayRateToAnnualPct(dto.interestPerDay!) : dto.interestRate;
 
     return this.withSchema(user.schemaName, async (client) => {
-      const custRes = await client.query(`SELECT id, first_name, last_name FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
+      const custRes = await client.query(`SELECT id, first_name, last_name, status FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
       if (!custRes.rows[0]) throw new NotFoundException('Customer not found');
+      if (custRes.rows[0].status !== 'ACTIVE') throw new BadRequestException('Customer must be verified by a manager before a loan can be created');
 
       const countRes = await client.query<{ n: string }>(`SELECT COUNT(*) AS n FROM loans`);
       const seq = parseInt(countRes.rows[0].n) + 1;
@@ -2296,8 +2298,9 @@ export class TenantLoansService {
     const storedRate = isPerDay ? Math.round(dto.interestPerDay! * 36.5 * 10000) / 10000 : dto.interestRate;
 
     return this.withSchema(user.schemaName, async (client) => {
-      const custRes = await client.query(`SELECT id, first_name, last_name FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
+      const custRes = await client.query(`SELECT id, first_name, last_name, status FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
       if (!custRes.rows[0]) throw new NotFoundException('Customer not found');
+      if (custRes.rows[0].status !== 'ACTIVE') throw new BadRequestException('Customer must be verified by a manager before a loan can be created');
 
       const countRes = await client.query<{ n: string }>(`SELECT COUNT(*) AS n FROM loans`);
       const seq = parseInt(countRes.rows[0].n) + 1;
@@ -2534,8 +2537,9 @@ export class TenantLoansService {
     assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
-      const custRes = await client.query(`SELECT id FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
+      const custRes = await client.query(`SELECT id, status FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
       if (!custRes.rows[0]) throw new NotFoundException('Customer not found');
+      if (custRes.rows[0].status !== 'ACTIVE') throw new BadRequestException('Customer must be verified by a manager before a loan can be created');
       if (dto.branchId) {
         const brRes = await client.query(`SELECT id FROM branches WHERE id = $1 AND is_active = TRUE`, [dto.branchId]);
         if (!brRes.rows[0]) throw new NotFoundException('Branch not found');
@@ -2769,8 +2773,9 @@ export class TenantLoansService {
     assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
-      const custRes = await client.query(`SELECT id FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
+      const custRes = await client.query(`SELECT id, status FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
       if (!custRes.rows[0]) throw new NotFoundException('Customer not found');
+      if (custRes.rows[0].status !== 'ACTIVE') throw new BadRequestException('Customer must be verified by a manager before a loan can be created');
       if (dto.branchId) {
         const brRes = await client.query(`SELECT id FROM branches WHERE id = $1 AND is_active = TRUE`, [dto.branchId]);
         if (!brRes.rows[0]) throw new NotFoundException('Branch not found');
@@ -2985,8 +2990,9 @@ export class TenantLoansService {
     assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
-      const custRes = await client.query(`SELECT id FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
+      const custRes = await client.query(`SELECT id, status FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
       if (!custRes.rows[0]) throw new NotFoundException('Customer not found');
+      if (custRes.rows[0].status !== 'ACTIVE') throw new BadRequestException('Customer must be verified by a manager before a loan can be created');
       if (dto.branchId) {
         const brRes = await client.query(`SELECT id FROM branches WHERE id = $1 AND is_active = TRUE`, [dto.branchId]);
         if (!brRes.rows[0]) throw new NotFoundException('Branch not found');
