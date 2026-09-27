@@ -204,6 +204,10 @@ export function tenantSchemaDDL(s: string): string[] {
     // ── receipt_number on payments (idempotent) — requirements doc §5.4/§7.3/§7.4 ──
     `ALTER TABLE ${q}."payments" ADD COLUMN IF NOT EXISTS receipt_number TEXT`,
 
+    // ── agent assignment on installments (idempotent) — added to the CREATE TABLE
+    // after the first tenants were provisioned, so they never received it ──────
+    `ALTER TABLE ${q}."installments" ADD COLUMN IF NOT EXISTS assigned_to UUID REFERENCES ${q}."users" (id) ON DELETE SET NULL`,
+
     // ── loan_type_id FK on loans (idempotent) ────────────────────────────────
     `ALTER TABLE ${q}."loans" ADD COLUMN IF NOT EXISTS loan_type_id UUID REFERENCES ${q}."loan_types" (id) ON DELETE SET NULL`,
 
