@@ -201,27 +201,39 @@ export default function NewTermLoanPage() {
               {customers.map((c) => (
                 <button key={c.id} onClick={() => { setSelectedCustomer(c); setCustomerSearch(c.firstName + ' ' + c.lastName); setCustomers([]); }}
                   className="w-full text-left px-4 py-3 hover:bg-blue-50 transition-colors">
-                  <p className="font-medium text-gray-900 text-sm">{c.firstName} {c.lastName}</p>
+                  <p className="font-medium text-gray-900 text-sm flex items-center gap-2">
+                    {c.firstName} {c.lastName}
+                    {c.status === 'IN_PROGRESS' && (
+                      <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-semibold">UNVERIFIED</span>
+                    )}
+                  </p>
                   <p className="text-xs text-gray-400">{c.phone}</p>
                 </button>
               ))}
             </div>
           )}
           {selectedCustomer && (
-            <div className="flex items-center gap-3 p-3 bg-green-50 border border-green-200 rounded-lg">
-              <div className="w-9 h-9 rounded-full bg-green-600 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
-                {selectedCustomer.firstName[0]}
+            <div>
+              <div className="flex items-center gap-3 p-3 bg-green-50 border border-green-200 rounded-lg">
+                <div className="w-9 h-9 rounded-full bg-green-600 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
+                  {selectedCustomer.firstName[0]}
+                </div>
+                <div>
+                  <p className="font-semibold text-gray-900 text-sm">{selectedCustomer.firstName} {selectedCustomer.lastName}</p>
+                  <p className="text-xs text-gray-500">{selectedCustomer.phone}</p>
+                </div>
+                <button onClick={() => { setSelectedCustomer(null); setCustomerSearch(''); }}
+                  className="ml-auto text-gray-400 hover:text-red-500 text-xs">Change</button>
               </div>
-              <div>
-                <p className="font-semibold text-gray-900 text-sm">{selectedCustomer.firstName} {selectedCustomer.lastName}</p>
-                <p className="text-xs text-gray-500">{selectedCustomer.phone}</p>
-              </div>
-              <button onClick={() => { setSelectedCustomer(null); setCustomerSearch(''); }}
-                className="ml-auto text-gray-400 hover:text-red-500 text-xs">Change</button>
+              {selectedCustomer.status === 'IN_PROGRESS' && (
+                <p className="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  This customer is still pending verification. An Owner, Manager or Admin must verify their documents before a loan can be created.
+                </p>
+              )}
             </div>
           )}
           <div className="flex justify-end">
-            <button disabled={!selectedCustomer} onClick={() => setStep(2)}
+            <button disabled={!selectedCustomer || selectedCustomer.status === 'IN_PROGRESS'} onClick={() => setStep(2)}
               className="px-5 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-40 transition-colors hover:opacity-90"
               style={{ backgroundColor: BRAND }}>
               Continue →

@@ -266,12 +266,19 @@ export default function NewDailyLoanPage() {
             <h2 className="text-sm font-semibold text-gray-700 mb-4">Select Customer</h2>
 
             {selectedCustomer ? (
-              <div className="flex items-center justify-between bg-blue-50 border border-blue-200 rounded-lg p-4">
-                <div>
-                  <p className="font-semibold text-gray-900">{selectedCustomer.firstName} {selectedCustomer.lastName}</p>
-                  <p className="text-sm text-gray-500">{selectedCustomer.phone} · {selectedCustomer.customerCode}</p>
+              <div>
+                <div className="flex items-center justify-between bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <div>
+                    <p className="font-semibold text-gray-900">{selectedCustomer.firstName} {selectedCustomer.lastName}</p>
+                    <p className="text-sm text-gray-500">{selectedCustomer.phone} · {selectedCustomer.customerCode}</p>
+                  </div>
+                  <button onClick={handleChangeCustomer} className="text-xs text-red-500 hover:underline">Change</button>
                 </div>
-                <button onClick={handleChangeCustomer} className="text-xs text-red-500 hover:underline">Change</button>
+                {selectedCustomer.status === 'IN_PROGRESS' && (
+                  <p className="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                    This customer is still pending verification. An Owner, Manager or Admin must verify their documents before a loan can be created.
+                  </p>
+                )}
               </div>
             ) : (
               <>
@@ -286,7 +293,12 @@ export default function NewDailyLoanPage() {
                       <button key={c.id}
                         onClick={() => { setSelectedCustomer(c); setCustomerSearch(''); setCustomerResults([]); }}
                         className="w-full text-left px-4 py-3 hover:bg-blue-50 transition-colors">
-                        <p className="font-medium text-gray-900 text-sm">{c.firstName} {c.lastName}</p>
+                        <p className="font-medium text-gray-900 text-sm flex items-center gap-2">
+                          {c.firstName} {c.lastName}
+                          {c.status === 'IN_PROGRESS' && (
+                            <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-semibold">UNVERIFIED</span>
+                          )}
+                        </p>
                         <p className="text-xs text-gray-400">{c.phone} · {c.customerCode}</p>
                       </button>
                     ))}
@@ -384,7 +396,7 @@ export default function NewDailyLoanPage() {
           </div>
 
           <div className="flex justify-end">
-            <button onClick={() => setStep(2)} disabled={!selectedCustomer}
+            <button onClick={() => setStep(2)} disabled={!selectedCustomer || selectedCustomer.status === 'IN_PROGRESS'}
               className="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg">
               Next: Loan Terms →
             </button>
