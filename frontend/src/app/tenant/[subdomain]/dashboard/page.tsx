@@ -6,7 +6,7 @@ import Link from 'next/link';
 import {
   getDashboardStats, getRecentActivity, getActiveLoans, getMonthlyTrend,
   getTenantSession, loanDetailPath,
-  collectionsAwaitingConfirmation, confirmCollection,
+  collectionsAwaitingConfirmation, confirmCollection, getPendingCollections,
   DashboardStats, ActivityItem, ActiveLoan, MonthlyTrend, AwaitingConfirmation,
   MANAGER_ROLES, LOAN_ROLES,
 } from '@/services/tenant-api';
@@ -66,6 +66,11 @@ export default function TenantDashboardPage() {
   const [approving, setApproving] = useState<string | null>(null);
   const [approveError, setApproveError] = useState('');
 
+  // Pending Collections KPI — same source and default window ('D': everything
+  // still owed through today, overdue included) as the Pending Collections list
+  // on the Collections page, so the card and the page it opens always agree.
+  const [pendingColl, setPendingColl] = useState<{ total: number; totalAmount: number } | null>(null);
+
   useEffect(() => {
     setLoading(true);
     Promise.all([getDashboardStats(), getRecentActivity(), getActiveLoans(1, 10), getMonthlyTrend(12)])
@@ -85,6 +90,9 @@ export default function TenantDashboardPage() {
   useEffect(() => {
     if (!isManager) return;
     loadAwaiting();
+    getPendingCollections('D', 1, 1)
+      .then((r) => setPendingColl({ total: r.total, totalAmount: r.totalAmount }))
+      .catch(console.error);
   }, [isManager]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadAwaiting() {
@@ -131,7 +139,19 @@ export default function TenantDashboardPage() {
   }
 
   // ── KPI configuration per role ───────────────────────────────────────────────
-  const kpis = stats
+  type Kpi = { label: string; value: string; sub: string; icon: React.ReactNode; bg: string; href?: string };
+  const pendingCollectionsKpi: Kpi[] = isManager && pendingColl
+    ? [{
+        label: 'Pending Collections',
+        value: fmtCurrency(pendingColl.totalAmount),
+        sub: `${pendingColl.total.toLocaleString()} installment${pendingColl.total !== 1 ? 's' : ''} due till today`,
+        icon: <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" /></svg>,
+        bg: '#8B5CF6',
+        href: `/tenant/${subdomain}/collections`,
+      }]
+    : [];
+
+  const kpis: Kpi[] = stats
     ? isCollector
       ? [
           {
@@ -185,6 +205,7 @@ export default function TenantDashboardPage() {
             icon: <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>,
             bg: '#EF4444',
           },
+          ...pendingCollectionsKpi,
         ]
     : [];
 
@@ -226,19 +247,38 @@ export default function TenantDashboardPage() {
       </div>
 
       {/* KPI Cards */}
-      <div className={`grid gap-4 ${isCollector ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-2 lg:grid-cols-4'}`}>
-        {kpis.map((k) => (
-          <div key={k.label} className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
-            <div className="flex items-start justify-between mb-4">
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ backgroundColor: k.bg }}>
-                {k.icon}
+      <div className={`grid gap-4 ${isCollector ? 'grid-cols-1 sm:grid-cols-3' : kpis.length > 4 ? 'grid-cols-2 lg:grid-cols-5' : 'grid-cols-2 lg:grid-cols-4'}`}>
+        {kpis.map((k) => {
+          const body = (
+            <>
+              <div className="flex items-start justify-between mb-4">
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ backgroundColor: k.bg }}>
+                  {k.icon}
+                </div>
+                {k.href && (
+                  <svg className="w-4 h-4 text-gray-300 group-hover:text-blue-500 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                )}
               </div>
+              <p className="text-2xl font-bold text-gray-900">{k.value}</p>
+              <p className="text-xs text-gray-500 font-medium mt-1">{k.label}</p>
+              <p className="text-xs text-gray-400">{k.sub}</p>
+            </>
+          );
+          return k.href ? (
+            <Link
+              key={k.label}
+              href={k.href}
+              aria-label={`${k.label}: ${k.value}. Open collections`}
+              className="group bg-white rounded-xl p-5 shadow-sm border border-gray-100 hover:shadow-md hover:border-blue-200 transition-all"
+            >
+              {body}
+            </Link>
+          ) : (
+            <div key={k.label} className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
+              {body}
             </div>
-            <p className="text-2xl font-bold text-gray-900">{k.value}</p>
-            <p className="text-xs text-gray-500 font-medium mt-1">{k.label}</p>
-            <p className="text-xs text-gray-400">{k.sub}</p>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Awaiting approval — the manager's half of the collection workflow.
