@@ -14,6 +14,10 @@ type ApproveProps = {
   firstDueDate: string;
   securityDocUrl?: string | null;
   promissoryNoteUrl?: string | null;
+  /** Only set while the customer is still IN_PROGRESS — approving this loan verifies them too, so their documents need review here. */
+  customerStatus?: 'IN_PROGRESS' | 'ACTIVE';
+  customerAadhaarDocUrl?: string | null;
+  customerPhotoUrl?: string | null;
   approving?: boolean;
   error?: string;
   onCancel: () => void;
@@ -22,8 +26,11 @@ type ApproveProps = {
 
 /**
  * Approval is a manual judgment call, not an automated document check — the
- * approver reviews whatever's on file and explicitly confirms, mirroring the
- * customer-verification "Verify & Activate" gate rather than parsing documents.
+ * approver reviews whatever's on file and explicitly confirms. For a new
+ * customer's first loan, approving also verifies the customer (mirroring the
+ * standalone "Verify & Activate" gate), so their Aadhaar copy and photo are
+ * reviewed in the same screen — both are mandatory, and the backend refuses
+ * the approval if either is missing.
  * Releasing the loan also re-anchors the EMI schedule to whatever date the
  * approver picks here, since the agent's original date was just a proposal.
  */
@@ -34,6 +41,9 @@ export function ApproveLoanModal({
   firstDueDate,
   securityDocUrl,
   promissoryNoteUrl,
+  customerStatus,
+  customerAadhaarDocUrl,
+  customerPhotoUrl,
   approving = false,
   error,
   onCancel,
@@ -41,7 +51,8 @@ export function ApproveLoanModal({
 }: ApproveProps) {
   const [confirmed, setConfirmed] = useState(false);
   const [dueDate, setDueDate] = useState(firstDueDate);
-  const hasDocs = Boolean(securityDocUrl || promissoryNoteUrl);
+  const verifiesCustomer = customerStatus === 'IN_PROGRESS';
+  const missingCustomerDocs = verifiesCustomer && (!customerAadhaarDocUrl || !customerPhotoUrl);
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
@@ -51,26 +62,55 @@ export function ApproveLoanModal({
           This will disburse <strong>{fmt(principal)}</strong> to <strong>{customerName}</strong> on loan <strong>{loanNumber}</strong>.
         </p>
 
-        <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-2">Documents on file</p>
-          {hasDocs ? (
+        {verifiesCustomer && (
+          <div className={`p-3 rounded-lg border ${missingCustomerDocs ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-2">
+              New customer — verifying with this loan
+            </p>
             <div className="flex flex-wrap gap-2">
-              {securityDocUrl && (
-                <a href={securityDocUrl} target="_blank" rel="noreferrer"
-                  className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs text-blue-600 hover:bg-white transition-colors">
-                  📎 Security Document
+              {customerPhotoUrl ? (
+                <a href={customerPhotoUrl} target="_blank" rel="noreferrer"
+                  className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs text-blue-600 hover:bg-white transition-colors bg-white">
+                  🖼️ Photo
                 </a>
+              ) : (
+                <span className="flex items-center gap-1.5 px-3 py-1.5 border border-red-200 rounded-lg text-xs text-red-700">🖼️ Photo missing</span>
               )}
-              {promissoryNoteUrl && (
-                <a href={promissoryNoteUrl} target="_blank" rel="noreferrer"
-                  className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs text-blue-600 hover:bg-white transition-colors">
-                  📄 Promissory Note
+              {customerAadhaarDocUrl ? (
+                <a href={customerAadhaarDocUrl} target="_blank" rel="noreferrer"
+                  className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs text-blue-600 hover:bg-white transition-colors bg-white">
+                  🪪 Aadhaar Copy
                 </a>
+              ) : (
+                <span className="flex items-center gap-1.5 px-3 py-1.5 border border-red-200 rounded-lg text-xs text-red-700">🪪 Aadhaar missing</span>
               )}
             </div>
-          ) : (
-            <p className="text-xs text-amber-700">No documents were uploaded with this loan. Verify the customer's KYC on their profile before approving.</p>
-          )}
+            {missingCustomerDocs && (
+              <p className="text-xs text-red-700 mt-2">
+                Both are required to verify this customer. Ask the agent to upload what&apos;s missing before approving.
+              </p>
+            )}
+          </div>
+        )}
+
+        <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-2">Loan documents</p>
+          <div className="flex flex-wrap gap-2">
+            {securityDocUrl && (
+              <a href={securityDocUrl} target="_blank" rel="noreferrer"
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs text-blue-600 hover:bg-white transition-colors">
+                📎 Security Document
+              </a>
+            )}
+            {promissoryNoteUrl ? (
+              <a href={promissoryNoteUrl} target="_blank" rel="noreferrer"
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs text-blue-600 hover:bg-white transition-colors">
+                📄 Promissory Note
+              </a>
+            ) : (
+              <span className="flex items-center gap-1.5 px-3 py-1.5 border border-red-200 rounded-lg text-xs text-red-700">📄 Promissory note missing</span>
+            )}
+          </div>
         </div>
 
         <div>
@@ -113,7 +153,7 @@ export function ApproveLoanModal({
           </button>
           <button
             type="button"
-            disabled={approving || !confirmed || !dueDate}
+            disabled={approving || !confirmed || !dueDate || missingCustomerDocs}
             onClick={() => onConfirm(dueDate)}
             className="flex-1 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg disabled:opacity-40"
           >

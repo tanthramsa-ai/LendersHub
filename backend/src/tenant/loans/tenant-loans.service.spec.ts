@@ -62,14 +62,14 @@ describe('TenantLoansService', () => {
     it('posts a DISBURSEMENT ledger transaction with the loan principal, in the same transaction as the status flip', async () => {
       query
         .mockResolvedValueOnce({ rows: [] }) // SET search_path
-        .mockResolvedValueOnce({ rows: [{ id: 'loan1', status: 'PENDING', loan_number: 'LN-1', first_due_date: '2026-08-01', principal: '15000.00', customer_id: 'cust1' }] })
+        .mockResolvedValueOnce({ rows: [{ id: 'loan1', status: 'PENDING', loan_number: 'LN-1', first_due_date: '2026-08-01', principal: '15000.00', customer_id: 'cust1', customer_status: 'ACTIVE' }] })
         .mockResolvedValueOnce({ rows: [] }) // BEGIN
         .mockResolvedValueOnce({ rows: [] }) // UPDATE loans SET status='APPROVED'
         .mockResolvedValueOnce({ rows: [] }); // COMMIT
 
       const result = await svc.approveLoan(makeUser(), 'loan1');
 
-      expect(result).toEqual({ id: 'loan1', status: 'APPROVED', firstDueDate: '2026-08-01' });
+      expect(result).toEqual({ id: 'loan1', status: 'APPROVED', firstDueDate: '2026-08-01', customerVerified: false });
       expect(ledgerPosting.postWithClient).toHaveBeenCalledWith(
         expect.objectContaining({ query }),
         expect.anything(),
@@ -91,7 +91,7 @@ describe('TenantLoansService', () => {
     it('rolls back if the ledger post fails, leaving the loan un-disbursed', async () => {
       query
         .mockResolvedValueOnce({ rows: [] })
-        .mockResolvedValueOnce({ rows: [{ id: 'loan1', status: 'PENDING', loan_number: 'LN-1', first_due_date: '2026-08-01', principal: '15000.00', customer_id: 'cust1' }] })
+        .mockResolvedValueOnce({ rows: [{ id: 'loan1', status: 'PENDING', loan_number: 'LN-1', first_due_date: '2026-08-01', principal: '15000.00', customer_id: 'cust1', customer_status: 'ACTIVE' }] })
         .mockResolvedValueOnce({ rows: [] }) // BEGIN
         .mockResolvedValueOnce({ rows: [] }) // UPDATE loans
         .mockResolvedValueOnce({ rows: [] }); // ROLLBACK
@@ -100,6 +100,136 @@ describe('TenantLoansService', () => {
       await expect(svc.approveLoan(makeUser(), 'loan1')).rejects.toThrow('ledger down');
       expect(query.mock.calls.some((c) => c[0] === 'ROLLBACK')).toBe(true);
       expect(query.mock.calls.some((c) => c[0] === 'COMMIT')).toBe(false);
+    });
+
+    /** Answers each query by its SQL rather than call order, since notifications add their own queries. */
+    function answerApproval(loanRow: Record<string, unknown>) {
+      query.mockImplementation(async (sql: string) => {
+        if (sql.includes('FROM loans l JOIN customers c')) return { rows: [loanRow] };
+        if (sql.includes('UPDATE customers SET status')) return { rows: [{ id: 'cust1' }] };
+        return { rows: [] };
+      });
+    }
+    const newCustomerLoan = {
+      id: 'loan1', status: 'PENDING', loan_number: 'WL-1', first_due_date: '2026-08-01', principal: '20000.00',
+      customer_id: 'cust1', cycle_type: 'WEEKLY', loan_officer_id: 'agent1',
+      customer_status: 'IN_PROGRESS', customer_has_aadhaar_doc: true, customer_has_photo: true,
+      customer_name: 'Ravi Kumar', customer_code: 'CUST00007',
+    };
+
+    it("verifies a new customer in the same transaction as their loan's approval", async () => {
+      answerApproval(newCustomerLoan);
+
+      const result = await svc.approveLoan(makeUser(), 'loan1');
+
+      expect(result).toEqual(expect.objectContaining({ status: 'APPROVED', customerVerified: true }));
+      const sqls = query.mock.calls.map((c) => String(c[0]));
+      const begin = sqls.indexOf('BEGIN');
+      const verify = sqls.findIndex((s) => s.includes('UPDATE customers SET status'));
+      const commit = sqls.indexOf('COMMIT');
+      expect(begin).toBeGreaterThan(-1);
+      expect(verify).toBeGreaterThan(begin);
+      expect(commit).toBeGreaterThan(verify);
+      expect(activity.record).toHaveBeenCalledWith(expect.anything(), expect.anything(),
+        expect.objectContaining({ action: 'customer.verified', entityId: 'cust1' }));
+    });
+
+    it('tells the submitting agent their loan is active', async () => {
+      answerApproval(newCustomerLoan);
+
+      await svc.approveLoan(makeUser(), 'loan1');
+
+      const insert = query.mock.calls.find((c) => String(c[0]).includes('INSERT INTO notifications'));
+      expect(insert?.[1]).toEqual(expect.arrayContaining(['agent1', 'Loan approved — WL-1', '/weekly-loans/loan1']));
+    });
+
+    it("refuses to verify a new customer who has no Aadhaar copy on file, before touching anything", async () => {
+      answerApproval({ ...newCustomerLoan, customer_has_aadhaar_doc: false });
+
+      await expect(svc.approveLoan(makeUser(), 'loan1')).rejects.toThrow(BadRequestException);
+      expect(query.mock.calls.some((c) => c[0] === 'BEGIN')).toBe(false);
+      expect(ledgerPosting.postWithClient).not.toHaveBeenCalled();
+    });
+
+    it("refuses to verify a new customer who has no photo on file, before touching anything", async () => {
+      answerApproval({ ...newCustomerLoan, customer_has_photo: false });
+
+      await expect(svc.approveLoan(makeUser(), 'loan1')).rejects.toThrow(BadRequestException);
+      expect(query.mock.calls.some((c) => c[0] === 'BEGIN')).toBe(false);
+      expect(ledgerPosting.postWithClient).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('rejectLoan', () => {
+    it('requires a reason, since the agent needs to know what to fix', async () => {
+      await expect(svc.rejectLoan(makeUser(), 'loan1', { reason: '   ' })).rejects.toThrow(BadRequestException);
+      expect(poolConnect).not.toHaveBeenCalled();
+    });
+
+    it("sends the loan back to the agent with the reason and leaves the customer's status alone", async () => {
+      query.mockImplementation(async (sql: string) =>
+        sql.includes('FROM loans l JOIN customers c')
+          ? { rows: [{ id: 'loan1', status: 'PENDING', loan_number: 'WL-1', cycle_type: 'WEEKLY', loan_officer_id: 'agent1', customer_name: 'Ravi Kumar' }] }
+          : { rows: [] });
+
+      const result = await svc.rejectLoan(makeUser(), 'loan1', { reason: 'Aadhaar copy is blurred' });
+
+      expect(result).toEqual({ id: 'loan1', status: 'REJECTED', reason: 'Aadhaar copy is blurred' });
+      const sqls = query.mock.calls.map((c) => String(c[0]));
+      expect(sqls.some((s) => s.includes('UPDATE customers'))).toBe(false);
+      const insert = query.mock.calls.find((c) => String(c[0]).includes('INSERT INTO notifications'));
+      expect(insert?.[1]).toEqual(expect.arrayContaining(['agent1', 'Ravi Kumar: Aadhaar copy is blurred']));
+    });
+  });
+
+  describe('creating a loan for a customer who is not verified yet', () => {
+    const weekly = {
+      customerId: 'cust1', principal: 10000, interestRate: 24, termWeeks: 10,
+      firstDueDate: '2026-10-05', calculationType: 'FLAT' as const, emiRounding: 0 as const,
+      promissoryNoteUrl: 'data:application/pdf;base64,xyz',
+    };
+    function mockCustomer(overrides: { has_aadhaar_doc: boolean; has_photo: boolean }) {
+      query.mockImplementation(async (sql: string) => {
+        if (sql.includes('FROM customers WHERE id')) {
+          return { rows: [{ id: 'cust1', first_name: 'Ravi', last_name: 'Kumar', status: 'IN_PROGRESS', ...overrides }] };
+        }
+        if (sql.includes('COUNT(*)')) return { rows: [{ n: '0' }] };
+        if (sql.includes('INSERT INTO loans')) return { rows: [{ id: 'loan1' }] };
+        return { rows: [] };
+      });
+    }
+
+    it("is refused until the customer's Aadhaar copy is uploaded", async () => {
+      mockCustomer({ has_aadhaar_doc: false, has_photo: true });
+
+      await expect(svc.createWeeklyLoan(makeUser({ role: 'AGENT', sub: 'agent1' }), weekly))
+        .rejects.toThrow("Upload the customer's Aadhaar copy before submitting this loan");
+      expect(query.mock.calls.some((c) => String(c[0]).includes('INSERT INTO loans'))).toBe(false);
+    });
+
+    it('is refused until the customer has a photo on file', async () => {
+      mockCustomer({ has_aadhaar_doc: true, has_photo: false });
+
+      await expect(svc.createWeeklyLoan(makeUser({ role: 'AGENT', sub: 'agent1' }), weekly))
+        .rejects.toThrow('Upload a photo before submitting this loan');
+      expect(query.mock.calls.some((c) => String(c[0]).includes('INSERT INTO loans'))).toBe(false);
+    });
+
+    it('is refused until a promissory note is attached, even for an already-verified customer', async () => {
+      mockCustomer({ has_aadhaar_doc: true, has_photo: true });
+
+      await expect(svc.createWeeklyLoan(makeUser({ role: 'AGENT', sub: 'agent1' }), { ...weekly, promissoryNoteUrl: undefined }))
+        .rejects.toThrow('A promissory note is required before submitting this loan');
+      expect(query.mock.calls.some((c) => String(c[0]).includes('INSERT INTO loans'))).toBe(false);
+    });
+
+    it('is accepted as a PENDING application once the photo, Aadhaar copy and promissory note are all on file', async () => {
+      mockCustomer({ has_aadhaar_doc: true, has_photo: true });
+
+      await svc.createWeeklyLoan(makeUser({ role: 'AGENT', sub: 'agent1' }), weekly);
+
+      const insert = query.mock.calls.find((c) => String(c[0]).includes('INSERT INTO loans'));
+      expect(String(insert?.[0])).toContain("'PENDING'");
     });
   });
 

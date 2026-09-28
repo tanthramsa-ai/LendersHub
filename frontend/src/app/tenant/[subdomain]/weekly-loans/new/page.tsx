@@ -46,11 +46,19 @@ export default function NewWeeklyLoanPage() {
   const [customerResults, setCustomerResults] = useState<Customer[]>([]);
   const [searching, setSearching] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  // A not-yet-verified customer can still go into a loan — submitting it is what
+  // sends them for verification — but only once their photo and Aadhaar copy are
+  // both on file. Missing either blocks moving past this step.
+  const customerDocsMissing = selectedCustomer && selectedCustomer.status === 'IN_PROGRESS'
+    ? ([!selectedCustomer.hasPhoto && 'a photo', !selectedCustomer.hasAadhaarDoc && 'an Aadhaar copy'].filter(Boolean) as string[])
+    : [];
   const [showAddCustomer, setShowAddCustomer] = useState(false);
   const [editingCustomerId, setEditingCustomerId] = useState<string | null>(null);
   const [newCust, setNewCust] = useState({ ...EMPTY_QUICK_ADD_CUSTOMER });
   const [addingCustomer, setAddingCustomer] = useState(false);
   const [addCustError, setAddCustError] = useState('');
+  const [custPhotoFile, setCustPhotoFile] = useState<File | null>(null);
+  const [custAadhaarFile, setCustAadhaarFile] = useState<File | null>(null);
 
   // Step 2: Loan Terms
   const [branches, setBranches] = useState<TenantBranch[]>([]);
@@ -150,6 +158,8 @@ export default function NewWeeklyLoanPage() {
         ...(newCust.altContact && { altContact: newCust.altContact }),
         ...(newCust.panNumber && { panNumber: newCust.panNumber }),
         ...(newCust.aadhaarLast4 && { aadhaarLast4: newCust.aadhaarLast4 }),
+        ...(newCust.aadhaarDocUrl && { aadhaarDocUrl: newCust.aadhaarDocUrl }),
+        ...(newCust.photoUrl && { photoUrl: newCust.photoUrl }),
         ...(newCust.branchId && { branchId: newCust.branchId }),
       };
       if (editingCustomerId) {
@@ -163,6 +173,8 @@ export default function NewWeeklyLoanPage() {
       }
       setShowAddCustomer(false);
       setNewCust({ ...EMPTY_QUICK_ADD_CUSTOMER });
+      setCustPhotoFile(null);
+      setCustAadhaarFile(null);
     } catch (e) {
       setAddCustError((e as Error).message);
     } finally {
@@ -275,9 +287,15 @@ export default function NewWeeklyLoanPage() {
                   <button onClick={handleChangeCustomer} className="text-xs text-red-500 hover:underline">Change</button>
                 </div>
                 {selectedCustomer.status === 'IN_PROGRESS' && (
-                  <p className="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                    This customer is still pending verification. An Owner, Manager or Admin must verify their documents before a loan can be created.
-                  </p>
+                  customerDocsMissing.length > 0 ? (
+                    <p className="mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                      This customer is missing {customerDocsMissing.join(' and ')}. Upload {customerDocsMissing.length > 1 ? 'them' : 'it'} on the customer's page before a loan can be submitted.
+                    </p>
+                  ) : (
+                    <p className="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                      This customer isn't verified yet. Submitting this loan sends it, and this customer, to an Owner, Manager or Admin for approval.
+                    </p>
+                  )
                 )}
               </div>
             ) : (
@@ -379,6 +397,18 @@ export default function NewWeeklyLoanPage() {
                     <input value={newCust.aadhaarLast4} onChange={(e) => setNewCust({ ...newCust, aadhaarLast4: e.target.value.replace(/\D/g,'').slice(0,4) })} className={inputCls} placeholder="1234" maxLength={4} />
                   </div>
                   <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Photo <span className="text-red-500">*</span></label>
+                    <input type="file" accept="image/*" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f, (s) => setNewCust((c) => ({ ...c, photoUrl: s })), setCustPhotoFile); }}
+                      className="w-full text-xs text-gray-500 file:mr-3 file:py-1.5 file:px-2.5 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
+                    {custPhotoFile && <p className="text-xs text-green-600 mt-1">{custPhotoFile.name} attached</p>}
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Aadhaar Copy <span className="text-red-500">*</span></label>
+                    <input type="file" accept="image/*,application/pdf" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f, (s) => setNewCust((c) => ({ ...c, aadhaarDocUrl: s })), setCustAadhaarFile); }}
+                      className="w-full text-xs text-gray-500 file:mr-3 file:py-1.5 file:px-2.5 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
+                    {custAadhaarFile && <p className="text-xs text-green-600 mt-1">{custAadhaarFile.name} attached</p>}
+                  </div>
+                  <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">Branch</label>
                     <select value={newCust.branchId} onChange={(e) => setNewCust({ ...newCust, branchId: e.target.value })} className={inputCls}>
                       <option value="">No specific branch</option>
@@ -407,7 +437,7 @@ export default function NewWeeklyLoanPage() {
           <div className="flex justify-end">
             <button
               onClick={() => setStep(2)}
-              disabled={!selectedCustomer || selectedCustomer.status === 'IN_PROGRESS'}
+              disabled={!selectedCustomer || customerDocsMissing.length > 0}
               className="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg"
             >
               Next: Loan Terms →
@@ -603,20 +633,21 @@ export default function NewWeeklyLoanPage() {
           </div>
 
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 space-y-4">
-            <h2 className="text-sm font-semibold text-gray-700">Documents <span className="text-gray-400 font-normal text-xs">(optional)</span></h2>
+            <h2 className="text-sm font-semibold text-gray-700">Documents</h2>
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Security Document (PDF/Image, max 10 MB)</label>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Security Document (PDF/Image, max 10 MB) <span className="text-gray-400 font-normal">(optional)</span></label>
               <input type="file" accept="image/*,application/pdf"
                 onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f, setSecurityB64, setSecurityFile); }}
                 className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
               {securityFile && <p className="text-xs text-green-600 mt-1">{securityFile.name} ({(securityFile.size / 1024).toFixed(0)} KB)</p>}
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Promissory Note (PDF/Image, max 10 MB)</label>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Promissory Note (PDF/Image, max 10 MB) <span className="text-red-500">*</span></label>
               <input type="file" accept="image/*,application/pdf"
                 onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f, setPromissoryB64, setPromissoryFile); }}
                 className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
               {promissoryFile && <p className="text-xs text-green-600 mt-1">{promissoryFile.name} ({(promissoryFile.size / 1024).toFixed(0)} KB)</p>}
+              {!promissoryB64 && <p className="text-xs text-amber-700 mt-1">A promissory note is required before this loan can be submitted.</p>}
             </div>
           </div>
 
@@ -628,7 +659,7 @@ export default function NewWeeklyLoanPage() {
             <button onClick={() => setStep(2)} className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">← Back</button>
             <button
               onClick={handleSubmit}
-              disabled={submitting}
+              disabled={submitting || !promissoryB64}
               className="px-6 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white text-sm font-semibold rounded-lg"
             >
               {submitting ? 'Creating Loan…' : '✓ Create Weekly Loan'}

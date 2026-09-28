@@ -252,6 +252,9 @@ export interface Customer {
   isActive: boolean;
   /** IN_PROGRESS until a Manager/Owner/Admin verifies and activates the customer. */
   status: 'IN_PROGRESS' | 'ACTIVE';
+  /** Aadhaar copy and photo are both required before a loan can be submitted for this customer. */
+  hasAadhaarDoc: boolean;
+  hasPhoto: boolean;
   activeLoans: number;
   closedLoans: number;
   /** True if any of this customer's active loans is NPA (auto-threshold or manually flagged). */
@@ -262,6 +265,7 @@ export interface Customer {
 export interface CustomerDetail extends Customer {
   aadhaarLast4: string | null;
   aadhaarDocUrl: string | null;
+  photoUrl: string | null;
   dateOfBirth: string | null;
   address: string | null;
   pincode: string | null;
@@ -323,6 +327,7 @@ export interface CreateCustomerPayload {
   panNumber?: string;
   aadhaarLast4?: string;
   aadhaarDocUrl?: string;
+  photoUrl?: string;
   dateOfBirth?: string;
   address: string;
   locality: string;
@@ -344,7 +349,7 @@ export function createCustomer(dto: CreateCustomerPayload) {
 
 export interface UpdateCustomerPayload {
   firstName?: string; lastName?: string; phone?: string; email?: string;
-  panNumber?: string; aadhaarLast4?: string; aadhaarDocUrl?: string;
+  panNumber?: string; aadhaarLast4?: string; aadhaarDocUrl?: string; photoUrl?: string;
   dateOfBirth?: string; address?: string; locality?: string;
   city?: string; state?: string; pincode?: string;
   occupation?: string; loanPurpose?: string;
@@ -602,6 +607,9 @@ export interface WeeklyLoanDetail extends WeeklyLoan, NpaDetailFields {
   promissoryNoteUrl?: string | null;
   loanTypeId?: string | null;
   customerPhone: string;
+  customerStatus?: 'IN_PROGRESS' | 'ACTIVE';
+  customerAadhaarDocUrl?: string | null;
+  customerPhotoUrl?: string | null;
   loanOfficerId?: string | null;
   loanOfficerName?: string | null;
   closedAt?: string | null;
@@ -800,6 +808,9 @@ export interface DailyLoanDetail extends DailyLoan, NpaDetailFields {
   promissoryNoteUrl?: string | null;
   loanTypeId?: string | null;
   customerPhone: string;
+  customerStatus?: 'IN_PROGRESS' | 'ACTIVE';
+  customerAadhaarDocUrl?: string | null;
+  customerPhotoUrl?: string | null;
   loanOfficerId?: string | null;
   loanOfficerName?: string | null;
   closedAt?: string | null;
@@ -914,6 +925,9 @@ export interface MonthlyLoanDetail extends MonthlyLoan, NpaDetailFields {
   promissoryNoteUrl?: string | null;
   loanTypeId?: string | null;
   customerPhone: string;
+  customerStatus?: 'IN_PROGRESS' | 'ACTIVE';
+  customerAadhaarDocUrl?: string | null;
+  customerPhotoUrl?: string | null;
   loanOfficerId?: string | null;
   loanOfficerName?: string | null;
   closedAt?: string | null;
@@ -997,6 +1011,9 @@ export interface AgentRiskLoanDetail extends AgentRiskLoan, NpaDetailFields {
   purpose?: string | null; emiAmount: number | null;
   securityDocUrl?: string | null; promissoryNoteUrl?: string | null;
   loanTypeId?: string | null; customerPhone: string;
+  customerStatus?: 'IN_PROGRESS' | 'ACTIVE';
+  customerAadhaarDocUrl?: string | null;
+  customerPhotoUrl?: string | null;
   loanOfficerId?: string | null;
   loanOfficerName?: string | null;
   closedAt?: string | null;
@@ -1063,6 +1080,9 @@ export interface TermLoanDetail extends TermLoan, NpaDetailFields {
   purpose?: string | null; emiAmount: number | null;
   securityDocUrl?: string | null; promissoryNoteUrl?: string | null;
   loanTypeId?: string | null; customerPhone: string;
+  customerStatus?: 'IN_PROGRESS' | 'ACTIVE';
+  customerAadhaarDocUrl?: string | null;
+  customerPhotoUrl?: string | null;
   closedAt?: string | null;
   closeComment?: string | null;
   reopenComment?: string | null;
@@ -1538,7 +1558,7 @@ export function reopenLoan(id: string, dto: { comment: string }) {
 }
 
 export function approveLoan(id: string, firstDueDate?: string) {
-  return tenantFetch<{ id: string; status: string; firstDueDate: string }>(`/api/v1/tenant/loans/${id}/approve`, {
+  return tenantFetch<{ id: string; status: string; firstDueDate: string; customerVerified: boolean }>(`/api/v1/tenant/loans/${id}/approve`, {
     method: 'PATCH',
     body: JSON.stringify(firstDueDate ? { firstDueDate } : {}),
   });
@@ -1549,6 +1569,33 @@ export function rejectLoan(id: string, reason?: string) {
     method: 'PATCH',
     body: JSON.stringify({ reason }),
   });
+}
+
+/** A loan waiting for an Owner/Manager/Admin to approve — see PendingApplication for what's shown while reviewing. */
+export interface PendingApplication {
+  loanId: string;
+  loanNumber: string;
+  cycleType: string;
+  principal: number;
+  submittedAt: string;
+  submittedByName: string | null;
+  hasSecurityDoc: boolean;
+  hasPromissoryNote: boolean;
+  customerId: string;
+  customerName: string;
+  customerCode: string;
+  customerPhone: string;
+  /** True while the customer is still IN_PROGRESS — approving this loan verifies them too. */
+  newCustomer: boolean;
+  hasAadhaarDoc: boolean;
+  hasPhoto: boolean;
+}
+
+export function getPendingApplications(page = 1, limit = 20) {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+  return tenantFetch<{ data: PendingApplication[]; total: number; totalPrincipal: number; page: number; limit: number }>(
+    `/api/v1/tenant/loans/pending-applications?${params}`,
+  );
 }
 
 export function approveCloseLoan(id: string) {

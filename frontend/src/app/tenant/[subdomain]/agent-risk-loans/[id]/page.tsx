@@ -286,11 +286,12 @@ export default function AgentRiskLoanDetailPage() {
   }
 
   async function handleReject() {
-    const reason = window.prompt('Reason for rejecting this loan (optional):') ?? undefined;
-    if (reason === undefined) return; // cancelled
+    const reason = window.prompt('Reason for rejecting this loan (required — tells the agent what to fix):');
+    if (reason === null) return; // cancelled
+    if (!reason.trim()) { setActionError('A reason is required to reject a loan'); return; }
     setRejecting(true); setActionError('');
     try {
-      await rejectLoan(id, reason || undefined);
+      await rejectLoan(id, reason.trim());
       refreshNotificationBell();
       await load();
     } catch (e: unknown) {
@@ -527,6 +528,9 @@ export default function AgentRiskLoanDetailPage() {
           firstDueDate={loan.firstDueDate ?? ''}
           securityDocUrl={loan.securityDocUrl}
           promissoryNoteUrl={loan.promissoryNoteUrl}
+          customerStatus={loan.customerStatus}
+          customerAadhaarDocUrl={loan.customerAadhaarDocUrl}
+          customerPhotoUrl={loan.customerPhotoUrl}
           approving={approving}
           error={actionError}
           onCancel={() => { setShowApprove(false); setActionError(''); }}

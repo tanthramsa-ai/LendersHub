@@ -6,7 +6,7 @@ import Link from 'next/link';
 import {
   getDashboardStats, getRecentActivity, getActiveLoans, getMonthlyTrend,
   getTenantSession, loanDetailPath,
-  collectionsAwaitingConfirmation, confirmCollection, getPendingCollections,
+  collectionsAwaitingConfirmation, confirmCollection, getPendingCollections, getPendingApplications,
   DashboardStats, ActivityItem, ActiveLoan, MonthlyTrend, AwaitingConfirmation,
   MANAGER_ROLES, LOAN_ROLES,
 } from '@/services/tenant-api';
@@ -71,6 +71,10 @@ export default function TenantDashboardPage() {
   // on the Collections page, so the card and the page it opens always agree.
   const [pendingColl, setPendingColl] = useState<{ total: number; totalAmount: number } | null>(null);
 
+  // Pending Applications KPI — loans awaiting an Owner/Manager/Admin's approval,
+  // same source as the Approvals page this card links to.
+  const [pendingApps, setPendingApps] = useState<{ total: number; totalPrincipal: number } | null>(null);
+
   useEffect(() => {
     setLoading(true);
     Promise.all([getDashboardStats(), getRecentActivity(), getActiveLoans(1, 10), getMonthlyTrend(12)])
@@ -92,6 +96,9 @@ export default function TenantDashboardPage() {
     loadAwaiting();
     getPendingCollections('D', 1, 1)
       .then((r) => setPendingColl({ total: r.total, totalAmount: r.totalAmount }))
+      .catch(console.error);
+    getPendingApplications(1, 1)
+      .then((r) => setPendingApps({ total: r.total, totalPrincipal: r.totalPrincipal }))
       .catch(console.error);
   }, [isManager]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -151,6 +158,17 @@ export default function TenantDashboardPage() {
       }]
     : [];
 
+  const pendingApplicationsKpi: Kpi[] = isManager && pendingApps
+    ? [{
+        label: 'Pending Applications',
+        value: pendingApps.total.toLocaleString(),
+        sub: pendingApps.total > 0 ? `${fmtCurrency(pendingApps.totalPrincipal)} awaiting approval` : 'Nothing waiting on you',
+        icon: <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>,
+        bg: '#F59E0B',
+        href: `/tenant/${subdomain}/applications`,
+      }]
+    : [];
+
   const kpis: Kpi[] = stats
     ? isCollector
       ? [
@@ -205,6 +223,7 @@ export default function TenantDashboardPage() {
             icon: <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>,
             bg: '#EF4444',
           },
+          ...pendingApplicationsKpi,
           ...pendingCollectionsKpi,
         ]
     : [];
@@ -247,7 +266,7 @@ export default function TenantDashboardPage() {
       </div>
 
       {/* KPI Cards */}
-      <div className={`grid gap-4 ${isCollector ? 'grid-cols-1 sm:grid-cols-3' : kpis.length > 4 ? 'grid-cols-2 lg:grid-cols-5' : 'grid-cols-2 lg:grid-cols-4'}`}>
+      <div className={`grid gap-4 ${isCollector ? 'grid-cols-1 sm:grid-cols-3' : kpis.length > 5 ? 'grid-cols-2 lg:grid-cols-6' : kpis.length > 4 ? 'grid-cols-2 lg:grid-cols-5' : 'grid-cols-2 lg:grid-cols-4'}`}>
         {kpis.map((k) => {
           const body = (
             <>
@@ -268,7 +287,7 @@ export default function TenantDashboardPage() {
             <Link
               key={k.label}
               href={k.href}
-              aria-label={`${k.label}: ${k.value}. Open collections`}
+              aria-label={`${k.label}: ${k.value}. ${k.sub}`}
               className="group bg-white rounded-xl p-5 shadow-sm border border-gray-100 hover:shadow-md hover:border-blue-200 transition-all"
             >
               {body}

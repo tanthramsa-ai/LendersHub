@@ -142,6 +142,8 @@ export default function NewCustomerPage() {
   });
   const [aadhaarFile, setAadhaarFile] = useState<File | null>(null);
   const [aadhaarPreview, setAadhaarPreview] = useState<string>('');
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string>('');
   const [touched, setTouched] = useState<Partial<Record<FieldKey | 'kyc', boolean>>>({});
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [error, setError] = useState('');
@@ -183,6 +185,20 @@ export default function NewCustomerPage() {
     reader.readAsDataURL(file);
   }
 
+  function handlePhotoFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { setError('Photo file must be under 5 MB'); return; }
+    setPhotoFile(file);
+    const reader = new FileReader();
+    reader.onload = () => setPhotoPreview(reader.result as string);
+    reader.readAsDataURL(file);
+  }
+
+  // A loan can't be submitted for this customer without both, so they're required
+  // here rather than left for the agent to discover later at loan submission.
+  const missingDocs = [!photoPreview && 'a photo', !aadhaarPreview && 'an Aadhaar copy'].filter(Boolean) as string[];
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError('');
@@ -193,6 +209,10 @@ export default function NewCustomerPage() {
       // so the summary stays generic rather than repeating the first field's
       // message — which read as a second, unrelated problem.
       setError('Please fix the highlighted fields');
+      return;
+    }
+    if (missingDocs.length) {
+      setError(`Please upload ${missingDocs.join(' and ')}`);
       return;
     }
 
@@ -206,6 +226,7 @@ export default function NewCustomerPage() {
         ...(form.panNumber && { panNumber: form.panNumber }),
         ...(form.aadhaarLast4 && { aadhaarLast4: form.aadhaarLast4 }),
         ...(aadhaarPreview && { aadhaarDocUrl: aadhaarPreview }),
+        ...(photoPreview && { photoUrl: photoPreview }),
         ...(form.dateOfBirth && { dateOfBirth: form.dateOfBirth }),
         address: form.address,
         locality: form.locality,
@@ -298,16 +319,31 @@ export default function NewCustomerPage() {
               <input value={form.aadhaarLast4} onBlur={() => blur('aadhaarLast4')} onChange={(e) => set('aadhaarLast4', e.target.value.replace(/\D/g, '').slice(0, 4))} className={cls('aadhaarLast4')} placeholder="1234" maxLength={4} inputMode="numeric" />
             </Field>
           </div>
-          <div className="mt-4">
-            <Field label="Aadhaar Copy (PDF or Image, max 5 MB)">
-              <input type="file" accept="image/*,application/pdf" onChange={handleAadhaarFile} className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
-            </Field>
-            {aadhaarFile && (
-              <p className="text-xs text-green-600 mt-1">
-                {aadhaarFile.name} ({(aadhaarFile.size / 1024).toFixed(0)} KB) attached
-              </p>
-            )}
+          <div className="grid grid-cols-2 gap-4 mt-4">
+            <div>
+              <Field label="Photo (Image, max 5 MB)" required>
+                <input type="file" accept="image/*" onChange={handlePhotoFile} className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
+              </Field>
+              {photoFile && (
+                <p className="text-xs text-green-600 mt-1">
+                  {photoFile.name} ({(photoFile.size / 1024).toFixed(0)} KB) attached
+                </p>
+              )}
+            </div>
+            <div>
+              <Field label="Aadhaar Copy (PDF or Image, max 5 MB)" required>
+                <input type="file" accept="image/*,application/pdf" onChange={handleAadhaarFile} className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
+              </Field>
+              {aadhaarFile && (
+                <p className="text-xs text-green-600 mt-1">
+                  {aadhaarFile.name} ({(aadhaarFile.size / 1024).toFixed(0)} KB) attached
+                </p>
+              )}
+            </div>
           </div>
+          {submitAttempted && missingDocs.length > 0 && (
+            <p className="text-xs text-red-600 mt-2">Please upload {missingDocs.join(' and ')}</p>
+          )}
         </div>
 
         {/* Address */}
@@ -389,7 +425,7 @@ export default function NewCustomerPage() {
           </Link>
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || missingDocs.length > 0}
             className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-medium rounded-lg transition-colors"
           >
             {loading ? 'Saving…' : 'Add Customer'}
