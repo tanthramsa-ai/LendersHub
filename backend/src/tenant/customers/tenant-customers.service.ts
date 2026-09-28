@@ -22,6 +22,7 @@ export interface CreateCustomerDto {
   panNumber?: string;
   aadhaarLast4?: string;
   aadhaarDocUrl?: string;
+  photoUrl?: string;
   dateOfBirth?: string;
   address: string;
   locality: string;
@@ -45,6 +46,7 @@ export interface UpdateCustomerDto {
   panNumber?: string;
   aadhaarLast4?: string;
   aadhaarDocUrl?: string;
+  photoUrl?: string;
   dateOfBirth?: string;
   address?: string;
   locality?: string;
@@ -143,6 +145,8 @@ export class TenantCustomersService {
           SELECT c.id, c.customer_code, c.first_name, c.last_name, c.email, c.phone,
                  c.pan_number, c.credit_score, c.city, c.state, c.locality, c.branch_id,
                  c.is_active, c.status, c.created_at,
+                 (c.aadhaar_doc_url IS NOT NULL) AS has_aadhaar_doc,
+                 (c.photo_url IS NOT NULL) AS has_photo,
                  b.name AS branch_name,
                  (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status = 'DISBURSED') AS active_loans,
                  (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status = 'CLOSED') AS closed_loans,
@@ -172,6 +176,8 @@ export class TenantCustomersService {
           branchName: r.branch_name,
           isActive: r.is_active,
           status: r.status,
+          hasAadhaarDoc: r.has_aadhaar_doc,
+          hasPhoto: r.has_photo,
           activeLoans: parseInt(r.active_loans),
           closedLoans: parseInt(r.closed_loans),
           hasNpaLoan: r.has_npa_loan,
@@ -207,7 +213,7 @@ export class TenantCustomersService {
         id: r.id, customerCode: r.customer_code,
         firstName: r.first_name, lastName: r.last_name,
         email: r.email, phone: r.phone, panNumber: r.pan_number,
-        aadhaarLast4: r.aadhaar_last4, aadhaarDocUrl: r.aadhaar_doc_url,
+        aadhaarLast4: r.aadhaar_last4, aadhaarDocUrl: r.aadhaar_doc_url, photoUrl: r.photo_url,
         dateOfBirth: r.date_of_birth,
         address: r.address, locality: r.locality,
         city: r.city, state: r.state, pincode: r.pincode,
@@ -282,16 +288,16 @@ export class TenantCustomersService {
       const res = await client.query(`
         INSERT INTO customers (
           customer_code, first_name, last_name, email, phone, pan_number,
-          aadhaar_last4, aadhaar_doc_url, date_of_birth,
+          aadhaar_last4, aadhaar_doc_url, photo_url, date_of_birth,
           address, locality, city, state, pincode,
           occupation, loan_purpose,
           alt_contact, alt_contact_name, alt_contact_relation,
           credit_score, branch_id, created_by, status
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,'IN_PROGRESS')
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,'IN_PROGRESS')
         RETURNING *
       `, [
         customerCode, dto.firstName, dto.lastName, dto.email ?? null, dto.phone,
-        dto.panNumber ?? null, dto.aadhaarLast4 ?? null, dto.aadhaarDocUrl ?? null,
+        dto.panNumber ?? null, dto.aadhaarLast4 ?? null, dto.aadhaarDocUrl ?? null, dto.photoUrl ?? null,
         dto.dateOfBirth ?? null,
         dto.address, dto.locality, dto.city ?? null, dto.state ?? null, dto.pincode ?? null,
         dto.occupation ?? null, dto.loanPurpose ?? null,
@@ -310,19 +316,37 @@ export class TenantCustomersService {
         id: r.id, customerCode: r.customer_code,
         firstName: r.first_name, lastName: r.last_name,
         email: r.email, phone: r.phone, status: r.status,
+        hasAadhaarDoc: !!r.aadhaar_doc_url,
+        hasPhoto: !!r.photo_url,
       };
     });
   }
 
-  /** Manager-only manual verification (Aug_13 sheet item): flips a customer from IN_PROGRESS to ACTIVE. No document check — a judgment call. */
+  /**
+   * Manager-only manual verification: flips a customer from IN_PROGRESS to ACTIVE.
+   * The approver judges the document themselves, but there has to be one on file.
+   * Approving a new customer's loan verifies them the same way (approveLoan).
+   */
   async verify(user: TenantJwtPayload, id: string) {
     if (!MANAGER_ROLES.includes(user.role as UserRole)) {
       throw new ForbiddenException('Only Owner, Manager or Admin can verify a customer');
     }
     return this.withSchema(user.schemaName, async (client) => {
-      const res = await client.query(
-        `UPDATE customers SET status = 'ACTIVE', updated_at = NOW() WHERE id = $1 RETURNING id, status, customer_code, first_name, last_name`,
+      const existing = await client.query<{ has_aadhaar_doc: boolean; has_photo: boolean }>(
+        `SELECT (aadhaar_doc_url IS NOT NULL) AS has_aadhaar_doc, (photo_url IS NOT NULL) AS has_photo FROM customers WHERE id = $1`,
         [id],
+      );
+      if (!existing.rows[0]) throw new NotFoundException('Customer not found');
+      const missing = [
+        !existing.rows[0].has_photo && 'a photo',
+        !existing.rows[0].has_aadhaar_doc && 'an Aadhaar copy',
+      ].filter(Boolean);
+      if (missing.length) {
+        throw new BadRequestException(`Upload ${missing.join(' and ')} before verifying this customer`);
+      }
+      const res = await client.query(
+        `UPDATE customers SET status = 'ACTIVE', updated_at = NOW(), updated_by = $2 WHERE id = $1 RETURNING id, status, customer_code, first_name, last_name`,
+        [id, user.sub],
       );
       if (!res.rows[0]) throw new NotFoundException('Customer not found');
       const r = res.rows[0];
@@ -421,6 +445,7 @@ export class TenantCustomersService {
       if (dto.panNumber !== undefined) addSet('pan_number', dto.panNumber || null);
       if (dto.aadhaarLast4 !== undefined) addSet('aadhaar_last4', dto.aadhaarLast4 || null);
       if (dto.aadhaarDocUrl !== undefined) addSet('aadhaar_doc_url', dto.aadhaarDocUrl || null);
+      if (dto.photoUrl !== undefined) addSet('photo_url', dto.photoUrl || null);
       if (dto.dateOfBirth !== undefined) addSet('date_of_birth', dto.dateOfBirth || null);
       if (dto.address !== undefined) addSet('address', dto.address);
       if (dto.locality !== undefined) addSet('locality', dto.locality);

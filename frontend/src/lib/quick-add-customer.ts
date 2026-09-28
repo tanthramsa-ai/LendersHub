@@ -18,12 +18,16 @@ export type QuickAddCustomerForm = {
   altContact: string;
   panNumber: string;
   aadhaarLast4: string;
+  /** Base64 data URL of the uploaded Aadhaar copy — mandatory before a loan can be submitted for this customer. */
+  aadhaarDocUrl: string;
+  /** Base64 data URL of the uploaded photo — mandatory before a loan can be submitted for this customer. */
+  photoUrl: string;
   branchId: string;
 };
 
 export const EMPTY_QUICK_ADD_CUSTOMER: QuickAddCustomerForm = {
   firstName: '', lastName: '', phone: '', address: '', locality: '',
-  altContact: '', panNumber: '', aadhaarLast4: '', branchId: '',
+  altContact: '', panNumber: '', aadhaarLast4: '', aadhaarDocUrl: '', photoUrl: '', branchId: '',
 };
 
 /** Map a customer (list or detail) into the Quick Add form. */
@@ -36,6 +40,8 @@ export function customerToQuickAddForm(c: {
   altContact?: string | null;
   panNumber?: string | null;
   aadhaarLast4?: string | null;
+  aadhaarDocUrl?: string | null;
+  photoUrl?: string | null;
   branchId?: string | null;
 }): QuickAddCustomerForm {
   return {
@@ -47,6 +53,8 @@ export function customerToQuickAddForm(c: {
     altContact: c.altContact ?? '',
     panNumber: c.panNumber ?? '',
     aadhaarLast4: c.aadhaarLast4 ?? '',
+    aadhaarDocUrl: c.aadhaarDocUrl ?? '',
+    photoUrl: c.photoUrl ?? '',
     branchId: c.branchId ?? '',
   };
 }
@@ -61,6 +69,8 @@ export function getQuickAddCustomerErrors(cust: {
   altContact?: string;
   panNumber?: string;
   aadhaarLast4?: string;
+  aadhaarDocUrl?: string;
+  photoUrl?: string;
   /** When true, alternate contact is required (default false). */
   requireAltContact?: boolean;
 }): string[] {
@@ -111,6 +121,11 @@ export function getQuickAddCustomerErrors(cust: {
       errors.push('Aadhaar last 4 digits must be exactly 4 digits');
     }
   }
+
+  // A loan can't be submitted for this customer without both — checked here so
+  // the agent finds out while adding the customer, not later at loan submit.
+  if (!cust.photoUrl?.trim()) errors.push("Customer's photo is missing");
+  if (!cust.aadhaarDocUrl?.trim()) errors.push("Customer's Aadhaar copy is missing");
 
   return errors;
 }

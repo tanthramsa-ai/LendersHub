@@ -95,6 +95,8 @@ export default function CustomerDetailPage() {
   });
   const [aadhaarFile, setAadhaarFile] = useState<File | null>(null);
   const [aadhaarPreview, setAadhaarPreview] = useState('');
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState('');
 
   useEffect(() => {
     Promise.all([
@@ -136,6 +138,16 @@ export default function CustomerDetailPage() {
     reader.readAsDataURL(file);
   }
 
+  function handlePhotoFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { setSaveError('Photo file must be under 5 MB'); return; }
+    setPhotoFile(file);
+    const reader = new FileReader();
+    reader.onload = () => setPhotoPreview(reader.result as string);
+    reader.readAsDataURL(file);
+  }
+
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
     setSaveError('');
@@ -149,6 +161,7 @@ export default function CustomerDetailPage() {
         panNumber: form.panNumber || undefined,
         aadhaarLast4: form.aadhaarLast4 || undefined,
         aadhaarDocUrl: aadhaarPreview || undefined,
+        photoUrl: photoPreview || undefined,
         address: form.address, locality: form.locality,
         city: form.city || undefined, state: form.state || undefined,
         pincode: form.pincode || undefined,
@@ -257,13 +270,25 @@ export default function CustomerDetailPage() {
               <Field label="PAN Number"><input value={form.panNumber} onChange={(e) => set('panNumber', sanitizePanInput(e.target.value))} className={inputCls} maxLength={10} /></Field>
               <Field label="Aadhaar Last 4"><input value={form.aadhaarLast4} onChange={(e) => set('aadhaarLast4', e.target.value.replace(/\D/g, '').slice(0, 4))} className={inputCls} maxLength={4} /></Field>
             </div>
-            <div className="mt-4">
-              <Field label="Aadhaar Copy (replace existing)">
-                <input type="file" accept="image/*,application/pdf" onChange={handleAadhaarFile}
-                  className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
-              </Field>
-              {aadhaarFile && <p className="text-xs text-green-600 mt-1">{aadhaarFile.name} attached</p>}
-              {customer.aadhaarDocUrl && !aadhaarFile && <p className="text-xs text-gray-400 mt-1">Existing file will be kept</p>}
+            <div className="grid grid-cols-2 gap-4 mt-4">
+              <div>
+                <Field label="Photo (replace existing)">
+                  <input type="file" accept="image/*" onChange={handlePhotoFile}
+                    className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
+                </Field>
+                {photoFile && <p className="text-xs text-green-600 mt-1">{photoFile.name} attached</p>}
+                {customer.photoUrl && !photoFile && <p className="text-xs text-gray-400 mt-1">Existing file will be kept</p>}
+                {!customer.photoUrl && !photoFile && <p className="text-xs text-amber-700 mt-1">Required before a loan can be submitted for this customer.</p>}
+              </div>
+              <div>
+                <Field label="Aadhaar Copy (replace existing)">
+                  <input type="file" accept="image/*,application/pdf" onChange={handleAadhaarFile}
+                    className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
+                </Field>
+                {aadhaarFile && <p className="text-xs text-green-600 mt-1">{aadhaarFile.name} attached</p>}
+                {customer.aadhaarDocUrl && !aadhaarFile && <p className="text-xs text-gray-400 mt-1">Existing file will be kept</p>}
+                {!customer.aadhaarDocUrl && !aadhaarFile && <p className="text-xs text-amber-700 mt-1">Required before a loan can be submitted for this customer.</p>}
+              </div>
             </div>
           </div>
 
@@ -355,7 +380,8 @@ export default function CustomerDetailPage() {
           {canVerify && customer.status === 'IN_PROGRESS' && (
             <button
               onClick={handleVerify}
-              disabled={verifying}
+              disabled={verifying || !customer.photoUrl || !customer.aadhaarDocUrl}
+              title={!customer.photoUrl || !customer.aadhaarDocUrl ? 'Photo and Aadhaar copy are both required before verifying' : undefined}
               className="px-4 py-2 rounded-lg text-sm font-semibold bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 transition-colors disabled:opacity-50"
             >
               {verifying ? '…' : 'Verify & Activate'}
@@ -450,14 +476,26 @@ export default function CustomerDetailPage() {
               <span className="font-medium text-gray-900 text-right">{value}</span>
             </div>
           ))}
-          {customer.aadhaarDocUrl && (
-            <div className="pt-2">
-              <a href={customer.aadhaarDocUrl} target="_blank" rel="noopener noreferrer"
-                className="text-xs text-blue-600 hover:underline flex items-center gap-1">
-                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
-                View Aadhaar Copy
-              </a>
+          {(customer.photoUrl || customer.aadhaarDocUrl) && (
+            <div className="pt-2 flex flex-wrap gap-3">
+              {customer.photoUrl && (
+                <a href={customer.photoUrl} target="_blank" rel="noopener noreferrer"
+                  className="text-xs text-blue-600 hover:underline flex items-center gap-1">
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
+                  View Photo
+                </a>
+              )}
+              {customer.aadhaarDocUrl && (
+                <a href={customer.aadhaarDocUrl} target="_blank" rel="noopener noreferrer"
+                  className="text-xs text-blue-600 hover:underline flex items-center gap-1">
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
+                  View Aadhaar Copy
+                </a>
+              )}
             </div>
+          )}
+          {!customer.photoUrl && !customer.aadhaarDocUrl && customer.status === 'IN_PROGRESS' && (
+            <p className="text-xs text-amber-700 pt-2">No photo or Aadhaar copy on file — both are required before a loan can be submitted for this customer.</p>
           )}
         </div>
 

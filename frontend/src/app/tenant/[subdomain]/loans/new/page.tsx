@@ -41,6 +41,12 @@ export default function NewTermLoanPage() {
   const [customerSearch, setCustomerSearch] = useState('');
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  // A not-yet-verified customer can still go into a loan — submitting it is what
+  // sends them for verification — but only once their photo and Aadhaar copy are
+  // both on file. Missing either blocks moving past this step.
+  const customerDocsMissing = selectedCustomer && selectedCustomer.status === 'IN_PROGRESS'
+    ? ([!selectedCustomer.hasPhoto && 'a photo', !selectedCustomer.hasAadhaarDoc && 'an Aadhaar copy'].filter(Boolean) as string[])
+    : [];
   const [custLoading, setCustLoading] = useState(false);
 
   // Step 2: Loan details
@@ -226,14 +232,20 @@ export default function NewTermLoanPage() {
                   className="ml-auto text-gray-400 hover:text-red-500 text-xs">Change</button>
               </div>
               {selectedCustomer.status === 'IN_PROGRESS' && (
-                <p className="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                  This customer is still pending verification. An Owner, Manager or Admin must verify their documents before a loan can be created.
-                </p>
+                customerDocsMissing.length > 0 ? (
+                  <p className="mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                    This customer is missing {customerDocsMissing.join(' and ')}. Upload {customerDocsMissing.length > 1 ? 'them' : 'it'} on the customer's page before a loan can be submitted.
+                  </p>
+                ) : (
+                  <p className="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                    This customer isn't verified yet. Submitting this loan sends it, and this customer, to an Owner, Manager or Admin for approval.
+                  </p>
+                )
               )}
             </div>
           )}
           <div className="flex justify-end">
-            <button disabled={!selectedCustomer || selectedCustomer.status === 'IN_PROGRESS'} onClick={() => setStep(2)}
+            <button disabled={!selectedCustomer || customerDocsMissing.length > 0} onClick={() => setStep(2)}
               className="px-5 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-40 transition-colors hover:opacity-90"
               style={{ backgroundColor: BRAND }}>
               Continue →
@@ -344,16 +356,20 @@ export default function NewTermLoanPage() {
             <p className="text-sm font-medium text-gray-700">Documents</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs text-gray-600 mb-1">Security Document</label>
+                <label className="block text-xs text-gray-600 mb-1">Security Document <span className="text-gray-400">(optional)</span></label>
                 <input type="file" accept="image/*,application/pdf" onChange={handleFileUpload(setSecurityDocUrl)}
                   className="block w-full text-xs text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
                 {securityDocUrl && <p className="text-xs text-green-600 mt-1">✓ Uploaded</p>}
               </div>
               <div>
-                <label className="block text-xs text-gray-600 mb-1">Promissory Note</label>
+                <label className="block text-xs text-gray-600 mb-1">Promissory Note <span className="text-red-500">*</span></label>
                 <input type="file" accept="image/*,application/pdf" onChange={handleFileUpload(setPromissoryNoteUrl)}
                   className="block w-full text-xs text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
-                {promissoryNoteUrl && <p className="text-xs text-green-600 mt-1">✓ Uploaded</p>}
+                {promissoryNoteUrl ? (
+                  <p className="text-xs text-green-600 mt-1">✓ Uploaded</p>
+                ) : (
+                  <p className="text-xs text-amber-700 mt-1">Required before this loan can be submitted.</p>
+                )}
               </div>
             </div>
           </div>
@@ -453,7 +469,7 @@ export default function NewTermLoanPage() {
 
           <div className="flex justify-between">
             <button onClick={() => setStep(2)} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">← Edit Details</button>
-            <button disabled={submitting} onClick={handleSubmit}
+            <button disabled={submitting || !promissoryNoteUrl} onClick={handleSubmit}
               className="px-6 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-40 hover:opacity-90 transition-colors"
               style={{ backgroundColor: BRAND }}>
               {submitting ? 'Creating Loan…' : '✓ Create Term Loan'}

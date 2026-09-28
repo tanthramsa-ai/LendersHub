@@ -194,6 +194,15 @@ export class TenantLoansController {
     return this.svc.updateTermLoan(req.user, id, dto);
   }
 
+  @Get('pending-applications')
+  pendingApplications(
+    @Request() req: { user: TenantJwtPayload },
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+  ) {
+    return this.svc.pendingApplications(req.user, page, Math.min(limit, 100));
+  }
+
   @Get(':id')
   findOne(@Request() req: { user: TenantJwtPayload }, @Param('id') id: string) {
     return this.svc.findOne(req.user, id);

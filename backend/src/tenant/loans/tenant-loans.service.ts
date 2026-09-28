@@ -805,6 +805,25 @@ function loanDetailLink(cycleType: string | null | undefined, loanId: string): s
   }
 }
 
+/** An unverified customer can apply — the approver verifies them with the loan — but only with a photo and Aadhaar copy to verify. */
+function assertReadyToApply(customer: { status: string; has_aadhaar_doc: boolean; has_photo: boolean }) {
+  if (customer.status === 'ACTIVE') return;
+  const missing = [
+    !customer.has_photo && 'a photo',
+    !customer.has_aadhaar_doc && "the customer's Aadhaar copy",
+  ].filter(Boolean);
+  if (missing.length) {
+    throw new BadRequestException(`Upload ${missing.join(' and ')} before submitting this loan`);
+  }
+}
+
+/** Every loan-creation path needs a promissory note on file, whatever else it collects. */
+function assertHasPromissoryNote(promissoryNoteUrl: string | undefined | null) {
+  if (!promissoryNoteUrl) {
+    throw new BadRequestException('A promissory note is required before submitting this loan');
+  }
+}
+
 @Injectable()
 export class TenantLoansService {
   // Schemas that already have interest_rate widened to NUMERIC(7,4)
@@ -1007,6 +1026,7 @@ export class TenantLoansService {
       const loanRes = await client.query(`
           SELECT l.*, c.first_name || ' ' || c.last_name AS customer_name,
                  c.phone AS customer_phone, c.id AS customer_id_ref,
+                 c.status AS customer_status, c.aadhaar_doc_url AS customer_aadhaar_doc_url, c.photo_url AS customer_photo_url,
                  b.name AS branch_name,
                  o.first_name || ' ' || o.last_name AS officer_name,
                  n.first_name || ' ' || n.last_name AS npa_marked_by_name,
@@ -1046,6 +1066,11 @@ export class TenantLoansService {
       return {
         id: l.id, loanNumber: l.loan_number,
         customerId: l.customer_id_ref, customerName: l.customer_name, customerPhone: l.customer_phone,
+        // Only meaningful while the loan is PENDING: approving it verifies a new
+        // customer in the same step, so the approver needs to see their documents too.
+        customerStatus: l.customer_status,
+        customerAadhaarDocUrl: l.customer_aadhaar_doc_url ?? null,
+        customerPhotoUrl: l.customer_photo_url ?? null,
         principal: parseFloat(l.principal),
         interestRate: parseFloat(l.interest_rate),
         termMonths: l.term_months, termWeeks: l.term_months, termDays: l.term_months,
@@ -1099,9 +1124,14 @@ export class TenantLoansService {
 
     return this.withSchema(user.schemaName, async (client) => {
       // Validate customer
-      const custRes = await client.query(`SELECT id, status FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
+      const custRes = await client.query(`SELECT id, status, (aadhaar_doc_url IS NOT NULL) AS has_aadhaar_doc, (photo_url IS NOT NULL) AS has_photo FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
       if (!custRes.rows[0]) throw new NotFoundException('Customer not found');
-      if (custRes.rows[0].status !== 'ACTIVE') throw new BadRequestException('Customer must be verified by a manager before a loan can be created');
+      // This bare endpoint predates document uploads and has no security/promissory
+      // fields at all — unlike the 5 cycle-specific create methods below, it isn't
+      // reachable from the app (no create-loan flow points at it), so it's exempt
+      // from the promissory-note requirement rather than growing document support
+      // for a dead path.
+      assertReadyToApply(custRes.rows[0]);
 
       // Generate loan number
       const countRes = await client.query<{ n: string }>(`SELECT COUNT(*) AS n FROM loans`);
@@ -1336,13 +1366,34 @@ export class TenantLoansService {
       throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
     }
     return this.withSchema(user.schemaName, async (client) => {
-      const res = await client.query<{ id: string; status: string; loan_number: string; first_due_date: string; principal: string; customer_id: string }>(
-        `SELECT id, status, loan_number, first_due_date, principal, customer_id FROM loans WHERE id = $1 AND deleted_at IS NULL`,
+      const res = await client.query<{
+        id: string; status: string; loan_number: string; first_due_date: string; principal: string; customer_id: string;
+        cycle_type: string | null; loan_officer_id: string | null;
+        customer_status: string; customer_has_aadhaar_doc: boolean; customer_has_photo: boolean; customer_name: string; customer_code: string;
+      }>(
+        `SELECT l.id, l.status, l.loan_number, l.first_due_date, l.principal, l.customer_id, l.cycle_type, l.loan_officer_id,
+                c.status AS customer_status, (c.aadhaar_doc_url IS NOT NULL) AS customer_has_aadhaar_doc,
+                (c.photo_url IS NOT NULL) AS customer_has_photo,
+                c.first_name || ' ' || c.last_name AS customer_name, c.customer_code
+           FROM loans l JOIN customers c ON c.id = l.customer_id
+          WHERE l.id = $1 AND l.deleted_at IS NULL`,
         [loanId],
       );
       if (!res.rows[0]) throw new NotFoundException('Loan not found');
       if (res.rows[0].status !== 'PENDING') {
         throw new BadRequestException(`Only PENDING loans can be approved (current status: ${res.rows[0].status})`);
+      }
+      // Approving a new customer's first loan is also what verifies the customer,
+      // so there has to be a document on file to have verified.
+      const verifiesCustomer = res.rows[0].customer_status !== 'ACTIVE';
+      if (verifiesCustomer) {
+        const missing = [
+          !res.rows[0].customer_has_photo && 'photo',
+          !res.rows[0].customer_has_aadhaar_doc && 'Aadhaar copy',
+        ].filter(Boolean);
+        if (missing.length) {
+          throw new BadRequestException(`The customer's ${missing.join(' and ')} ${missing.length > 1 ? 'are' : 'is'} missing — ask the agent to upload ${missing.length > 1 ? 'them' : 'it'} before approving`);
+        }
       }
 
       // The agent's original first-due-date was only ever a proposal made at loan
@@ -1390,9 +1441,44 @@ export class TenantLoansService {
           entityLabel: res.rows[0].loan_number,
           metadata: { firstDueDate: newFirstDue },
         });
+
+        // The status guard makes this a no-op when a parallel approval of the
+        // same customer's other loan already verified them.
+        let customerVerified = false;
+        if (verifiesCustomer) {
+          const verified = await client.query(
+            `UPDATE customers SET status = 'ACTIVE', updated_at = NOW(), updated_by = $2
+              WHERE id = $1 AND status <> 'ACTIVE' RETURNING id`,
+            [res.rows[0].customer_id, user.sub],
+          );
+          customerVerified = verified.rows.length > 0;
+          if (customerVerified) {
+            await this.activity.record(client, user, {
+              action: 'customer.verified',
+              entityType: 'customer',
+              entityId: res.rows[0].customer_id,
+              entityLabel: `${res.rows[0].customer_code} — ${res.rows[0].customer_name}`,
+              metadata: { viaLoan: res.rows[0].loan_number },
+            });
+          }
+        }
+
+        const officerId = res.rows[0].loan_officer_id;
+        if (officerId && officerId !== user.sub) {
+          await TenantNotificationsService.insertNotification(client, {
+            userId: officerId,
+            title: `Loan approved — ${res.rows[0].loan_number}`,
+            body: customerVerified
+              ? `${res.rows[0].customer_name} is verified and their loan is now active.`
+              : `The loan for ${res.rows[0].customer_name} is now active.`,
+            type: 'loan', entityType: 'loan', entityId: loanId,
+            link: loanDetailLink(res.rows[0].cycle_type, loanId),
+          });
+        }
+
         await client.query('COMMIT');
         committed = true;
-        return { id: loanId, status: 'APPROVED', firstDueDate: newFirstDue };
+        return { id: loanId, status: 'APPROVED', firstDueDate: newFirstDue, customerVerified };
       } finally {
         if (!committed) await client.query('ROLLBACK');
       }
@@ -1403,18 +1489,27 @@ export class TenantLoansService {
     if (!MANAGER_ROLES.includes(user.role as UserRole)) {
       throw new ForbiddenException('Only Owner, Manager or Admin can reject a loan');
     }
+    // Required: the agent gets this back as the list of things to fix before resubmitting.
+    const reason = (dto.reason ?? '').trim();
+    if (!reason) throw new BadRequestException('A reason is required so the agent knows what to fix');
     return this.withSchema(user.schemaName, async (client) => {
-      const res = await client.query<{ id: string; status: string; loan_number: string }>(
-        `SELECT id, status, loan_number FROM loans WHERE id = $1 AND deleted_at IS NULL`,
+      const res = await client.query<{
+        id: string; status: string; loan_number: string; cycle_type: string | null;
+        loan_officer_id: string | null; customer_name: string;
+      }>(
+        `SELECT l.id, l.status, l.loan_number, l.cycle_type, l.loan_officer_id,
+                c.first_name || ' ' || c.last_name AS customer_name
+           FROM loans l JOIN customers c ON c.id = l.customer_id
+          WHERE l.id = $1 AND l.deleted_at IS NULL`,
         [loanId],
       );
       if (!res.rows[0]) throw new NotFoundException('Loan not found');
       if (res.rows[0].status !== 'PENDING') {
         throw new BadRequestException(`Only PENDING loans can be rejected (current status: ${res.rows[0].status})`);
       }
-      const reason = (dto.reason ?? '').trim() || null;
       // No dedicated rejection-reason column exists; reuse close_comment, mirroring how the
-      // close/reopen flow already stores its comment there.
+      // close/reopen flow already stores its comment there. The customer is left as-is,
+      // so the agent can fix their details and submit a new loan for them.
       await client.query(
         `UPDATE loans SET status = 'REJECTED', close_comment = $2, updated_at = NOW() WHERE id = $1`,
         [loanId, reason],
@@ -1426,7 +1521,75 @@ export class TenantLoansService {
         entityLabel: res.rows[0].loan_number,
         metadata: { reason },
       });
+      const officerId = res.rows[0].loan_officer_id;
+      if (officerId && officerId !== user.sub) {
+        await TenantNotificationsService.insertNotification(client, {
+          userId: officerId,
+          title: `Loan sent back — ${res.rows[0].loan_number}`,
+          body: `${res.rows[0].customer_name}: ${reason}`,
+          type: 'loan', entityType: 'loan', entityId: loanId,
+          link: loanDetailLink(res.rows[0].cycle_type, loanId),
+        });
+      }
       return { id: loanId, status: 'REJECTED', reason };
+    });
+  }
+
+  /**
+   * Loans waiting for a manager, oldest first, with enough about the customer and
+   * which documents are attached to triage the queue. Document contents are left
+   * out (they're base64 blobs); the review page fetches them for one application.
+   */
+  async pendingApplications(user: TenantJwtPayload, page: number, limit: number) {
+    if (!MANAGER_ROLES.includes(user.role as UserRole)) {
+      throw new ForbiddenException('Only Owner, Manager or Admin can review loan applications');
+    }
+    const { page: p, limit: l } = safePagination(page, limit);
+    const offset = (p - 1) * l;
+    return this.withSchema(user.schemaName, async (client) => {
+      const dataRes = await client.query(
+        `SELECT l.id, l.loan_number, l.cycle_type, l.principal, l.created_at,
+                (l.security_doc_url IS NOT NULL) AS has_security_doc,
+                (l.promissory_note_url IS NOT NULL) AS has_promissory_note,
+                c.id AS customer_id, c.first_name || ' ' || c.last_name AS customer_name,
+                c.customer_code, c.phone AS customer_phone, c.status AS customer_status,
+                (c.aadhaar_doc_url IS NOT NULL) AS has_aadhaar_doc,
+                (c.photo_url IS NOT NULL) AS has_photo,
+                o.first_name || ' ' || o.last_name AS submitted_by_name
+           FROM loans l
+           JOIN customers c ON c.id = l.customer_id
+           LEFT JOIN users o ON o.id = l.loan_officer_id
+          WHERE l.status = 'PENDING' AND l.deleted_at IS NULL
+          ORDER BY l.created_at ASC
+          LIMIT $1 OFFSET $2`,
+        [l, offset],
+      );
+      const countRes = await client.query<{ n: string; total_principal: string }>(
+        `SELECT COUNT(*) AS n, COALESCE(SUM(principal), 0) AS total_principal FROM loans WHERE status = 'PENDING' AND deleted_at IS NULL`,
+      );
+      return {
+        data: dataRes.rows.map((r) => ({
+          loanId: r.id,
+          loanNumber: r.loan_number,
+          cycleType: r.cycle_type,
+          principal: parseFloat(r.principal),
+          submittedAt: r.created_at,
+          submittedByName: r.submitted_by_name ?? null,
+          hasSecurityDoc: r.has_security_doc,
+          hasPromissoryNote: r.has_promissory_note,
+          customerId: r.customer_id,
+          customerName: r.customer_name,
+          customerCode: r.customer_code,
+          customerPhone: r.customer_phone,
+          newCustomer: r.customer_status !== 'ACTIVE',
+          hasAadhaarDoc: r.has_aadhaar_doc,
+          hasPhoto: r.has_photo,
+        })),
+        total: parseInt(countRes.rows[0].n),
+        totalPrincipal: parseFloat(countRes.rows[0].total_principal),
+        page: p,
+        limit: l,
+      };
     });
   }
 
@@ -2035,9 +2198,10 @@ export class TenantLoansService {
     const storedRate = isPerDay ? perDayRateToAnnualPct(dto.interestPerDay!) : dto.interestRate;
 
     return this.withSchema(user.schemaName, async (client) => {
-      const custRes = await client.query(`SELECT id, first_name, last_name, status FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
+      const custRes = await client.query(`SELECT id, first_name, last_name, status, (aadhaar_doc_url IS NOT NULL) AS has_aadhaar_doc, (photo_url IS NOT NULL) AS has_photo FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
       if (!custRes.rows[0]) throw new NotFoundException('Customer not found');
-      if (custRes.rows[0].status !== 'ACTIVE') throw new BadRequestException('Customer must be verified by a manager before a loan can be created');
+      assertReadyToApply(custRes.rows[0]);
+      assertHasPromissoryNote(dto.promissoryNoteUrl);
 
       const countRes = await client.query<{ n: string }>(`SELECT COUNT(*) AS n FROM loans`);
       const seq = parseInt(countRes.rows[0].n) + 1;
@@ -2298,9 +2462,10 @@ export class TenantLoansService {
     const storedRate = isPerDay ? Math.round(dto.interestPerDay! * 36.5 * 10000) / 10000 : dto.interestRate;
 
     return this.withSchema(user.schemaName, async (client) => {
-      const custRes = await client.query(`SELECT id, first_name, last_name, status FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
+      const custRes = await client.query(`SELECT id, first_name, last_name, status, (aadhaar_doc_url IS NOT NULL) AS has_aadhaar_doc, (photo_url IS NOT NULL) AS has_photo FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
       if (!custRes.rows[0]) throw new NotFoundException('Customer not found');
-      if (custRes.rows[0].status !== 'ACTIVE') throw new BadRequestException('Customer must be verified by a manager before a loan can be created');
+      assertReadyToApply(custRes.rows[0]);
+      assertHasPromissoryNote(dto.promissoryNoteUrl);
 
       const countRes = await client.query<{ n: string }>(`SELECT COUNT(*) AS n FROM loans`);
       const seq = parseInt(countRes.rows[0].n) + 1;
@@ -2537,9 +2702,10 @@ export class TenantLoansService {
     assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
-      const custRes = await client.query(`SELECT id, status FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
+      const custRes = await client.query(`SELECT id, status, (aadhaar_doc_url IS NOT NULL) AS has_aadhaar_doc, (photo_url IS NOT NULL) AS has_photo FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
       if (!custRes.rows[0]) throw new NotFoundException('Customer not found');
-      if (custRes.rows[0].status !== 'ACTIVE') throw new BadRequestException('Customer must be verified by a manager before a loan can be created');
+      assertReadyToApply(custRes.rows[0]);
+      assertHasPromissoryNote(dto.promissoryNoteUrl);
       if (dto.branchId) {
         const brRes = await client.query(`SELECT id FROM branches WHERE id = $1 AND is_active = TRUE`, [dto.branchId]);
         if (!brRes.rows[0]) throw new NotFoundException('Branch not found');
@@ -2773,9 +2939,10 @@ export class TenantLoansService {
     assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
-      const custRes = await client.query(`SELECT id, status FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
+      const custRes = await client.query(`SELECT id, status, (aadhaar_doc_url IS NOT NULL) AS has_aadhaar_doc, (photo_url IS NOT NULL) AS has_photo FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
       if (!custRes.rows[0]) throw new NotFoundException('Customer not found');
-      if (custRes.rows[0].status !== 'ACTIVE') throw new BadRequestException('Customer must be verified by a manager before a loan can be created');
+      assertReadyToApply(custRes.rows[0]);
+      assertHasPromissoryNote(dto.promissoryNoteUrl);
       if (dto.branchId) {
         const brRes = await client.query(`SELECT id FROM branches WHERE id = $1 AND is_active = TRUE`, [dto.branchId]);
         if (!brRes.rows[0]) throw new NotFoundException('Branch not found');
@@ -2990,9 +3157,10 @@ export class TenantLoansService {
     assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
-      const custRes = await client.query(`SELECT id, status FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
+      const custRes = await client.query(`SELECT id, status, (aadhaar_doc_url IS NOT NULL) AS has_aadhaar_doc, (photo_url IS NOT NULL) AS has_photo FROM customers WHERE id = $1 AND is_active = TRUE`, [dto.customerId]);
       if (!custRes.rows[0]) throw new NotFoundException('Customer not found');
-      if (custRes.rows[0].status !== 'ACTIVE') throw new BadRequestException('Customer must be verified by a manager before a loan can be created');
+      assertReadyToApply(custRes.rows[0]);
+      assertHasPromissoryNote(dto.promissoryNoteUrl);
       if (dto.branchId) {
         const brRes = await client.query(`SELECT id FROM branches WHERE id = $1 AND is_active = TRUE`, [dto.branchId]);
         if (!brRes.rows[0]) throw new NotFoundException('Branch not found');

@@ -296,6 +296,9 @@ export function tenantSchemaDDL(s: string): string[] {
     `ALTER TABLE ${q}."customers" ADD COLUMN IF NOT EXISTS alt_contact_name TEXT`,
     `ALTER TABLE ${q}."customers" ADD COLUMN IF NOT EXISTS alt_contact_relation TEXT`,
     `ALTER TABLE ${q}."customers" ADD COLUMN IF NOT EXISTS aadhaar_doc_url TEXT`,
+    // ── customer photo (idempotent) — mandatory alongside Aadhaar for a loan
+    // application, enforced in TenantLoansService.assertReadyToApply ──────────
+    `ALTER TABLE ${q}."customers" ADD COLUMN IF NOT EXISTS photo_url TEXT`,
     `ALTER TABLE ${q}."customers" ADD COLUMN IF NOT EXISTS updated_by     UUID REFERENCES ${q}."users" (id) ON DELETE SET NULL`,
 
     // ── fund_transactions (ledger for credits/debits/principle) ───────────────
