@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
+import { passwordProblem, PASSWORD_HINT } from '@/lib/password';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -75,7 +76,10 @@ function UserModal({
     if (!form.lastName.trim())  return setError('Last name is required');
     if (!form.email.trim())     return setError('Email is required');
     if (!form.phone.trim())     return setError('Phone number is required');
-    if (!isEdit && !form.password) return setError('Password is required for new users');
+    if (!isEdit) {
+      const problem = passwordProblem(form.password);
+      if (problem) return setError(problem);
+    }
     setError(''); setLoading(true);
     try {
       if (isEdit) {
@@ -161,7 +165,7 @@ function UserModal({
               <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1.5">Password *</label>
               <input
                 type="password" value={form.password} onChange={(e) => set('password', e.target.value)}
-                placeholder="Min 6 characters" className={inputCls}
+                placeholder={PASSWORD_HINT} className={inputCls}
               />
             </div>
           )}
@@ -188,7 +192,8 @@ function ResetPasswordModal({ user, onClose, onSuccess }: { user: TenantTeamMemb
   const [error, setError]       = useState('');
 
   async function submit() {
-    if (password.length < 6) return setError('Password must be at least 6 characters');
+    const problem = passwordProblem(password);
+    if (problem) return setError(problem);
     setError(''); setLoading(true);
     try { await resetTenantUserPassword(user.id, password); onSuccess(); }
     catch (e: unknown) { setError(e instanceof Error ? e.message : 'Failed to reset password'); }
@@ -205,7 +210,7 @@ function ResetPasswordModal({ user, onClose, onSuccess }: { user: TenantTeamMemb
         <p className="text-sm text-gray-500 mb-4">{user.firstName} {user.lastName} · {user.email}</p>
         <input
           type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-          placeholder="New password (min 6 chars)"
+          placeholder={`New password (${PASSWORD_HINT.toLowerCase()})`}
           className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
         {error && <p className="text-sm text-red-600 mb-3">{error}</p>}

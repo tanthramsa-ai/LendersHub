@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
@@ -13,6 +13,56 @@ export interface CreateLoanTypeDto {
   maxInterestRate?: number;
   minTermMonths?: number;
   maxTermMonths?: number;
+}
+
+type LoanTypeLimits = Pick<CreateLoanTypeDto,
+  'minAmount' | 'maxAmount' | 'minInterestRate' | 'maxInterestRate' | 'minTermMonths' | 'maxTermMonths'>;
+
+const LIMIT_KEYS: (keyof LoanTypeLimits)[] = ['minAmount', 'maxAmount', 'minInterestRate', 'maxInterestRate', 'minTermMonths', 'maxTermMonths'];
+
+/** Blank means "no limit"; anything else must be a real number (numeric strings are what the form posts). */
+function limitValue(raw: unknown, label: string): number | undefined {
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  const n = typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : raw;
+  if (typeof n !== 'number' || !Number.isFinite(n)) throw new BadRequestException(`${label} must be a number`);
+  if (n < 0) throw new BadRequestException(`${label} cannot be negative`);
+  return n;
+}
+
+/**
+ * Validates a loan type's name and its min/max pairs. `fields` is what the request sets;
+ * `existing` fills in the other half of a pair on a partial update so min can't be moved
+ * above a max that is already stored (or vice versa).
+ */
+function validateLoanType(fields: Partial<CreateLoanTypeDto>, existing: Partial<LoanTypeLimits> = {}, requireName = false): void {
+  if (requireName || fields.name !== undefined) {
+    if (typeof fields.name !== 'string' || !fields.name.trim()) throw new BadRequestException('Name is required');
+    if (fields.name.trim().length > 100) throw new BadRequestException('Name is too long (maximum 100 characters)');
+  }
+  if (fields.description != null && (typeof fields.description !== 'string' || fields.description.length > 500)) {
+    throw new BadRequestException('Description must be text of at most 500 characters');
+  }
+  const pick = (key: keyof LoanTypeLimits, label: string) =>
+    key in fields ? limitValue(fields[key], label) : limitValue(existing[key], label);
+  // Only validate the keys the request actually sent, then compare each pair using stored values for the rest.
+  for (const key of LIMIT_KEYS) {
+    if (key in fields) limitValue(fields[key], key);
+  }
+  const pairs: [keyof LoanTypeLimits, keyof LoanTypeLimits, string][] = [
+    ['minAmount', 'maxAmount', 'amount'], ['minInterestRate', 'maxInterestRate', 'interest rate'], ['minTermMonths', 'maxTermMonths', 'term'],
+  ];
+  for (const [lo, hi, what] of pairs) {
+    const a = pick(lo, lo), b = pick(hi, hi);
+    if (a !== undefined && b !== undefined && a > b) throw new BadRequestException(`Minimum ${what} cannot be greater than the maximum`);
+  }
+  for (const key of ['maxInterestRate', 'minInterestRate'] as const) {
+    const v = pick(key, key);
+    if (v !== undefined && v > 200) throw new BadRequestException('Interest rate cannot exceed 200% p.a.');
+  }
+  for (const key of ['minTermMonths', 'maxTermMonths'] as const) {
+    const v = pick(key, key);
+    if (v !== undefined && !Number.isInteger(v)) throw new BadRequestException('Term must be a whole number of months');
+  }
 }
 
 @Injectable()
@@ -201,6 +251,7 @@ export class TenantLoanTypesService {
     if (!MANAGER_ROLES.includes(user.role as UserRole)) {
       throw new ForbiddenException('Only Owner, Manager or Admin can manage loan types');
     }
+    validateLoanType(dto, {}, true);
     return this.withSchema(user.schemaName, async (client) => {
       const res = await client.query(`
         INSERT INTO loan_types (name, description, min_amount, max_amount,
@@ -229,8 +280,18 @@ export class TenantLoanTypesService {
       throw new ForbiddenException('Only Owner, Manager or Admin can manage loan types');
     }
     return this.withSchema(user.schemaName, async (client) => {
-      const existing = await client.query(`SELECT id FROM loan_types WHERE id = $1 AND deleted_at IS NULL`, [id]);
+      const existing = await client.query(
+        `SELECT id, min_amount, max_amount, min_interest_rate, max_interest_rate, min_term_months, max_term_months
+           FROM loan_types WHERE id = $1 AND deleted_at IS NULL`,
+        [id],
+      );
       if (!existing.rows[0]) throw new NotFoundException('Loan type not found');
+      const e = existing.rows[0];
+      validateLoanType(dto, {
+        minAmount: e.min_amount ?? undefined, maxAmount: e.max_amount ?? undefined,
+        minInterestRate: e.min_interest_rate ?? undefined, maxInterestRate: e.max_interest_rate ?? undefined,
+        minTermMonths: e.min_term_months ?? undefined, maxTermMonths: e.max_term_months ?? undefined,
+      });
 
       const sets: string[] = ['updated_at = NOW()'];
       const params: unknown[] = [];

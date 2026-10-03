@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { passwordProblem } from '@/lib/password';
 import { useRouter, useParams } from 'next/navigation';
 import { sessionStore } from '@/services/super-admin-auth';
 import { tenantsApi, type TenantDetail, type Branch, type CreateBranchPayload, type TenantUserRecord, type CreateTenantUserPayload } from '@/services/tenants';
@@ -156,7 +157,8 @@ function AddTenantUserModal({ tenantId, onClose, onSuccess }: { tenantId: string
   async function submit() {
     if (!form.firstName.trim() || !form.lastName.trim()) return setError('First and last name are required');
     if (!form.email.trim()) return setError('Email is required');
-    if (form.password.length < 6) return setError('Password must be at least 6 characters');
+    const problem = passwordProblem(form.password);
+    if (problem) return setError(problem);
     setError(''); setLoading(true);
     try {
       await tenantsApi.createTenantUser(tenantId, {
@@ -352,7 +354,8 @@ function ResetTenantUserPasswordModal({
   const displayName = `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() || user.email;
 
   async function submit() {
-    if (password.length < 6) return setError('Password must be at least 6 characters');
+    const problem = passwordProblem(password);
+    if (problem) return setError(problem);
     setError('');
     setLoading(true);
     try {

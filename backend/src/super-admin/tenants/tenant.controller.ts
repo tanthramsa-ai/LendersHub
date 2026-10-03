@@ -1,6 +1,6 @@
 import {
   Controller, Get, Post, Put, Patch, Delete, Param, Body, Query, Req,
-  UseGuards, HttpCode, HttpStatus, ParseIntPipe, DefaultValuePipe,
+  UseGuards, HttpCode, HttpStatus, ParseIntPipe, DefaultValuePipe, NotFoundException,
 } from '@nestjs/common';
 import { TenantService } from './tenant.service';
 import { TenantSchemaRepairService } from './tenant-schema-repair.service';
@@ -76,8 +76,10 @@ export class TenantController {
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.tenants.findOne(id);
+  async findOne(@Param('id') id: string) {
+    const tenant = await this.tenants.findOne(id);
+    if (!tenant) throw new NotFoundException('Tenant not found');
+    return tenant;
   }
 
   @Put(':id/subscription')
@@ -98,8 +100,9 @@ export class TenantController {
   }
 
   @Delete(':id')
-  softDelete(@Param('id') id: string, @Body() dto: { confirmSubdomain: string }, @Req() req: any) {
-    return this.tenants.softDelete(id, dto.confirmSubdomain ?? '', this.actorFrom(req), this.ipFrom(req));
+  softDelete(@Param('id') id: string, @Body() dto: { confirmSubdomain?: string } | undefined, @Req() req: any) {
+    // dto is undefined when the request has no body; the service rejects an empty confirmation with a 400.
+    return this.tenants.softDelete(id, dto?.confirmSubdomain ?? '', this.actorFrom(req), this.ipFrom(req));
   }
 
   // ── Tenant user endpoints (super-admin bootstrap) ───────────────────────────

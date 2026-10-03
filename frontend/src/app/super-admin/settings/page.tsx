@@ -336,7 +336,7 @@ export default function SettingsPage() {
               { label: 'Environment', value: 'Development' },
               { label: 'API', value: API },
               { label: 'Frontend', value: process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3010' },
-              { label: 'Auth', value: 'JWT + TOTP (RS256)' },
+              { label: 'Auth', value: 'JWT + TOTP (HS256)' },
               { label: 'Database', value: 'PostgreSQL 15' },
               { label: 'Multi-tenancy', value: 'Schema-per-tenant' },
             ].map(({ label, value }) => (

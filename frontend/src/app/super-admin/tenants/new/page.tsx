@@ -409,7 +409,7 @@ export default function NewTenantPage() {
                   <Field label="Email" required hint="Welcome email will be sent here">
                     <Input type="email" value={form.adminEmail} onChange={(e) => set('adminEmail', e.target.value)} placeholder="admin@swiftfinance.com" required />
                   </Field>
-                  <Field label="Temporary Password" hint="Auto-generated if left blank">
+                  <Field label="Temporary Password" hint="Generated for you and shown once after the tenant is created">
                     <Input type="text" value="" disabled placeholder="Auto-generated" className="cursor-not-allowed" />
                   </Field>
                 </div>

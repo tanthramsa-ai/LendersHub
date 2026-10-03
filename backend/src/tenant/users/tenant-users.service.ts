@@ -1,3 +1,4 @@
+import { assertStrongPassword } from '../../common/utils/password';
 import { Injectable, ConflictException, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -217,6 +218,7 @@ export class TenantUsersService {
   async create(user: TenantJwtPayload, dto: CreateUserDto) {
     this.assertManager(user);
     if (!dto.phone?.trim()) throw new BadRequestException('Phone number is required');
+    assertStrongPassword(dto.password);
 
     const hashed = await bcrypt.hash(dto.password, 10);
 
@@ -325,6 +327,7 @@ export class TenantUsersService {
 
   async resetPassword(user: TenantJwtPayload, id: string, newPassword: string) {
     this.assertManager(user);
+    assertStrongPassword(newPassword, 'New password');
     const hashed = await bcrypt.hash(newPassword, 10);
 
     return this.withSchema(user.schemaName, async (client) => {

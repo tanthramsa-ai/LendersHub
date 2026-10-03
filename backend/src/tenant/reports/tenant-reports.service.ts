@@ -1,3 +1,4 @@
+import { isValidYmd } from '../../common/utils/dates';
 import { Injectable, BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
@@ -43,7 +44,7 @@ export class TenantReportsService {
   }
 
   private assertDate(d: string, label: string) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) throw new BadRequestException(`${label} must be YYYY-MM-DD`);
+    if (!isValidYmd(d)) throw new BadRequestException(`${label} must be YYYY-MM-DD`);
   }
 
   private assertMonth(m: string, label: string) {

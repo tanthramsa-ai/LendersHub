@@ -1,3 +1,4 @@
+import { isValidYmd } from '../../common/utils/dates';
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
@@ -426,7 +427,7 @@ export class TenantCollectionsService {
   }
 
   async getByDate(user: TenantJwtPayload, date: string, page: number, limit: number, search?: string) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new BadRequestException('date must be YYYY-MM-DD');
+    if (!isValidYmd(date)) throw new BadRequestException('date must be YYYY-MM-DD');
     await this.ensureAssignedTo(user.schemaName);
     return this.withSchema(user.schemaName, async (client) => {
       const offset = (page - 1) * limit;
@@ -668,7 +669,7 @@ export class TenantCollectionsService {
 
   /** Collection Calendar — everyone's items for a Day/Week/Month range (tenant-wide for every role). */
   async getCalendarItems(user: TenantJwtPayload, view: 'day' | 'week' | 'month', date: string) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new BadRequestException('date must be YYYY-MM-DD');
+    if (!isValidYmd(date)) throw new BadRequestException('date must be YYYY-MM-DD');
     await this.ensureAssignedTo(user.schemaName);
     await this.ensureCollectionWorkflow(user.schemaName);
     const { start, end } = this.rangeForView(view, date);
@@ -727,7 +728,7 @@ export class TenantCollectionsService {
 
   /** Calendar Summary (spec §10) — authoritative backend totals for the selected range. */
   async getCalendarSummary(user: TenantJwtPayload, view: 'day' | 'week' | 'month', date: string) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new BadRequestException('date must be YYYY-MM-DD');
+    if (!isValidYmd(date)) throw new BadRequestException('date must be YYYY-MM-DD');
     await this.ensureAssignedTo(user.schemaName);
     await this.ensureCollectionWorkflow(user.schemaName);
     const { start, end } = this.rangeForView(view, date);

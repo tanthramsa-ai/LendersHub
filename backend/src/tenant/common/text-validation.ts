@@ -76,6 +76,9 @@ export function assertHasLetter(value: string | undefined | null, fieldLabel: st
  * punctuation. `requireLetter` distinguishes a field that must be readable text
  * (a name) from one where digits alone are legitimate (a door-number address).
  */
+/** Ceiling for any single free-text field (names, places, purposes); generous, but not unbounded. */
+export const MAX_TEXT_LENGTH = 200;
+
 export function assertAllowedChars(
   value: string | undefined | null,
   fieldLabel: string,
@@ -83,8 +86,14 @@ export function assertAllowedChars(
   describeAllowed: string,
   requireLetter = true,
 ): void {
+  if (value !== undefined && value !== null && typeof value !== 'string') {
+    throw new BadRequestException(`${fieldLabel} must be text`);
+  }
   const trimmed = value?.trim();
   if (!trimmed) return;
+  if (trimmed.length > MAX_TEXT_LENGTH) {
+    throw new BadRequestException(`${fieldLabel} is too long (maximum ${MAX_TEXT_LENGTH} characters)`);
+  }
 
   if (!allowed.test(trimmed)) {
     throw new BadRequestException(`${fieldLabel} can only contain ${describeAllowed}`);

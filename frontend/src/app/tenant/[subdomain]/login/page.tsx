@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Mail, Phone, Lock, Eye, EyeOff, ArrowRight, ArrowLeft, ShieldCheck, Building2 } from 'lucide-react';
 import { AuthShell } from '@/components/AuthShell';
@@ -29,6 +29,8 @@ export default function TenantLoginPage() {
   const [maskedPhone, setMaskedPhone] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  // Sent here by tenantFetch when the session token expired.
+  const sessionExpired = useSearchParams().get('expired') === '1';
 
   function handleIdentifierChange(val: string) {
     if (isEmail(val)) {
@@ -125,6 +127,7 @@ export default function TenantLoginPage() {
               </button>
             </div>
           </div>
+          {sessionExpired && !error && <p className="lh-field-error" role="status">Your session has expired. Please sign in again.</p>}
           {error && <p className="lh-field-error" role="alert">{error}</p>}
           <button type="submit" className="lh-button lh-button--form" disabled={loading || !canSubmit || !password}>
             {loading ? 'Verifying…' : 'Continue'}<ArrowRight size={18} aria-hidden="true" />
