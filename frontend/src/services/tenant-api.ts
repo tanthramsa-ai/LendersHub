@@ -5,6 +5,23 @@ function getToken(): string | null {
   return localStorage.getItem('tenant_token');
 }
 
+/**
+ * The 8-hour session token expired (or the account/organisation was disabled). Without this
+ * every call just failed with a bare "Unauthorized" while the UI still looked signed in:
+ * lists came back empty and forms showed raw errors, with no hint that signing in again fixes it.
+ */
+function endSession(): never {
+  let subdomain = '';
+  try { subdomain = (JSON.parse(localStorage.getItem('tenant_info') ?? 'null') as { subdomain?: string } | null)?.subdomain ?? ''; } catch { /* unreadable: fall back to the URL */ }
+  if (!subdomain) {
+    const first = window.location.pathname.split('/').filter(Boolean)[0];
+    subdomain = first === 'tenant' ? window.location.pathname.split('/').filter(Boolean)[1] ?? '' : first ?? '';
+  }
+  clearTenantSession();
+  if (subdomain) window.location.assign(`/${subdomain}/login?expired=1`);
+  throw new Error('Your session has expired. Please sign in again.');
+}
+
 async function tenantFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const token = getToken();
   const res = await fetch(`${BASE}${path}`, {
@@ -15,6 +32,11 @@ async function tenantFetch<T>(path: string, options?: RequestInit): Promise<T> {
       ...options?.headers,
     },
   });
+  // A 401 on an ordinary call made with a stored token means the session is over. The auth
+  // endpoints are excluded: there a 401 is just "wrong password" / "wrong code" and the
+  // login form should show it (/auth/me is the exception: it is a session check).
+  const isCredentialCall = path.startsWith('/api/v1/tenant/auth/') && !path.startsWith('/api/v1/tenant/auth/me');
+  if (res.status === 401 && token && !isCredentialCall) endSession();
   if (!res.ok) {
     const body = await res.json().catch(() => ({})) as { message?: string | string[] };
     const raw = body?.message;
@@ -303,6 +325,7 @@ export async function exportCustomersCsv(ids: string[]): Promise<void> {
   const res = await fetch(`${BASE}/api/v1/tenant/customers/export?ids=${ids.map(encodeURIComponent).join(',')}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
+  if (res.status === 401 && token) endSession();
   if (!res.ok) {
     const body = await res.json().catch(() => ({})) as { message?: string | string[] };
     const raw = body?.message;
