@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { earliestFirstDueDate } from '@/lib/first-due-date';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { clampTenureInput } from '@/lib/numeric-input';
@@ -441,7 +442,7 @@ export default function NewAgentRiskLoanPage() {
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">First Interest Due Date <span className="text-red-500">*</span></label>
-                <input type="date" value={form.firstDueDate} onChange={(e) => setF('firstDueDate', e.target.value)} className={inputCls} />
+                <input type="date" value={form.firstDueDate} min={earliestFirstDueDate()} onChange={(e) => setF('firstDueDate', e.target.value)} className={inputCls} />
               </div>
               <div className="col-span-2 sm:col-span-1">
                 <label className="block text-xs font-medium text-gray-600 mb-1">Loan Purpose</label>

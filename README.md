@@ -266,6 +266,7 @@ To create a tenant: log in as super-admin → **Tenants → New Tenant**.
 | `REDIS_PORT` | | Redis port (default: `6380`) |
 | `SUPER_ADMIN_EMAIL` | | Seed email (default: `admin@lendershub.com`) |
 | `SUPER_ADMIN_PASSWORD` | | Seed password (default: `Admin@LH2024!`) |
+| `MASTER_OTP` | | **Temporary stopgap — leave unset.** When set, that code is accepted as the login OTP for *any* user with a phone, so the OTP stops being a second factor. Only for environments where SMS delivery is not configured yet; the backend logs a warning at boot while it is set |
 
 > SMS and WhatsApp credentials are configured per-tenant via **Settings → SMS / OTP** and **Settings → WhatsApp** in the tenant portal — not in `.env`.
 

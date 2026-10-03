@@ -3,6 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import { Pool } from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { rlsContext } from '../rls/rls-context';
+import { resetSearchPathOnAcquire } from './pool-hygiene';
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
@@ -10,6 +11,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
   constructor() {
     const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    resetSearchPathOnAcquire(pool);
     const adapter = new PrismaPg(pool);
     super({ adapter } as any);
     this.pool = pool;

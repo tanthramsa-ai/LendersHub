@@ -118,6 +118,16 @@ function round2(amount: number): number {
  * Calendar date as YYYY-MM-DD. node-pg hands back DATE columns as a Date at *local*
  * midnight, so toISOString() would roll back a day west of UTC — read the local parts.
  */
+/**
+ * A first due date before yesterday is a typo, not a plan: nothing can be collected on it, and
+ * the whole schedule would be born overdue. One day of grace covers the gap between the server's
+ * UTC date and a user's local (IST) date. (Approving re-anchors the clock to the approver's date.)
+ */
+function assertFirstDueDateNotPast(firstDueDate: string): void {
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  if (firstDueDate < cutoff) throw new BadRequestException('firstDueDate cannot be in the past');
+}
+
 function toYmd(value: unknown): string {
   if (value instanceof Date) {
     const m = String(value.getMonth() + 1).padStart(2, '0');
@@ -849,14 +859,15 @@ export class TenantLoansService {
     client: import('pg').PoolClient,
     loanId: string,
   ): Promise<{
-    loan_number: string; cycle_type: string;
+    loan_number: string; cycle_type: string; first_due_ymd: string | null;
     loan_type_id: string | null; security_doc_url: string | null; promissory_note_url: string | null;
   }> {
     const loanRes = await client.query<{
-      loan_number: string; status: string; cycle_type: string; pending_closure: boolean;
+      loan_number: string; status: string; cycle_type: string; pending_closure: boolean; first_due_ymd: string | null;
       loan_type_id: string | null; security_doc_url: string | null; promissory_note_url: string | null;
     }>(
-      `SELECT loan_number, status, cycle_type, pending_closure, loan_type_id, security_doc_url, promissory_note_url
+      `SELECT loan_number, status, cycle_type, pending_closure, loan_type_id, security_doc_url, promissory_note_url,
+              to_char(first_due_date, 'YYYY-MM-DD') AS first_due_ymd
        FROM loans WHERE id = $1 AND deleted_at IS NULL`,
       [loanId],
     );
@@ -1057,6 +1068,7 @@ export class TenantLoansService {
     if (!Number.isFinite(dto.interestRate) || dto.interestRate < 0 || dto.interestRate > 100) throw new BadRequestException('Invalid interest rate');
     if (!Number.isInteger(dto.termMonths) || dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
     if (dto.firstDueDate && !isValidYmd(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
+    if (dto.firstDueDate) assertFirstDueDateNotPast(dto.firstDueDate);
     assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
@@ -1338,6 +1350,7 @@ export class TenantLoansService {
       // schedule to the approver's chosen date (a uniform day-shift, not a re-amortization)
       // preserves every already-computed principal/interest split, so no cycle-specific
       // schedule math needs to run here.
+      if (dto.firstDueDate && dto.firstDueDate !== toYmd(res.rows[0].first_due_date)) assertFirstDueDateNotPast(dto.firstDueDate);
       const newFirstDue = dto.firstDueDate ?? toYmd(res.rows[0].first_due_date);
 
       // BEGIN/COMMIT: the schedule shift, status flip, and ledger post must
@@ -2145,6 +2158,7 @@ export class TenantLoansService {
     if (!Number.isFinite(dto.principal) || dto.principal <= 0 || dto.principal > MAX_MONEY_AMOUNT) throw new BadRequestException('Principal must be a positive amount');
     if (!Number.isInteger(dto.termWeeks) || dto.termWeeks < 1 || dto.termWeeks > 99) throw new BadRequestException('Term must be 1–99 weeks');
     if (!dto.firstDueDate || !isValidYmd(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
+    assertFirstDueDateNotPast(dto.firstDueDate);
     assertWeeklyRateInput(dto.calculationType, dto.interestRate, dto.interestPerDay);
     assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
 
@@ -2239,6 +2253,7 @@ export class TenantLoansService {
 
     return this.withSchema(user.schemaName, async (client) => {
       const loan = await this.assertLoanEditable(client, loanId);
+      if (dto.firstDueDate !== loan.first_due_ymd) assertFirstDueDateNotPast(dto.firstDueDate);
       if (loan.cycle_type !== 'WEEKLY') throw new BadRequestException('Loan is not a weekly loan');
 
       const { schedule, emi } = computeWeeklySchedule(
@@ -2408,6 +2423,7 @@ export class TenantLoansService {
     if (!Number.isFinite(dto.principal) || dto.principal <= 0 || dto.principal > MAX_MONEY_AMOUNT) throw new BadRequestException('Principal must be a positive amount');
     if (!Number.isInteger(dto.termDays) || dto.termDays < 1 || dto.termDays > 3650) throw new BadRequestException('Term must be 1–3650 days');
     if (!dto.firstDueDate || !isValidYmd(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
+    assertFirstDueDateNotPast(dto.firstDueDate);
     assertWeeklyRateInput(dto.calculationType, dto.interestRate, dto.interestPerDay);
     if (!['DAILY_NO_SUNDAY', 'DAILY_WITH_SUNDAY'].includes(dto.cycleType)) throw new BadRequestException('cycleType must be DAILY_NO_SUNDAY or DAILY_WITH_SUNDAY');
     assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
@@ -2503,6 +2519,7 @@ export class TenantLoansService {
 
     return this.withSchema(user.schemaName, async (client) => {
       const loan = await this.assertLoanEditable(client, loanId);
+      if (dto.firstDueDate !== loan.first_due_ymd) assertFirstDueDateNotPast(dto.firstDueDate);
       if (loan.cycle_type !== 'DAILY_NO_SUNDAY' && loan.cycle_type !== 'DAILY_WITH_SUNDAY') {
         throw new BadRequestException('Loan is not a daily loan');
       }
@@ -2655,6 +2672,7 @@ export class TenantLoansService {
     if (!Number.isFinite(dto.interestRate) || dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
     if (!Number.isInteger(dto.termMonths) || dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
     if (!dto.firstDueDate || !isValidYmd(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
+    assertFirstDueDateNotPast(dto.firstDueDate);
     assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
@@ -2745,6 +2763,7 @@ export class TenantLoansService {
 
     return this.withSchema(user.schemaName, async (client) => {
       const loan = await this.assertLoanEditable(client, loanId);
+      if (dto.firstDueDate !== loan.first_due_ymd) assertFirstDueDateNotPast(dto.firstDueDate);
       if (loan.cycle_type !== 'MONTHLY') throw new BadRequestException('Loan is not a monthly loan');
       if (dto.branchId) {
         const brRes = await client.query(`SELECT id FROM branches WHERE id = $1 AND is_active = TRUE`, [dto.branchId]);
@@ -2892,6 +2911,8 @@ export class TenantLoansService {
     if (!Number.isFinite(dto.principal) || dto.principal <= 0 || dto.principal > MAX_MONEY_AMOUNT) throw new BadRequestException('Principal must be a positive amount');
     if (!Number.isFinite(dto.interestRate) || dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
     if (!Number.isInteger(dto.termMonths) || dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
+    if (!dto.firstDueDate || !isValidYmd(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
+    assertFirstDueDateNotPast(dto.firstDueDate);
     assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
@@ -2977,10 +2998,12 @@ export class TenantLoansService {
     if (!Number.isFinite(dto.principal) || dto.principal <= 0 || dto.principal > MAX_MONEY_AMOUNT) throw new BadRequestException('Principal must be a positive amount');
     if (!Number.isFinite(dto.interestRate) || dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
     if (!Number.isInteger(dto.termMonths) || dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
+    if (!dto.firstDueDate || !isValidYmd(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
     assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
       const loan = await this.assertLoanEditable(client, loanId);
+      if (dto.firstDueDate !== loan.first_due_ymd) assertFirstDueDateNotPast(dto.firstDueDate);
       if (loan.cycle_type !== 'AGENT_RISK') throw new BadRequestException('Loan is not an agent risk loan');
       if (dto.branchId) {
         const brRes = await client.query(`SELECT id FROM branches WHERE id = $1 AND is_active = TRUE`, [dto.branchId]);

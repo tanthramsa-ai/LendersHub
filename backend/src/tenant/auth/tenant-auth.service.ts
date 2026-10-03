@@ -47,7 +47,16 @@ export class TenantAuthService {
     private prisma: PrismaService,
     private jwt: JwtService,
     private sms: SmsService,
-  ) {}
+  ) {
+    // A set MASTER_OTP means the login OTP is not a real second factor: anyone who knows a user's
+    // email/phone and password (or, for a password-less row, nothing at all) can use it. It exists
+    // only until SMS delivery is live, so make it impossible to forget in a production log.
+    if (this.masterOtp) {
+      this.logger.warn(
+        `MASTER_OTP is set: that code is accepted as the LOGIN OTP for ANY user with a phone number${process.env.NODE_ENV === 'production' ? ' IN PRODUCTION' : ''}. Unset it as soon as SMS delivery works.`,
+      );
+    }
+  }
 
   // ── Step 1: validate credentials, send OTP ──────────────────────────────────
 
