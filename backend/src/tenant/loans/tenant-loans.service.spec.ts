@@ -194,6 +194,22 @@ describe('TenantLoansService', () => {
     });
   });
 
+  describe('pendingApplications', () => {
+    it('lists the newest submission first, with a tiebreaker so pages stay stable', async () => {
+      query.mockImplementation(async (sql: string) => (sql.includes('COUNT(*)') ? { rows: [{ n: '0', total_principal: '0' }] } : { rows: [] }));
+
+      await svc.pendingApplications(makeUser(), 1, 20);
+
+      const list = query.mock.calls.map((c) => String(c[0])).find((q) => q.includes('ORDER BY'))!;
+      expect(list).toMatch(/ORDER BY l\.created_at DESC, l\.id DESC/);
+      expect(list).not.toMatch(/created_at ASC/);
+    });
+
+    it('is for managers only', async () => {
+      await expect(svc.pendingApplications(makeUser({ role: 'AGENT' }), 1, 20)).rejects.toThrow(ForbiddenException);
+    });
+  });
+
   describe('rejectLoan', () => {
     it('requires a reason, since the agent needs to know what to fix', async () => {
       await expect(svc.rejectLoan(makeUser(), 'loan1', { reason: '   ' })).rejects.toThrow(BadRequestException);

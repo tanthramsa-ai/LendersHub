@@ -1505,7 +1505,8 @@ export class TenantLoansService {
   }
 
   /**
-   * Loans waiting for a manager, oldest first, with enough about the customer and
+   * Loans waiting for a manager, newest first (what was just submitted is what the manager
+   * opens the queue to see; older ones sit below), with enough about the customer and
    * which documents are attached to triage the queue. Document contents are left
    * out (they're base64 blobs); the review page fetches them for one application.
    */
@@ -1529,7 +1530,7 @@ export class TenantLoansService {
            JOIN customers c ON c.id = l.customer_id
            LEFT JOIN users o ON o.id = l.loan_officer_id
           WHERE l.status = 'PENDING' AND l.deleted_at IS NULL
-          ORDER BY l.created_at ASC
+          ORDER BY l.created_at DESC, l.id DESC
           LIMIT $1 OFFSET $2`,
         [l, offset],
       );
