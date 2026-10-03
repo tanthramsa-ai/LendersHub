@@ -18,11 +18,11 @@ const STATUS_BADGE: Record<string, string> = {
   REJECTED:  'bg-red-50 text-red-400',
 };
 
-type LoanStatusFilter = '' | 'APPROVED' | 'DISBURSED' | 'CLOSED' | 'DEFAULTED';
+type LoanStatusFilter = '' | 'ACTIVE' | 'APPROVED' | 'DISBURSED' | 'CLOSED' | 'DEFAULTED';
 
 const LOAN_FILTERS: { label: string; value: LoanStatusFilter; color: string }[] = [
   { label: 'All', value: '', color: 'text-gray-700' },
-  { label: 'Active', value: 'DISBURSED', color: 'text-green-700' },
+  { label: 'Active', value: 'ACTIVE', color: 'text-green-700' },
   { label: 'Closed', value: 'CLOSED', color: 'text-slate-700' },
   { label: 'NPA / Defaulted', value: 'DEFAULTED', color: 'text-red-600' },
 ];

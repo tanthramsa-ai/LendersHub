@@ -17,7 +17,7 @@ const STATUS_COLORS: Record<string, string> = {
   DEFAULTED: 'bg-red-100 text-red-700',
 };
 
-const STATUS_FILTERS = ['', 'DISBURSED', 'CLOSED', 'DEFAULTED', 'PENDING'];
+const STATUS_FILTERS = ['', 'APPROVED', 'DISBURSED', 'CLOSED', 'DEFAULTED', 'PENDING'];
 
 export default function WeeklyLoansPage() {
   const params = useParams<{ subdomain: string }>();

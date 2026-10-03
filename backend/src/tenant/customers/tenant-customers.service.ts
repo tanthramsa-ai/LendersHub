@@ -148,7 +148,7 @@ export class TenantCustomersService {
                  (c.aadhaar_doc_url IS NOT NULL) AS has_aadhaar_doc,
                  (c.photo_url IS NOT NULL) AS has_photo,
                  b.name AS branch_name,
-                 (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status = 'DISBURSED') AS active_loans,
+                 (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status IN ('APPROVED','DISBURSED')) AS active_loans,
                  (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status = 'CLOSED') AS closed_loans,
                  ${npaLoanExists} AS has_npa_loan
           FROM customers c
@@ -197,7 +197,7 @@ export class TenantCustomersService {
         SELECT c.*,
           b.name AS branch_name, b.code AS branch_code,
           (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL) AS total_loans,
-          (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status = 'DISBURSED') AS active_loans,
+          (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status IN ('APPROVED','DISBURSED')) AS active_loans,
           (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status = 'CLOSED') AS closed_loans,
           (SELECT COALESCE(SUM(amount), 0) FROM payments p JOIN loans l ON l.id = p.loan_id WHERE l.customer_id = c.id) AS total_paid,
           (SELECT COUNT(*) FROM loans l WHERE l.customer_id = c.id AND l.deleted_at IS NULL
@@ -249,7 +249,7 @@ export class TenantCustomersService {
           SELECT c.customer_code, c.first_name, c.last_name, c.phone, c.email, c.pan_number,
                  c.credit_score, c.locality, c.city, c.state, c.is_active, c.created_at,
                  b.name AS branch_name,
-                 (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status = 'DISBURSED') AS active_loans,
+                 (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status IN ('APPROVED','DISBURSED')) AS active_loans,
                  (SELECT COUNT(*) FROM loans WHERE customer_id = c.id AND deleted_at IS NULL AND status = 'CLOSED') AS closed_loans
           FROM customers c
           LEFT JOIN branches b ON b.id = c.branch_id

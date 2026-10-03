@@ -1,5 +1,6 @@
 import { isValidYmd } from '../../common/utils/dates';
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
+import { ACTIVE_LOAN_STATUSES, loanStatusFilter } from '../common/loan-status';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { TenantNotificationsService } from '../notifications/tenant-notifications.service';
@@ -905,7 +906,7 @@ export class TenantLoansService {
         filterParams.push(user.sub);
       }
 
-      if (opts.status) { conditions.push(`l.status = $${idx++}`); filterParams.push(opts.status); }
+      if (opts.status) { conditions.push(`l.status = ANY($${idx++}::loan_status[])`); filterParams.push(loanStatusFilter(opts.status)); }
       if (opts.customerId) { conditions.push(`l.customer_id = $${idx++}`); filterParams.push(opts.customerId); }
       if (opts.branchId) { conditions.push(`l.branch_id = $${idx++}`); filterParams.push(opts.branchId); }
       if (opts.loanTypeId) { conditions.push(`l.loan_type_id = $${idx++}`); filterParams.push(opts.loanTypeId); }
@@ -2065,7 +2066,7 @@ export class TenantLoansService {
         conditions.push(`l.loan_officer_id = $${idx++}`);
         filterParams.push(user.sub);
       }
-      if (opts.status) { conditions.push(`l.status = $${idx++}`); filterParams.push(opts.status); }
+      if (opts.status) { conditions.push(`l.status = ANY($${idx++}::loan_status[])`); filterParams.push(loanStatusFilter(opts.status)); }
       if (opts.branchId) { conditions.push(`l.branch_id = $${idx++}`); filterParams.push(opts.branchId); }
       if (opts.search) {
         conditions.push(`(c.first_name||' '||c.last_name ILIKE $${idx} OR l.loan_number ILIKE $${idx} OR c.phone ILIKE $${idx})`);
@@ -2330,7 +2331,7 @@ export class TenantLoansService {
       let idx = 1;
 
       if (user.role === 'AGENT') { conditions.push(`l.loan_officer_id = $${idx++}`); filterParams.push(user.sub); }
-      if (opts.status)    { conditions.push(`l.status = $${idx++}`);    filterParams.push(opts.status); }
+      if (opts.status)    { conditions.push(`l.status = ANY($${idx++}::loan_status[])`); filterParams.push(loanStatusFilter(opts.status)); }
       if (opts.branchId)  { conditions.push(`l.branch_id = $${idx++}`); filterParams.push(opts.branchId); }
       if (opts.cycleType) { conditions.push(`l.cycle_type = $${idx++}`); filterParams.push(opts.cycleType); }
       if (opts.search) {
@@ -2593,7 +2594,7 @@ export class TenantLoansService {
       let idx = 1;
 
       if (user.role === 'AGENT') { conditions.push(`l.loan_officer_id = $${idx++}`); filterParams.push(user.sub); }
-      if (opts.status)   { conditions.push(`l.status = $${idx++}`);    filterParams.push(opts.status); }
+      if (opts.status)   { conditions.push(`l.status = ANY($${idx++}::loan_status[])`); filterParams.push(loanStatusFilter(opts.status)); }
       if (opts.branchId) { conditions.push(`l.branch_id = $${idx++}`); filterParams.push(opts.branchId); }
       if (opts.search) {
         conditions.push(`(c.first_name||' '||c.last_name ILIKE $${idx} OR l.loan_number ILIKE $${idx} OR c.phone ILIKE $${idx})`);
@@ -2833,7 +2834,7 @@ export class TenantLoansService {
       let idx = 1;
 
       if (user.role === 'AGENT') { conditions.push(`l.loan_officer_id = $${idx++}`); filterParams.push(user.sub); }
-      if (opts.status)   { conditions.push(`l.status = $${idx++}`);    filterParams.push(opts.status); }
+      if (opts.status)   { conditions.push(`l.status = ANY($${idx++}::loan_status[])`); filterParams.push(loanStatusFilter(opts.status)); }
       if (opts.branchId) { conditions.push(`l.branch_id = $${idx++}`); filterParams.push(opts.branchId); }
       if (opts.search) {
         conditions.push(`(c.first_name||' '||c.last_name ILIKE $${idx} OR l.loan_number ILIKE $${idx} OR c.phone ILIKE $${idx})`);
@@ -3060,8 +3061,10 @@ export class TenantLoansService {
         [loanId],
       );
       if (!res.rows[0]) throw new NotFoundException('Loan not found');
-      if (res.rows[0].status === 'DISBURSED') {
-        throw new BadRequestException('Cannot delete an active (DISBURSED) loan. Close it first.');
+      // An approved loan is active exactly like a disbursed one (it is being collected on, and may already
+      // have payments), so both must be closed rather than deleted.
+      if ((ACTIVE_LOAN_STATUSES as readonly string[]).includes(res.rows[0].status)) {
+        throw new BadRequestException(`Cannot delete an active (${res.rows[0].status}) loan. Close it first.`);
       }
       await client.query(
         `UPDATE loans SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1`,

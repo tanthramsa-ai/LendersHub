@@ -217,11 +217,6 @@ export default function CollectionsPage() {
             <div className="flex-1">
               <h2 className="font-bold text-gray-900 group-hover:text-blue-700 transition-colors">Agent Mobile Dashboard</h2>
               <p className="text-sm text-gray-500 mt-1">Field collection tool with route planning, target tracking, and on-the-go payment recording</p>
-              <div className="flex items-center gap-2 mt-3">
-                <span className="text-xs font-semibold px-2.5 py-1 bg-green-100 text-green-700 rounded-full">6 Today</span>
-                <span className="text-xs font-semibold px-2.5 py-1 bg-red-100 text-red-700 rounded-full">2 Overdue</span>
-                <span className="text-xs font-semibold px-2.5 py-1 bg-blue-100 text-blue-700 rounded-full">North Zone</span>
-              </div>
             </div>
             <svg className="w-5 h-5 text-gray-300 group-hover:text-blue-500 transition-colors mt-1 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />

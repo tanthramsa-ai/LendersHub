@@ -238,8 +238,8 @@ export default function TenantDashboardPage() {
   const loanTableTitle = isCollector
     ? 'My Assigned Loans'
     : isManager
-      ? 'Recent Disbursed Loans'
-      : 'My Disbursed Loans';
+      ? 'Active Loans'
+      : 'My Active Loans';
 
   return (
     <div className="p-4 lg:p-6 space-y-5">
@@ -534,7 +534,7 @@ export default function TenantDashboardPage() {
           <div>
             <h2 className="text-sm font-semibold text-gray-900">{loanTableTitle}</h2>
             <p className="text-xs text-gray-400 mt-0.5">
-              {loansTotal} loan{loansTotal !== 1 ? 's' : ''} · sorted by disbursement date
+              {loansTotal} loan{loansTotal !== 1 ? 's' : ''} · most recently disbursed first
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -551,8 +551,8 @@ export default function TenantDashboardPage() {
             {isCollector
               ? 'No loans assigned to you yet.'
               : canCreateLoan
-                ? <>No disbursed loans yet. <Link href={`/tenant/${subdomain}/weekly-loans/new`} className="hover:underline" style={{ color: BRAND }}>Create the first one</Link></>
-                : 'No disbursed loans found.'}
+                ? <>No active loans yet. <Link href={`/tenant/${subdomain}/weekly-loans/new`} className="hover:underline" style={{ color: BRAND }}>Create the first one</Link></>
+                : 'No active loans found.'}
           </div>
         ) : (
           <>

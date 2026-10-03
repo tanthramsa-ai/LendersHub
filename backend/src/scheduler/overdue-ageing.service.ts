@@ -17,6 +17,9 @@ export interface AgeingResult {
  * (the Collections "Overdue" tab, agent notifications, and the NPA flag on the
  * loan lists) is permanently silent.
  *
+ * Only installments of loans being collected are aged: APPROVED (every loan right after approval),
+ * DISBURSED and DEFAULTED. PENDING and REJECTED loans keep their schedule untouched.
+ *
  * Only PENDING installments are aged. A PARTIALLY_PAID installment is left
  * alone even when it is past due: the financial roll-ups treat PENDING and
  * OVERDUE as "nothing received" and compute outstanding from the full
@@ -76,7 +79,7 @@ export class OverdueAgeingService {
             AND i.paid_amount = 0
             AND i.due_date < CURRENT_DATE
             AND l.deleted_at IS NULL
-            AND l.status IN ('DISBURSED','DEFAULTED')`,
+            AND l.status IN ('APPROVED','DISBURSED','DEFAULTED')`,
       );
 
       // Self-healing: an OVERDUE row whose due date is no longer in the past
