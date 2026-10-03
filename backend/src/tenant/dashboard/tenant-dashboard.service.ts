@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { MANAGER_ROLES, UserRole } from '../common/roles';
+import { ACTIVE_LOANS_SQL } from '../common/loan-status';
 
 @Injectable()
 export class TenantDashboardService {
@@ -28,7 +29,7 @@ export class TenantDashboardService {
           `SELECT COUNT(*) AS total, COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS amount
              FROM installments i JOIN loans l ON l.id = i.loan_id
              WHERE (i.assigned_to = $1 OR l.loan_officer_id = $1)
-               AND l.deleted_at IS NULL
+               AND l.deleted_at IS NULL AND l.status IN ${ACTIVE_LOANS_SQL}
                AND i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE')`,
           [user.sub],
         );
@@ -40,7 +41,7 @@ export class TenantDashboardService {
         const overdueRes = await client.query<{ total: string }>(
           `SELECT COUNT(*) AS total FROM installments i JOIN loans l ON l.id = i.loan_id
              WHERE (i.assigned_to = $1 OR l.loan_officer_id = $1)
-               AND l.deleted_at IS NULL AND i.status = 'OVERDUE'`,
+               AND l.deleted_at IS NULL AND l.status IN ${ACTIVE_LOANS_SQL} AND i.status = 'OVERDUE'`,
           [user.sub],
         );
         return {
@@ -64,17 +65,17 @@ export class TenantDashboardService {
         ? await client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM loans l WHERE deleted_at IS NULL`)
         : await client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM loans l WHERE deleted_at IS NULL ${officerCond}`, [user.sub]);
       const activeLoansRes = isManager
-        ? await client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM loans l WHERE status = 'DISBURSED' AND deleted_at IS NULL`)
-        : await client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM loans l WHERE status = 'DISBURSED' AND deleted_at IS NULL ${officerCond}`, [user.sub]);
+        ? await client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM loans l WHERE status IN ${ACTIVE_LOANS_SQL} AND deleted_at IS NULL`)
+        : await client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM loans l WHERE status IN ${ACTIVE_LOANS_SQL} AND deleted_at IS NULL ${officerCond}`, [user.sub]);
       const todayCollectionRes = isManager
         ? await client.query<{ total: string }>(`SELECT COALESCE(SUM(p.amount), 0) AS total FROM payments p JOIN loans l ON l.id = p.loan_id WHERE p.payment_date = $1`, [today])
         : await client.query<{ total: string }>(`SELECT COALESCE(SUM(p.amount), 0) AS total FROM payments p JOIN loans l ON l.id = p.loan_id WHERE p.payment_date = $1 AND l.loan_officer_id = $2`, [today, user.sub]);
       const pendingRes = isManager
-        ? await client.query<{ total: string }>(`SELECT COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS total FROM installments i JOIN loans l ON l.id = i.loan_id WHERE i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE')`)
-        : await client.query<{ total: string }>(`SELECT COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS total FROM installments i JOIN loans l ON l.id = i.loan_id WHERE i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE') ${officerCond}`, [user.sub]);
+        ? await client.query<{ total: string }>(`SELECT COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS total FROM installments i JOIN loans l ON l.id = i.loan_id WHERE i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE') AND l.deleted_at IS NULL AND l.status IN ${ACTIVE_LOANS_SQL}`)
+        : await client.query<{ total: string }>(`SELECT COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS total FROM installments i JOIN loans l ON l.id = i.loan_id WHERE i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE') AND l.deleted_at IS NULL AND l.status IN ${ACTIVE_LOANS_SQL} ${officerCond}`, [user.sub]);
       const overdueInstallmentsRes = isManager
-        ? await client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM installments i JOIN loans l ON l.id = i.loan_id WHERE i.status = 'OVERDUE'`)
-        : await client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM installments i JOIN loans l ON l.id = i.loan_id WHERE i.status = 'OVERDUE' ${officerCond}`, [user.sub]);
+        ? await client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM installments i JOIN loans l ON l.id = i.loan_id WHERE i.status = 'OVERDUE' AND l.deleted_at IS NULL AND l.status IN ${ACTIVE_LOANS_SQL}`)
+        : await client.query<{ total: string }>(`SELECT COUNT(*) AS total FROM installments i JOIN loans l ON l.id = i.loan_id WHERE i.status = 'OVERDUE' AND l.deleted_at IS NULL AND l.status IN ${ACTIVE_LOANS_SQL} ${officerCond}`, [user.sub]);
 
       return {
         totalCustomers: parseInt(customersRes.rows[0].total),
@@ -156,19 +157,19 @@ export class TenantDashboardService {
 
       if (isCollector) {
         // Assigned installments OR loan-officer ownership — matches the Collections rule.
-        whereClause = `WHERE (l.loan_officer_id = $3 OR l.id IN (SELECT DISTINCT loan_id FROM installments WHERE assigned_to = $3 AND status IN ('PENDING','PARTIALLY_PAID','OVERDUE'))) AND l.status = 'DISBURSED' AND l.deleted_at IS NULL`;
-        countWhere = `WHERE (l.loan_officer_id = $1 OR l.id IN (SELECT DISTINCT loan_id FROM installments WHERE assigned_to = $1 AND status IN ('PENDING','PARTIALLY_PAID','OVERDUE'))) AND l.status = 'DISBURSED' AND l.deleted_at IS NULL`;
+        whereClause = `WHERE (l.loan_officer_id = $3 OR l.id IN (SELECT DISTINCT loan_id FROM installments WHERE assigned_to = $3 AND status IN ('PENDING','PARTIALLY_PAID','OVERDUE'))) AND l.status IN ${ACTIVE_LOANS_SQL} AND l.deleted_at IS NULL`;
+        countWhere = `WHERE (l.loan_officer_id = $1 OR l.id IN (SELECT DISTINCT loan_id FROM installments WHERE assigned_to = $1 AND status IN ('PENDING','PARTIALLY_PAID','OVERDUE'))) AND l.status IN ${ACTIVE_LOANS_SQL} AND l.deleted_at IS NULL`;
         params = [limit, offset, user.sub];
         countParams = [user.sub];
       } else if (isManager) {
-        whereClause = `WHERE l.status = 'DISBURSED' AND l.deleted_at IS NULL`;
-        countWhere = `WHERE l.status = 'DISBURSED' AND l.deleted_at IS NULL`;
+        whereClause = `WHERE l.status IN ${ACTIVE_LOANS_SQL} AND l.deleted_at IS NULL`;
+        countWhere = `WHERE l.status IN ${ACTIVE_LOANS_SQL} AND l.deleted_at IS NULL`;
         params = [limit, offset];
         countParams = [];
       } else {
         // STAFF: only their loans
-        whereClause = `WHERE l.loan_officer_id = $3 AND l.status = 'DISBURSED' AND l.deleted_at IS NULL`;
-        countWhere = `WHERE l.loan_officer_id = $1 AND l.status = 'DISBURSED' AND l.deleted_at IS NULL`;
+        whereClause = `WHERE l.loan_officer_id = $3 AND l.status IN ${ACTIVE_LOANS_SQL} AND l.deleted_at IS NULL`;
+        countWhere = `WHERE l.loan_officer_id = $1 AND l.status IN ${ACTIVE_LOANS_SQL} AND l.deleted_at IS NULL`;
         params = [limit, offset, user.sub];
         countParams = [user.sub];
       }

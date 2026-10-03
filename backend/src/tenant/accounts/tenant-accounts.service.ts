@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
+import { ACTIVE_LOANS_SQL, LENT_LOANS_SQL } from '../common/loan-status';
 
 @Injectable()
 export class TenantAccountsService {
@@ -25,9 +26,9 @@ export class TenantAccountsService {
       }>(`
           SELECT
             COUNT(*) AS total_loans,
-            COALESCE(SUM(principal), 0) AS total_principal,
-            COUNT(*) FILTER (WHERE status = 'DISBURSED') AS active_loans,
-            COALESCE(SUM(principal) FILTER (WHERE status = 'DISBURSED'), 0) AS active_principal,
+            COALESCE(SUM(principal) FILTER (WHERE status IN ${LENT_LOANS_SQL}), 0) AS total_principal,
+            COUNT(*) FILTER (WHERE status IN ${ACTIVE_LOANS_SQL}) AS active_loans,
+            COALESCE(SUM(principal) FILTER (WHERE status IN ${ACTIVE_LOANS_SQL}), 0) AS active_principal,
             COUNT(*) FILTER (WHERE status = 'CLOSED') AS closed_loans
           FROM loans WHERE deleted_at IS NULL
         `);
@@ -43,8 +44,10 @@ export class TenantAccountsService {
         `);
       const overdueRes = await client.query<{ overdue_count: string; overdue_amount: string }>(`
           SELECT COUNT(*) AS overdue_count,
-                 COALESCE(SUM(total_amount - paid_amount), 0) AS overdue_amount
-          FROM installments WHERE status = 'OVERDUE'
+                 COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS overdue_amount
+          FROM installments i
+          JOIN loans l ON l.id = i.loan_id
+          WHERE i.status = 'OVERDUE' AND l.deleted_at IS NULL AND l.status IN ${ACTIVE_LOANS_SQL}
         `);
       const statusRes = await client.query<{ status: string; count: string; principal: string }>(`
           SELECT status, COUNT(*) AS count, COALESCE(SUM(principal), 0) AS principal
@@ -60,12 +63,12 @@ export class TenantAccountsService {
       const totalCollected = parseFloat(p.total_collected);
       const activePrincipal = parseFloat(l.active_principal);
 
-      // Outstanding = installments still unpaid across disbursed loans
+      // Outstanding = installments still unpaid on loans being collected (not pending/rejected ones)
       const outstandingRes = await client.query<{ outstanding: string }>(`
         SELECT COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS outstanding
         FROM installments i
         JOIN loans l ON l.id = i.loan_id
-        WHERE i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE') AND l.deleted_at IS NULL
+        WHERE i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE') AND l.deleted_at IS NULL AND l.status IN ${ACTIVE_LOANS_SQL}
       `);
 
       return {
@@ -98,6 +101,7 @@ export class TenantAccountsService {
                  COALESCE(SUM(principal), 0) AS amount
           FROM loans
           WHERE disbursed_at IS NOT NULL
+            AND status IN ${LENT_LOANS_SQL}
             AND disbursed_at >= date_trunc('month', CURRENT_DATE - interval '${months - 1} months')
             AND deleted_at IS NULL
           GROUP BY 1
@@ -144,15 +148,20 @@ export class TenantAccountsService {
     return this.withSchema(user.schemaName, async (client) => {
       const res = await client.query(`
         SELECT c.id, c.first_name || ' ' || c.last_name AS name, c.phone,
-               COUNT(l.id) AS loan_count,
-               COALESCE(SUM(l.principal) FILTER (WHERE l.status = 'DISBURSED'), 0) AS active_principal,
-               COALESCE(SUM(i.total_amount - i.paid_amount) FILTER (WHERE i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE')), 0) AS outstanding
+               COUNT(*) AS loan_count,
+               COALESCE(SUM(ln.principal) FILTER (WHERE ln.status IN ${ACTIVE_LOANS_SQL}), 0) AS active_principal,
+               COALESCE(SUM(ln.outstanding) FILTER (WHERE ln.status IN ${ACTIVE_LOANS_SQL}), 0) AS outstanding
         FROM customers c
-        LEFT JOIN loans l ON l.customer_id = c.id AND l.deleted_at IS NULL
-        LEFT JOIN installments i ON i.loan_id = l.id
+        JOIN (
+          SELECT l.id, l.customer_id, l.principal, l.status,
+                 COALESCE(SUM(i.total_amount - i.paid_amount) FILTER (WHERE i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE')), 0) AS outstanding
+          FROM loans l
+          LEFT JOIN installments i ON i.loan_id = l.id
+          WHERE l.deleted_at IS NULL AND l.status IN ${LENT_LOANS_SQL}
+          GROUP BY l.id
+        ) ln ON ln.customer_id = c.id
         WHERE c.deleted_at IS NULL
         GROUP BY c.id, c.first_name, c.last_name, c.phone
-        HAVING COUNT(l.id) > 0
         ORDER BY outstanding DESC NULLS LAST
         LIMIT $1
       `, [limit]);

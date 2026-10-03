@@ -4,6 +4,7 @@ import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
+import { loanStatusFilter } from '../common/loan-status';
 import { UserRole, USER_ADMIN_ROLES } from '../common/roles';
 import { NPA_THRESHOLD_SETTING_KEY, npaLoanPredicateSql, parseNpaThreshold } from '../common/npa';
 
@@ -165,11 +166,12 @@ export class TenantUsersService {
     return this.withSchema(user.schemaName, async (client) => {
       const offset = (page - 1) * limit;
       // $1=limit  $2=offset  $3=id  $4=status(optional)
-      const dataParams: unknown[] = [limit, offset, id, ...(status ? [status] : [])];
-      const statusCond = status ? `AND l.status = $4` : '';
+      const statuses = status ? loanStatusFilter(status) : null;
+      const dataParams: unknown[] = [limit, offset, id, ...(statuses ? [statuses] : [])];
+      const statusCond = statuses ? `AND l.status = ANY($4::loan_status[])` : '';
       // $1=id  $2=status(optional)
-      const countParams: unknown[] = [id, ...(status ? [status] : [])];
-      const countStatusCond = status ? `AND l.status = $2` : '';
+      const countParams: unknown[] = [id, ...(statuses ? [statuses] : [])];
+      const countStatusCond = statuses ? `AND l.status = ANY($2::loan_status[])` : '';
 
       // Sequential: a single pg connection cannot run queries concurrently.
       const dataRes = await client.query(`

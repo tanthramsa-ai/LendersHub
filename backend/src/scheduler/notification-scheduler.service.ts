@@ -58,7 +58,8 @@ export class NotificationSchedulerService {
       const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
       const dayAfter = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10);
 
-      // Get installments due today, tomorrow, or overdue + their agent info
+      // Installments due today, tomorrow, or overdue + their agent info. Only loans being collected:
+      // a loan awaiting approval has a schedule but nothing is due on it yet.
       const res = await client.query<InstallmentRow>(`
         SELECT
           i.id, i.loan_id, l.loan_number, i.installment_number,
@@ -76,6 +77,7 @@ export class NotificationSchedulerService {
         WHERE i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE')
           AND (i.due_date IN ($1,$2,$3) OR i.status = 'OVERDUE')
           AND l.deleted_at IS NULL
+          AND l.status IN ('APPROVED','DISBURSED')
       `, [today, tomorrow, dayAfter]);
 
       // Get manager IDs to notify

@@ -130,7 +130,7 @@ function MatchModal({ event, onClose, onDone }: { event: IncomingPaymentEvent; o
     if (search.trim().length < 2) { setResults([]); return; }
     const t = setTimeout(async () => {
       try {
-        const r = await getLoans(1, 8, { search: search.trim(), status: 'DISBURSED' });
+        const r = await getLoans(1, 8, { search: search.trim(), status: 'ACTIVE' });
         setResults(r.data);
       } catch { /* ignore */ }
     }, 300);
