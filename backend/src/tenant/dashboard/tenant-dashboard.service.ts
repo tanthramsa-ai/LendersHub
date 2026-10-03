@@ -25,12 +25,20 @@ export class TenantDashboardService {
         // is deprecated and races). Serial has no cost here: one connection.
         // Same ownership rule as the Collections page: an installment counts as the
         // agent's if it is assigned to them, or if they are the loan's officer.
-        const assignedRes = await client.query<{ total: string; amount: string }>(
-          `SELECT COUNT(*) AS total, COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS amount
+        const assignedRes = await client.query<{ amount: string }>(
+          `SELECT COALESCE(SUM(i.total_amount - i.paid_amount), 0) AS amount
              FROM installments i JOIN loans l ON l.id = i.loan_id
              WHERE (i.assigned_to = $1 OR l.loan_officer_id = $1)
                AND l.deleted_at IS NULL AND l.status IN ${ACTIVE_LOANS_SQL}
                AND i.status IN ('PENDING','PARTIALLY_PAID','OVERDUE')`,
+          [user.sub],
+        );
+        // Loans, not installments: the same rule and the same loans as the "My Assigned Loans" table below,
+        // so the tile and the table agree.
+        const assignedLoansRes = await client.query<{ total: string }>(
+          `SELECT COUNT(*) AS total FROM loans l
+             WHERE (l.loan_officer_id = $1 OR l.id IN (SELECT DISTINCT loan_id FROM installments WHERE assigned_to = $1 AND status IN ('PENDING','PARTIALLY_PAID','OVERDUE')))
+               AND l.status IN ${ACTIVE_LOANS_SQL} AND l.deleted_at IS NULL`,
           [user.sub],
         );
         const todayCollectedRes = await client.query<{ total: string }>(
@@ -46,8 +54,8 @@ export class TenantDashboardService {
         );
         return {
           totalCustomers: 0,
-          totalLoans: parseInt(assignedRes.rows[0].total),
-          activeLoans: parseInt(assignedRes.rows[0].total),
+          totalLoans: parseInt(assignedLoansRes.rows[0].total),
+          activeLoans: parseInt(assignedLoansRes.rows[0].total),
           todaysCollection: parseFloat(todayCollectedRes.rows[0].total),
           pendingAmount: parseFloat(assignedRes.rows[0].amount),
           overdueInstallments: parseInt(overdueRes.rows[0].total),
