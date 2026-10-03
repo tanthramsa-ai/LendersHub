@@ -1,3 +1,4 @@
+import { assertStrongPassword } from '../../common/utils/password';
 import { Injectable, ConflictException, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { randomBytes } from 'crypto';
@@ -22,7 +23,8 @@ const BILLING_DISCOUNT: Record<string, number> = {
   ANNUALLY: 0.15,
 };
 
-const SUBDOMAIN_RE = /^[a-z0-9]([a-z0-9-]{1,18}[a-z0-9]|[a-z0-9]{0,18})$/;
+// 3–20 characters. (The old second alternative, [a-z0-9]{0,18}, let 1–2 character names through.)
+const SUBDOMAIN_RE = /^[a-z0-9][a-z0-9-]{1,18}[a-z0-9]$/;
 
 // Platform-reserved labels a tenant must never be allowed to claim — these are
 // used by the app/marketing/infra hosts and are excluded in the frontend middleware.
@@ -346,7 +348,7 @@ export class TenantService {
     const VALID_ROLES = ['OWNER', 'MANAGER', 'ADMIN', 'LOAN_OFFICER', 'COLLECTOR', 'VIEWER'];
     if (!dto.email?.trim()) throw new BadRequestException('Email is required');
     if (!dto.firstName?.trim() || !dto.lastName?.trim()) throw new BadRequestException('First and last name are required');
-    if (!dto.password || dto.password.length < 6) throw new BadRequestException('Password must be at least 6 characters');
+    assertStrongPassword(dto.password);
     if (!VALID_ROLES.includes(dto.role)) throw new BadRequestException('Invalid role');
 
     const hashed = await bcrypt.hash(dto.password, 10);
@@ -392,9 +394,7 @@ export class TenantService {
     actor: AuditActor,
     ipAddress: string,
   ) {
-    if (!newPassword || newPassword.length < 6) {
-      throw new BadRequestException('Password must be at least 6 characters');
-    }
+    assertStrongPassword(newPassword, 'New password');
 
     const hashed = await bcrypt.hash(newPassword, 10);
 
@@ -525,6 +525,9 @@ export class TenantService {
     const client = await this.prisma.pool.connect();
     try {
       await client.query('BEGIN');
+      // Pooled connections keep the search_path the last tenant request set, and these
+      // statements name platform tables unqualified.
+      await client.query('SET LOCAL search_path TO public');
       await client.query("SELECT set_config('app.bypass_rls', 'true', TRUE)");
       const result = await fn(client);
       await client.query('COMMIT');

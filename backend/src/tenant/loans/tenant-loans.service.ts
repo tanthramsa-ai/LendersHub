@@ -1,3 +1,4 @@
+import { isValidYmd } from '../../common/utils/dates';
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
@@ -5,7 +6,7 @@ import { TenantNotificationsService } from '../notifications/tenant-notification
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
 import { TenantLedgerPostingService, splitPrincipalInterest } from '../ledger/tenant-ledger-posting.service';
 import { safePagination } from '../../common/utils/pagination';
-import { parseMoneyAmount } from '../../common/utils/money';
+import { MAX_MONEY_AMOUNT, parseMoneyAmount } from '../../common/utils/money';
 import { MANAGER_ROLES, FIELD_ROLES, UserRole } from '../common/roles';
 import { assertNoDigitsOrSpecialChars } from '../customers/customer-validation';
 import { assertHasLetter } from '../common/text-validation';
@@ -194,8 +195,16 @@ function assertWeeklyRateInput(
     if (typeof interestPerDay !== 'number' || !Number.isFinite(interestPerDay) || interestPerDay <= 0 || interestPerDay > 10) {
       throw new BadRequestException('interestPerDay must be between 0 and 10 (₹ per ₹1,000 per day)');
     }
-  } else if (interestRate < 0 || interestRate > 200) {
+  } else if (!Number.isFinite(interestRate) || interestRate < 0 || interestRate > 200) {
     throw new BadRequestException('Invalid interest rate');
+  }
+}
+
+/** Only these round-ups are offered; anything else (negative, NaN, huge) skews the EMI. */
+function assertEmiRounding(emiRounding: unknown): void {
+  if (emiRounding === undefined || emiRounding === null) return;
+  if (![0, 10, 50, 100].includes(emiRounding as number)) {
+    throw new BadRequestException('emiRounding must be 0, 10, 50 or 100');
   }
 }
 
@@ -209,6 +218,7 @@ export function computeDailySchedule(
   cycleType: 'DAILY_NO_SUNDAY' | 'DAILY_WITH_SUNDAY',
   interestPerDay?: number,
 ) {
+  assertEmiRounding(emiRounding);
   const skipSundays = cycleType === 'DAILY_NO_SUNDAY';
 
   if (calculationType === 'PER_1000_PER_DAY') {
@@ -611,6 +621,7 @@ export function computeWeeklySchedule(
   emiRounding: number,
   interestPerDay?: number,
 ) {
+  assertEmiRounding(emiRounding);
   if (calculationType === 'PER_1000_PER_DAY') {
     const { schedule, emi, periodRate } = computePer1000Schedule(
       principal, interestPerDay ?? 0, termWeeks, DAYS_PER_WEEK, firstDueDateStr,
@@ -1117,10 +1128,10 @@ export class TenantLoansService {
 
   async create(user: TenantJwtPayload, dto: CreateLoanDto) {
     if (![...MANAGER_ROLES, ...FIELD_ROLES].includes(user.role as UserRole)) throw new ForbiddenException('Only Owners, Admins, Managers, Agents or Staff can create loans');
-    if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
-    if (dto.interestRate < 0 || dto.interestRate > 100) throw new BadRequestException('Invalid interest rate');
-    if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
-    if (dto.firstDueDate && !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
+    if (!Number.isFinite(dto.principal) || dto.principal <= 0 || dto.principal > MAX_MONEY_AMOUNT) throw new BadRequestException('Principal must be a positive amount');
+    if (!Number.isFinite(dto.interestRate) || dto.interestRate < 0 || dto.interestRate > 100) throw new BadRequestException('Invalid interest rate');
+    if (!Number.isInteger(dto.termMonths) || dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
+    if (dto.firstDueDate && !isValidYmd(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
     assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
@@ -1363,7 +1374,7 @@ export class TenantLoansService {
     if (!MANAGER_ROLES.includes(user.role as UserRole)) {
       throw new ForbiddenException('Only Owner, Manager or Admin can approve a loan');
     }
-    if (dto.firstDueDate && !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) {
+    if (dto.firstDueDate && !isValidYmd(dto.firstDueDate)) {
       throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
     }
     return this.withSchema(user.schemaName, async (client) => {
@@ -2206,9 +2217,9 @@ export class TenantLoansService {
 
   async createWeeklyLoan(user: TenantJwtPayload, dto: CreateWeeklyLoanDto) {
     if (![...MANAGER_ROLES, ...FIELD_ROLES].includes(user.role as UserRole)) throw new ForbiddenException('Only Owners, Admins, Managers, Agents or Staff can create loans');
-    if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
-    if (dto.termWeeks < 1 || dto.termWeeks > 99) throw new BadRequestException('Term must be 1–99 weeks');
-    if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
+    if (!Number.isFinite(dto.principal) || dto.principal <= 0 || dto.principal > MAX_MONEY_AMOUNT) throw new BadRequestException('Principal must be a positive amount');
+    if (!Number.isInteger(dto.termWeeks) || dto.termWeeks < 1 || dto.termWeeks > 99) throw new BadRequestException('Term must be 1–99 weeks');
+    if (!dto.firstDueDate || !isValidYmd(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
     assertWeeklyRateInput(dto.calculationType, dto.interestRate, dto.interestPerDay);
     assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
 
@@ -2284,7 +2295,7 @@ export class TenantLoansService {
       return {
         id: loan.id, loanNumber, principal: dto.principal,
         emi, termWeeks: dto.termWeeks, installmentCount: schedule.length,
-        firstDueDate: dto.firstDueDate, status: 'DISBURSED',
+        firstDueDate: dto.firstDueDate, status: 'PENDING',
       };
     });
   }
@@ -2292,9 +2303,9 @@ export class TenantLoansService {
   /** Edits principal/rate/term/etc on a weekly loan with no payments yet, rebuilding the schedule. */
   async updateWeeklyLoan(user: TenantJwtPayload, loanId: string, dto: UpdateWeeklyLoanDto) {
     if (!MANAGER_ROLES.includes(user.role as UserRole)) throw new ForbiddenException('Only Owner, Manager or Admin can edit a loan');
-    if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
-    if (dto.termWeeks < 1 || dto.termWeeks > 99) throw new BadRequestException('Term must be 1–99 weeks');
-    if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
+    if (!Number.isFinite(dto.principal) || dto.principal <= 0 || dto.principal > MAX_MONEY_AMOUNT) throw new BadRequestException('Principal must be a positive amount');
+    if (!Number.isInteger(dto.termWeeks) || dto.termWeeks < 1 || dto.termWeeks > 99) throw new BadRequestException('Term must be 1–99 weeks');
+    if (!dto.firstDueDate || !isValidYmd(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
     assertWeeklyRateInput(dto.calculationType, dto.interestRate, dto.interestPerDay);
     assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
 
@@ -2469,9 +2480,9 @@ export class TenantLoansService {
 
   async createDailyLoan(user: TenantJwtPayload, dto: CreateDailyLoanDto) {
     if (![...MANAGER_ROLES, ...FIELD_ROLES].includes(user.role as UserRole)) throw new ForbiddenException('Only Owners, Admins, Managers, Agents or Staff can create loans');
-    if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
-    if (dto.termDays < 1 || dto.termDays > 3650) throw new BadRequestException('Term must be 1–3650 days');
-    if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
+    if (!Number.isFinite(dto.principal) || dto.principal <= 0 || dto.principal > MAX_MONEY_AMOUNT) throw new BadRequestException('Principal must be a positive amount');
+    if (!Number.isInteger(dto.termDays) || dto.termDays < 1 || dto.termDays > 3650) throw new BadRequestException('Term must be 1–3650 days');
+    if (!dto.firstDueDate || !isValidYmd(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
     assertWeeklyRateInput(dto.calculationType, dto.interestRate, dto.interestPerDay);
     if (!['DAILY_NO_SUNDAY', 'DAILY_WITH_SUNDAY'].includes(dto.cycleType)) throw new BadRequestException('cycleType must be DAILY_NO_SUNDAY or DAILY_WITH_SUNDAY');
     assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
@@ -2547,7 +2558,7 @@ export class TenantLoansService {
       return {
         id: loan.id, loanNumber, principal: dto.principal,
         emi, termDays: dto.termDays, installmentCount: schedule.length,
-        firstDueDate: dto.firstDueDate, status: 'DISBURSED',
+        firstDueDate: dto.firstDueDate, status: 'PENDING',
       };
     });
   }
@@ -2555,9 +2566,9 @@ export class TenantLoansService {
   /** Edits principal/rate/term/cycle/etc on a daily loan with no payments yet, rebuilding the schedule. */
   async updateDailyLoan(user: TenantJwtPayload, loanId: string, dto: UpdateDailyLoanDto) {
     if (!MANAGER_ROLES.includes(user.role as UserRole)) throw new ForbiddenException('Only Owner, Manager or Admin can edit a loan');
-    if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
-    if (dto.termDays < 1 || dto.termDays > 3650) throw new BadRequestException('Term must be 1–3650 days');
-    if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
+    if (!Number.isFinite(dto.principal) || dto.principal <= 0 || dto.principal > MAX_MONEY_AMOUNT) throw new BadRequestException('Principal must be a positive amount');
+    if (!Number.isInteger(dto.termDays) || dto.termDays < 1 || dto.termDays > 3650) throw new BadRequestException('Term must be 1–3650 days');
+    if (!dto.firstDueDate || !isValidYmd(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
     assertWeeklyRateInput(dto.calculationType, dto.interestRate, dto.interestPerDay);
     if (!['DAILY_NO_SUNDAY', 'DAILY_WITH_SUNDAY'].includes(dto.cycleType)) throw new BadRequestException('cycleType must be DAILY_NO_SUNDAY or DAILY_WITH_SUNDAY');
     assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
@@ -2715,10 +2726,10 @@ export class TenantLoansService {
 
   async createMonthlyLoan(user: TenantJwtPayload, dto: CreateMonthlyLoanDto) {
     if (![...MANAGER_ROLES, ...FIELD_ROLES].includes(user.role as UserRole)) throw new ForbiddenException('Only Owners, Admins, Managers, Agents or Staff can create loans');
-    if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
-    if (dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
-    if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
-    if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
+    if (!Number.isFinite(dto.principal) || dto.principal <= 0 || dto.principal > MAX_MONEY_AMOUNT) throw new BadRequestException('Principal must be a positive amount');
+    if (!Number.isFinite(dto.interestRate) || dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
+    if (!Number.isInteger(dto.termMonths) || dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
+    if (!dto.firstDueDate || !isValidYmd(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
     assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
@@ -2793,7 +2804,7 @@ export class TenantLoansService {
         id: loan.id, loanNumber, principal: dto.principal,
         monthlyInterest, termMonths: dto.termMonths,
         installmentCount: schedule.length,
-        firstDueDate: dto.firstDueDate, status: 'DISBURSED',
+        firstDueDate: dto.firstDueDate, status: 'PENDING',
       };
     });
   }
@@ -2801,10 +2812,10 @@ export class TenantLoansService {
   /** Edits principal/rate/term/etc on a monthly loan with no payments yet, rebuilding the schedule. */
   async updateMonthlyLoan(user: TenantJwtPayload, loanId: string, dto: UpdateMonthlyLoanDto) {
     if (!MANAGER_ROLES.includes(user.role as UserRole)) throw new ForbiddenException('Only Owner, Manager or Admin can edit a loan');
-    if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
-    if (dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
-    if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
-    if (!dto.firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
+    if (!Number.isFinite(dto.principal) || dto.principal <= 0 || dto.principal > MAX_MONEY_AMOUNT) throw new BadRequestException('Principal must be a positive amount');
+    if (!Number.isFinite(dto.interestRate) || dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
+    if (!Number.isInteger(dto.termMonths) || dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
+    if (!dto.firstDueDate || !isValidYmd(dto.firstDueDate)) throw new BadRequestException('firstDueDate must be YYYY-MM-DD');
     assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
@@ -2953,9 +2964,9 @@ export class TenantLoansService {
 
   async createAgentRiskLoan(user: TenantJwtPayload, dto: CreateAgentRiskLoanDto) {
     if (![...MANAGER_ROLES, ...FIELD_ROLES].includes(user.role as UserRole)) throw new ForbiddenException('Only Owners, Admins, Managers, Agents or Staff can create loans');
-    if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
-    if (dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
-    if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
+    if (!Number.isFinite(dto.principal) || dto.principal <= 0 || dto.principal > MAX_MONEY_AMOUNT) throw new BadRequestException('Principal must be a positive amount');
+    if (!Number.isFinite(dto.interestRate) || dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
+    if (!Number.isInteger(dto.termMonths) || dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
     assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
@@ -3030,7 +3041,7 @@ export class TenantLoansService {
         id: loan.id, loanNumber, principal: dto.principal,
         monthlyInterest, termMonths: dto.termMonths,
         installmentCount: schedule.length,
-        firstDueDate: dto.firstDueDate, status: 'DISBURSED',
+        firstDueDate: dto.firstDueDate, status: 'PENDING',
       };
     });
   }
@@ -3038,9 +3049,9 @@ export class TenantLoansService {
   /** Edits principal/rate/term/etc on an agent risk loan with no payments yet, rebuilding the schedule. */
   async updateAgentRiskLoan(user: TenantJwtPayload, loanId: string, dto: UpdateAgentRiskLoanDto) {
     if (!MANAGER_ROLES.includes(user.role as UserRole)) throw new ForbiddenException('Only Owner, Manager or Admin can edit a loan');
-    if (dto.principal <= 0) throw new BadRequestException('Principal must be positive');
-    if (dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
-    if (dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
+    if (!Number.isFinite(dto.principal) || dto.principal <= 0 || dto.principal > MAX_MONEY_AMOUNT) throw new BadRequestException('Principal must be a positive amount');
+    if (!Number.isFinite(dto.interestRate) || dto.interestRate < 0) throw new BadRequestException('Invalid interest rate');
+    if (!Number.isInteger(dto.termMonths) || dto.termMonths < 1 || dto.termMonths > 360) throw new BadRequestException('Term must be 1–360 months');
     assertNoDigitsOrSpecialChars(dto.purpose, 'Loan purpose');
 
     return this.withSchema(user.schemaName, async (client) => {
@@ -3347,10 +3358,13 @@ export class TenantLoansService {
 
     const VALID_METHODS = ['CASH', 'UPI', 'BANK_TRANSFER', 'CHEQUE', 'NEFT', 'RTGS'];
     dto = { ...dto, amount: parseMoneyAmount(dto.amount, 'Payment amount') };
+    if (dto.referenceNumber != null && (typeof dto.referenceNumber !== 'string' || dto.referenceNumber.length > 100)) {
+      throw new BadRequestException('referenceNumber must be text of at most 100 characters');
+    }
     if (!dto.paymentMethod || !VALID_METHODS.includes(dto.paymentMethod)) {
       throw new BadRequestException(`paymentMethod must be one of: ${VALID_METHODS.join(', ')}`);
     }
-    if (dto.paymentDate && !/^\d{4}-\d{2}-\d{2}$/.test(dto.paymentDate)) {
+    if (dto.paymentDate && !isValidYmd(dto.paymentDate)) {
       throw new BadRequestException('paymentDate must be YYYY-MM-DD');
     }
     const today = new Date().toISOString().slice(0, 10);

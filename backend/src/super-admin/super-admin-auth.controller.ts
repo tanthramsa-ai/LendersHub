@@ -6,6 +6,8 @@ import { ConfirmSetup2faDto } from './dto/confirm-setup-2fa.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { SuperAdminJwtGuard } from './guards/super-admin-jwt.guard';
 import { SuperAdminTempGuard } from './guards/super-admin-temp.guard';
+import { Throttle } from '@nestjs/throttler';
+import { AuthThrottlerGuard } from '../common/throttle/auth-throttler.guard';
 
 @Controller('api/v1/super-admin/auth')
 export class SuperAdminAuthController {
@@ -13,6 +15,8 @@ export class SuperAdminAuthController {
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
+  @UseGuards(AuthThrottlerGuard)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   login(@Body() dto: SuperAdminLoginDto, @Req() req: any) {
     const ip = req.ip ?? req.headers['x-forwarded-for'] ?? 'unknown';
     return this.auth.login(dto, ip);
@@ -32,7 +36,9 @@ export class SuperAdminAuthController {
     return this.auth.confirmSetup(req.user.id, dto, ip);
   }
 
-  @UseGuards(SuperAdminTempGuard)
+  // Throttle after the temp guard so the limit is keyed on the user the temp token belongs to.
+  @UseGuards(SuperAdminTempGuard, AuthThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('verify-2fa')
   @HttpCode(HttpStatus.OK)
   verifyTwoFactor(@Body() dto: Verify2faDto, @Req() req: any) {

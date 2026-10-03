@@ -8,7 +8,7 @@ export class CreateTenantDto {
   companyName: string;
 
   @IsString()
-  @Matches(/^[a-z0-9]([a-z0-9-]{1,18}[a-z0-9]|[a-z0-9]{0,18})$/, {
+  @Matches(/^[a-z0-9][a-z0-9-]{1,18}[a-z0-9]$/, {
     message: 'Subdomain must be 3-20 lowercase alphanumeric characters or hyphens, starting and ending with alphanumeric',
   })
   subdomain: string;

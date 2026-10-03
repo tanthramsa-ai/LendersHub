@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import helmet from 'helmet';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
@@ -18,6 +19,10 @@ async function bootstrap() {
   // base64 adds a third, so a loan with two 10 MB files is ~27 MB. Express's 100 KB default
   // rejected every real upload. useBodyParser keeps the rawBody capture enabled above.
   app.useBodyParser('json', { limit: '30mb' });
+
+  // Security headers, and no X-Powered-By. This is a JSON API, so helmet's defaults suit it;
+  // the one change is CORP: documents and voucher images are loaded cross-origin by the app.
+  app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
   app.enableCors({
     origin: [

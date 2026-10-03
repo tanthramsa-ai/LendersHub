@@ -30,6 +30,10 @@ export class SuperAdminJwtStrategy extends PassportStrategy(Strategy, 'super-adm
     const client = await this.prisma.pool.connect();
     try {
       await client.query('BEGIN');
+      // This connection is pooled and may still carry a tenant search_path from an earlier
+      // tenant request, which made `users` resolve to that tenant's table (no totp_enabled
+      // column) and every super-admin call fail with a 500.
+      await client.query('SET LOCAL search_path TO public');
       await client.query("SELECT set_config('app.bypass_rls', 'true', TRUE)");
       const res = await client.query<{
         id: string;
@@ -43,7 +47,7 @@ export class SuperAdminJwtStrategy extends PassportStrategy(Strategy, 'super-adm
         updated_at: Date;
       }>(
         `SELECT id, email, first_name, last_name, role, totp_enabled, tenant_id, created_at, updated_at
-         FROM users WHERE id = $1`,
+         FROM public.users WHERE id = $1`,
         [payload.sub],
       );
       await client.query('COMMIT');

@@ -1,3 +1,4 @@
+import { AuthThrottleModule } from '../common/throttle/auth-throttle.module';
 import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
@@ -21,6 +22,7 @@ import { AuditLogController } from './audit-log/audit-log.controller';
 
 @Module({
   imports: [
+    AuthThrottleModule,
     PassportModule,
     JwtModule.register({
       secret: process.env.JWT_SECRET,

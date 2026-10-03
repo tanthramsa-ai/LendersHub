@@ -13,6 +13,7 @@ import { TenantLoginDto } from './dto/tenant-login.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { assertStrongPassword } from '../../common/utils/password';
 
 type UserRow = {
   id: string;
@@ -24,6 +25,10 @@ type UserRow = {
   role: string;
   is_active: boolean;
 };
+
+// Compared against when no user matches, so an unknown account takes as long to reject as a
+// known one with a wrong password (otherwise response time reveals which emails exist).
+const DUMMY_HASH = bcrypt.hashSync('lendershub-timing-equaliser', 10);
 
 function randomOtp(): string {
   return String(Math.floor(100000 + Math.random() * 900000));
@@ -84,15 +89,19 @@ export class TenantAuthService {
       client.release();
     }
 
-    if (!user) throw new UnauthorizedException('Invalid credentials');
-    if (!user.is_active) throw new UnauthorizedException('Your account has been deactivated');
-
-    // If password is set, verify it
-    if (user.password) {
-      const valid = await bcrypt.compare(dto.password, user.password);
-      if (!valid) throw new UnauthorizedException('Invalid credentials');
+    if (!user) {
+      await bcrypt.compare(dto.password, DUMMY_HASH);
+      throw new UnauthorizedException('Invalid credentials');
     }
-    // If no password is set, allow login (useful for testing/passwordless flows)
+
+    // Fail closed. An account with no stored password used to accept ANY password here
+    // ("passwordless for testing"), which for a user without a phone meant a full session
+    // and otherwise left the OTP as the only gate. Users are always created with a hashed
+    // password, so this only ever bites hand-built rows; they can set one via forgot-password.
+    const passwordOk = !!user.password && (await bcrypt.compare(dto.password, user.password));
+    if (!passwordOk) throw new UnauthorizedException('Invalid credentials');
+    // Checked after the password so a deactivated account isn't confirmed to an unauthenticated caller.
+    if (!user.is_active) throw new UnauthorizedException('Your account has been deactivated');
 
     // Send OTP if user has a phone number
     if (user.phone) {
@@ -215,6 +224,7 @@ export class TenantAuthService {
       const valid = await this.consumeOtp(client, user.id, dto.otp, 'RESET_PASSWORD');
       if (!valid) throw new UnauthorizedException('Invalid or expired OTP');
 
+      assertStrongPassword(dto.newPassword, 'New password');
       const hashed = await bcrypt.hash(dto.newPassword, 12);
       await client.query(
         `UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2`,

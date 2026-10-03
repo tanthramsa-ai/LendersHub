@@ -341,7 +341,7 @@ export default function TenantListPage() {
                         <td className="px-6 py-4">
                           {t.monthlyAmount ? (
                             <span className="font-mono text-sm text-white">
-                              ${Number(t.monthlyAmount).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                              ₹{Number(t.monthlyAmount).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                             </span>
                           ) : (
                             <span className="text-gray-600 text-xs">—</span>
