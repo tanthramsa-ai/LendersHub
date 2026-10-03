@@ -772,7 +772,7 @@ export default function WeeklyLoanDetailPage() {
       )}
 
       {/* Close / Reopen loan action */}
-      {canClose && loan.status === 'DISBURSED' && (
+      {canClose && ['APPROVED', 'DISBURSED'].includes(loan.status) && (
         <div className="flex justify-end">
           <button
             onClick={() => { setCloseError(''); setShowCloseConfirm(true); }}

@@ -44,6 +44,9 @@ export const NPA_THRESHOLD_SETTING_KEY = 'npa_overdue_threshold';
  * ever ages back. Counting statuses would let a borrower who pays ₹1 an
  * installment stay off the NPA list forever.
  *
+ * Only loans being collected count. A PENDING loan already has a schedule whose dates pass while it waits
+ * for approval, and a REJECTED loan keeps its installments for ever; neither owes anything, so neither can be NPA.
+ *
  * @param loanAlias table alias of `loans` in the enclosing query
  */
 export function npaConsecutiveOverdueRunSql(loanAlias: string): string {
@@ -53,6 +56,7 @@ export function npaConsecutiveOverdueRunSql(loanAlias: string): string {
              installment_number - ROW_NUMBER() OVER (ORDER BY installment_number) AS grp
       FROM installments
       WHERE loan_id = ${loanAlias}.id
+        AND ${loanAlias}.status IN ('APPROVED','DISBURSED','DEFAULTED')
         AND due_date < CURRENT_DATE
         AND status NOT IN ('PAID','WAIVED')
         AND paid_amount < total_amount

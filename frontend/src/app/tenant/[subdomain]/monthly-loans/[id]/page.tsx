@@ -621,7 +621,7 @@ export default function MonthlyLoanDetailPage() {
       )}
 
       {/* Close / Reopen loan */}
-      {canClose && loan.status === 'DISBURSED' && (
+      {canClose && ['APPROVED', 'DISBURSED'].includes(loan.status) && (
         <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div>
             <p className="text-sm font-semibold text-orange-800">Close Loan</p>

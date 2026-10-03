@@ -86,83 +86,100 @@ export class NotificationSchedulerService {
       );
       const managerIds = mgrsRes.rows.map((r) => r.id);
 
+      const inr = (n: number) => `₹${n.toLocaleString('en-IN')}`;
+      const fmtDate = (d: string) =>
+        new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+      const notifyManagers = async (dto: {
+        title: string; body: string; type: 'info' | 'warning' | 'alert';
+        entityType: string; entityId: string; link: string;
+      }, skipUserIds: Array<string | null>) => {
+        for (const mgId of managerIds) {
+          if (skipUserIds.includes(mgId)) continue; // a manager who is also the agent already got it
+          await TenantNotificationsService.insertNotification(client, { userId: mgId, ...dto });
+        }
+      };
+      const whatsappTo = async (phone: string | null | undefined, message: string, who: 'agent' | 'customer') => {
+        if (!phone) return;
+        try {
+          await this.whatsapp.send(phone, message, schemaName);
+        } catch (e) {
+          this.logger.warn(`WhatsApp to ${who} failed: ${(e as Error).message}`);
+        }
+      };
+
+      // Overdue installments are summarised ONCE PER LOAN. A borrower who is 20 installments behind used to get
+      // 20 WhatsApps a day, and every manager 20 in-app notifications; with approved loans now ageing into
+      // OVERDUE that would have been a flood on the first run. Due today / tomorrow stay one per installment.
+      const overdueByLoan = new Map<string, InstallmentRow[]>();
+      const upcoming: InstallmentRow[] = [];
       for (const inst of res.rows) {
+        if (inst.status === 'OVERDUE') {
+          const group = overdueByLoan.get(inst.loan_id);
+          if (group) group.push(inst);
+          else overdueByLoan.set(inst.loan_id, [inst]);
+        } else {
+          upcoming.push(inst);
+        }
+      }
+
+      for (const group of overdueByLoan.values()) {
+        group.sort((a, b) => a.installment_number - b.installment_number);
+        const first = group[0];
+        const count = group.length;
+        const balance = Math.round(group.reduce((n, i) => n + parseFloat(i.total_amount) - parseFloat(i.paid_amount), 0) * 100) / 100;
+        const oldest = fmtDate(group.reduce((d, i) => (i.due_date < d ? i.due_date : d), first.due_date));
+
+        const agentTitle = `Overdue: ${first.loan_number} — ${first.customer_name}`;
+        const agentBody = count === 1
+          ? `Installment #${first.installment_number} was due ${oldest}. Balance: ${inr(balance)}.`
+          : `${count} installments are overdue (oldest due ${oldest}). Balance: ${inr(balance)}.`;
+        const customerMsg = count === 1
+          ? `Dear ${first.customer_name}, your installment of ${inr(balance)} on loan ${first.loan_number} was due on ${oldest} and is overdue. Please contact ${companyName} immediately.`
+          : `Dear ${first.customer_name}, ${count} installments totalling ${inr(balance)} on loan ${first.loan_number} are overdue (oldest due ${oldest}). Please contact ${companyName} immediately.`;
+        const entity = count === 1
+          ? { entityType: 'installment', entityId: first.id }
+          : { entityType: 'loan', entityId: first.loan_id };
+        const dto = { title: agentTitle, body: agentBody, type: 'alert' as const, ...entity, link: `/loans/${first.loan_id}` };
+
+        // Each distinct agent assigned to any overdue installment of the loan hears about it once.
+        const agents = new Map<string, string | null>();
+        for (const i of group) if (i.assigned_to && !agents.has(i.assigned_to)) agents.set(i.assigned_to, i.agent_phone);
+        for (const [agentId, agentPhone] of agents) {
+          await TenantNotificationsService.insertNotification(client, { userId: agentId, ...dto });
+          await whatsappTo(agentPhone, `[${companyName}] ${agentTitle}\n${agentBody}`, 'agent');
+        }
+        await notifyManagers(dto, [...agents.keys()]);
+        await whatsappTo(first.customer_phone, customerMsg, 'customer');
+      }
+
+      for (const inst of upcoming) {
         const balance = parseFloat(inst.total_amount) - parseFloat(inst.paid_amount);
-        const dueDate = new Date(inst.due_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-
+        const dueDate = fmtDate(inst.due_date);
         const isDueToday = inst.due_date === today;
-        const isDueTomorrow = inst.due_date === tomorrow;
-        const isOverdue = inst.status === 'OVERDUE';
 
-        // Build messages
-        let agentTitle: string, agentBody: string, customerMsg: string, notifType: string;
-
-        if (isOverdue) {
-          agentTitle = `Overdue: ${inst.loan_number} — ${inst.customer_name}`;
-          agentBody = `Installment #${inst.installment_number} was due ${dueDate}. Balance: ₹${balance.toLocaleString('en-IN')}.`;
-          customerMsg = `Dear ${inst.customer_name}, your installment of ₹${balance.toLocaleString('en-IN')} on loan ${inst.loan_number} was due on ${dueDate} and is overdue. Please contact ${companyName} immediately.`;
-          notifType = 'alert';
-        } else if (isDueToday) {
+        let agentTitle: string, agentBody: string, customerMsg: string, notifType: 'info' | 'warning';
+        if (isDueToday) {
           agentTitle = `Due Today: ${inst.loan_number} — ${inst.customer_name}`;
-          agentBody = `Installment #${inst.installment_number} of ₹${balance.toLocaleString('en-IN')} is due today.`;
-          customerMsg = `Dear ${inst.customer_name}, your installment of ₹${balance.toLocaleString('en-IN')} on loan ${inst.loan_number} is due TODAY. Please make the payment at the earliest.`;
+          agentBody = `Installment #${inst.installment_number} of ${inr(balance)} is due today.`;
+          customerMsg = `Dear ${inst.customer_name}, your installment of ${inr(balance)} on loan ${inst.loan_number} is due TODAY. Please make the payment at the earliest.`;
           notifType = 'warning';
         } else {
           agentTitle = `Due Tomorrow: ${inst.loan_number} — ${inst.customer_name}`;
-          agentBody = `Installment #${inst.installment_number} of ₹${balance.toLocaleString('en-IN')} is due on ${dueDate}.`;
-          customerMsg = `Dear ${inst.customer_name}, your installment of ₹${balance.toLocaleString('en-IN')} on loan ${inst.loan_number} is due on ${dueDate}. Please be ready for payment.`;
+          agentBody = `Installment #${inst.installment_number} of ${inr(balance)} is due on ${dueDate}.`;
+          customerMsg = `Dear ${inst.customer_name}, your installment of ${inr(balance)} on loan ${inst.loan_number} is due on ${dueDate}. Please be ready for payment.`;
           notifType = 'info';
         }
+        const dto = { title: agentTitle, body: agentBody, type: notifType, entityType: 'installment', entityId: inst.id, link: `/loans/${inst.loan_id}` };
 
-        // In-app notification for assigned agent
+        // In-app notification + WhatsApp for the assigned agent
         if (inst.assigned_to) {
-          await TenantNotificationsService.insertNotification(client, {
-            userId: inst.assigned_to,
-            title: agentTitle,
-            body: agentBody,
-            type: notifType as 'info' | 'warning' | 'alert',
-            entityType: 'installment',
-            entityId: inst.id,
-            link: `/loans/${inst.loan_id}`,
-          });
-
-          // WhatsApp to agent
-          if (inst.agent_phone) {
-            try {
-              await this.whatsapp.send(
-                inst.agent_phone,
-                `[${companyName}] ${agentTitle}\n${agentBody}`,
-                schemaName,
-              );
-            } catch (e) {
-              this.logger.warn(`WhatsApp to agent failed: ${(e as Error).message}`);
-            }
-          }
+          await TenantNotificationsService.insertNotification(client, { userId: inst.assigned_to, ...dto });
+          await whatsappTo(inst.agent_phone, `[${companyName}] ${agentTitle}\n${agentBody}`, 'agent');
         }
-
-        // In-app notification for managers (only for overdue + today)
-        if ((isOverdue || isDueToday) && managerIds.length) {
-          for (const mgId of managerIds) {
-            if (mgId === inst.assigned_to) continue; // skip if manager is also the agent
-            await TenantNotificationsService.insertNotification(client, {
-              userId: mgId,
-              title: agentTitle,
-              body: agentBody,
-              type: notifType as 'info' | 'warning' | 'alert',
-              entityType: 'installment',
-              entityId: inst.id,
-              link: `/loans/${inst.loan_id}`,
-            });
-          }
-        }
-
-        // WhatsApp to customer (due today or overdue only)
-        if ((isDueToday || isOverdue) && inst.customer_phone) {
-          try {
-            await this.whatsapp.send(inst.customer_phone, customerMsg, schemaName);
-          } catch (e) {
-            this.logger.warn(`WhatsApp to customer failed: ${(e as Error).message}`);
-          }
+        // Managers hear about what is due today (not tomorrow); the customer too
+        if (isDueToday) {
+          await notifyManagers(dto, [inst.assigned_to]);
+          await whatsappTo(inst.customer_phone, customerMsg, 'customer');
         }
       }
 
