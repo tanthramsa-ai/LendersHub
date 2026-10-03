@@ -4,7 +4,7 @@ import { TenantNotificationsService } from '../notifications/tenant-notification
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
 import { TenantLedgerPostingService } from '../ledger/tenant-ledger-posting.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { receiptColumnEnsuredSchemas } from '../common/receipt-number';
 
 function makeUser(overrides: Partial<TenantJwtPayload> = {}): TenantJwtPayload {
@@ -64,7 +64,7 @@ describe('TenantLoansService', () => {
         .mockResolvedValueOnce({ rows: [] }) // SET search_path
         .mockResolvedValueOnce({ rows: [{ id: 'loan1', status: 'PENDING', loan_number: 'LN-1', first_due_date: '2026-08-01', principal: '15000.00', customer_id: 'cust1', customer_status: 'ACTIVE' }] })
         .mockResolvedValueOnce({ rows: [] }) // BEGIN
-        .mockResolvedValueOnce({ rows: [] }) // UPDATE loans SET status='APPROVED'
+        .mockResolvedValueOnce({ rows: [{ id: 'loan1' }] }) // UPDATE loans SET status='APPROVED' ... RETURNING id
         .mockResolvedValueOnce({ rows: [] }); // COMMIT
 
       const result = await svc.approveLoan(makeUser(), 'loan1');
@@ -93,7 +93,7 @@ describe('TenantLoansService', () => {
         .mockResolvedValueOnce({ rows: [] })
         .mockResolvedValueOnce({ rows: [{ id: 'loan1', status: 'PENDING', loan_number: 'LN-1', first_due_date: '2026-08-01', principal: '15000.00', customer_id: 'cust1', customer_status: 'ACTIVE' }] })
         .mockResolvedValueOnce({ rows: [] }) // BEGIN
-        .mockResolvedValueOnce({ rows: [] }) // UPDATE loans
+        .mockResolvedValueOnce({ rows: [{ id: 'loan1' }] }) // UPDATE loans ... RETURNING id
         .mockResolvedValueOnce({ rows: [] }); // ROLLBACK
       (ledgerPosting.postWithClient as jest.Mock).mockRejectedValueOnce(new Error('ledger down'));
 
@@ -106,6 +106,7 @@ describe('TenantLoansService', () => {
     function answerApproval(loanRow: Record<string, unknown>) {
       query.mockImplementation(async (sql: string) => {
         if (sql.includes('FROM loans l JOIN customers c')) return { rows: [loanRow] };
+        if (sql.includes(`status = 'APPROVED'`)) return { rows: [{ id: 'loan1' }] };
         if (sql.includes('UPDATE customers SET status')) return { rows: [{ id: 'cust1' }] };
         return { rows: [] };
       });
@@ -151,6 +152,36 @@ describe('TenantLoansService', () => {
       expect(ledgerPosting.postWithClient).not.toHaveBeenCalled();
     });
 
+    it('does nothing when another approver claimed the loan first (the status-guarded UPDATE matches no row)', async () => {
+      query.mockImplementation(async (sql: string) => {
+        if (sql.includes('FROM loans l JOIN customers c')) return { rows: [newCustomerLoan] }; // both approvers saw PENDING
+        return { rows: [] };                                                                    // ...but the claim returns nothing
+      });
+
+      await expect(svc.approveLoan(makeUser(), 'loan1', { firstDueDate: '2026-09-01' })).rejects.toThrow(ConflictException);
+
+      const sqls = query.mock.calls.map((c) => String(c[0]));
+      expect(sqls).toContain('ROLLBACK');
+      expect(sqls).not.toContain('COMMIT');
+      // The loser must not shift the schedule, post a second disbursement or notify the agent again.
+      expect(sqls.some((q) => q.includes('UPDATE installments'))).toBe(false);
+      expect(sqls.some((q) => q.includes('INSERT INTO notifications'))).toBe(false);
+      expect(ledgerPosting.postWithClient).not.toHaveBeenCalled();
+      expect(activity.record).not.toHaveBeenCalled();
+    });
+
+    it('claims the loan before shifting the schedule', async () => {
+      answerApproval(newCustomerLoan);
+
+      await svc.approveLoan(makeUser(), 'loan1', { firstDueDate: '2026-09-01' });
+
+      const sqls = query.mock.calls.map((c) => String(c[0]));
+      const claim = sqls.findIndex((q) => q.includes(`status = 'APPROVED'`) && q.includes(`status = 'PENDING'`));
+      const shift = sqls.findIndex((q) => q.includes('UPDATE installments'));
+      expect(claim).toBeGreaterThan(-1);
+      expect(shift).toBeGreaterThan(claim);
+    });
+
     it("refuses to verify a new customer who has no photo on file, before touching anything", async () => {
       answerApproval({ ...newCustomerLoan, customer_has_photo: false });
 
@@ -170,6 +201,7 @@ describe('TenantLoansService', () => {
       query.mockImplementation(async (sql: string) =>
         sql.includes('FROM loans l JOIN customers c')
           ? { rows: [{ id: 'loan1', status: 'PENDING', loan_number: 'WL-1', cycle_type: 'WEEKLY', loan_officer_id: 'agent1', customer_name: 'Ravi Kumar' }] }
+          : sql.includes(`status = 'REJECTED'`) ? { rows: [{ id: 'loan1' }] }
           : { rows: [] });
 
       const result = await svc.rejectLoan(makeUser(), 'loan1', { reason: 'Aadhaar copy is blurred' });
@@ -179,6 +211,19 @@ describe('TenantLoansService', () => {
       expect(sqls.some((s) => s.includes('UPDATE customers'))).toBe(false);
       const insert = query.mock.calls.find((c) => String(c[0]).includes('INSERT INTO notifications'));
       expect(insert?.[1]).toEqual(expect.arrayContaining(['agent1', 'Ravi Kumar: Aadhaar copy is blurred']));
+    });
+  });
+
+  describe('rejectLoan racing an approval', () => {
+    it('does not overwrite a loan that was approved after the status check', async () => {
+      query.mockImplementation(async (sql: string) =>
+        sql.includes('FROM loans l JOIN customers c')
+          ? { rows: [{ id: 'loan1', status: 'PENDING', loan_number: 'WL-1', cycle_type: 'WEEKLY', loan_officer_id: 'agent1', customer_name: 'Ravi Kumar' }] }
+          : { rows: [] }); // the status-guarded UPDATE matches nothing: the approver committed first
+
+      await expect(svc.rejectLoan(makeUser(), 'loan1', { reason: 'Blurred' })).rejects.toThrow(ConflictException);
+      expect(activity.record).not.toHaveBeenCalled();
+      expect(query.mock.calls.some((c) => String(c[0]).includes('INSERT INTO notifications'))).toBe(false);
     });
   });
 
@@ -230,6 +275,22 @@ describe('TenantLoansService', () => {
 
       const insert = query.mock.calls.find((c) => String(c[0]).includes('INSERT INTO loans'));
       expect(String(insert?.[0])).toContain("'PENDING'");
+    });
+  });
+
+  describe('recordPayment amount validation', () => {
+    // These must be refused before a connection is even taken: a NaN that reached the
+    // payments table is stored happily by numeric and then poisons every ledger SUM.
+    const bad: [string, unknown][] = [
+      ['a non-numeric string', 'abc'], ['a boolean', true], ['an array', [5]], ['NaN', NaN],
+      ['Infinity', Infinity], ['exponent notation', '1e3'], ['zero', 0], ['a negative number', -50],
+      ['a value that rounds to zero', 0.004], ['an absurdly large value', 1e12], ['null', null], ['an object', {}],
+    ];
+    it.each(bad)('rejects %s as the amount', async (_label, amount) => {
+      await expect(svc.recordPayment(makeUser(), 'loan1', {
+        installmentId: 'inst17', amount: amount as number, paymentMethod: 'CASH',
+      })).rejects.toThrow(BadRequestException);
+      expect(poolConnect).not.toHaveBeenCalled();
     });
   });
 

@@ -5,6 +5,7 @@ import { TenantActivityLogService } from '../activity-log/tenant-activity-log.se
 import { TenantLedgerPostingService, LedgerPaymentChannel, splitPrincipalInterest } from '../ledger/tenant-ledger-posting.service';
 import { FIELD_ROLES, MANAGER_ROLES, UserRole } from '../common/roles';
 import { nextReceiptNumber } from '../common/receipt-number';
+import { parseMoneyAmount } from '../../common/utils/money';
 
 /** Field collection (agent-facing) gets an AGENT_ prefix on cash/UPI so the ledger
  * distinguishes money collected in the field from money paid directly to the office. */
@@ -874,7 +875,7 @@ export class TenantCollectionsService {
     if (!['AGENT', ...MANAGER_ROLES, 'STAFF'].includes(user.role)) {
       throw new ForbiddenException('You do not have permission to record collections');
     }
-    if (!dto.amount || dto.amount <= 0) throw new BadRequestException('Amount must be positive');
+    dto = { ...dto, amount: parseMoneyAmount(dto.amount) };
     await this.ensureAssignedTo(user.schemaName);
     await this.ensureCollectionWorkflow(user.schemaName);
 
@@ -1328,7 +1329,7 @@ export class TenantCollectionsService {
 
   async recordPayment(user: TenantJwtPayload, installmentId: string, dto: RecordCollectionPaymentDto) {
     if (user.role === 'CUSTOMER') throw new ForbiddenException('You do not have permission to record payments');
-    if (!dto.amount || dto.amount <= 0) throw new BadRequestException('Amount must be positive');
+    dto = { ...dto, amount: parseMoneyAmount(dto.amount) };
     return this.withSchema(user.schemaName, async (client) => {
       const instRes = await client.query(
         `SELECT i.*, l.id AS loan_id, l.status AS loan_status, l.loan_number, l.customer_id

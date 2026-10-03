@@ -131,6 +131,25 @@ export class HttpExceptionFilter extends BaseExceptionFilter {
       return;
     }
 
+    // Errors raised by the body parser before any controller runs (oversized or malformed
+    // JSON). They are plain http-errors, not HttpExceptions, so without this they fell
+    // through to the 500 below even though the client is at fault.
+    const bodyError = exception as { type?: string; limit?: number };
+    if (bodyError?.type === 'entity.too.large') {
+      const mb = bodyError.limit ? Math.round(bodyError.limit / (1024 * 1024)) : null;
+      this.logger.warn(`[413] request body exceeds the ${mb ?? '?'} MB limit`);
+      response.status(HttpStatus.PAYLOAD_TOO_LARGE).json({
+        statusCode: HttpStatus.PAYLOAD_TOO_LARGE,
+        message: `The upload is too large${mb ? ` (limit ${mb} MB)` : ''}. Use smaller files.`,
+      });
+      return;
+    }
+    if (bodyError?.type === 'entity.parse.failed') {
+      this.logger.warn('[400] malformed JSON body');
+      response.status(HttpStatus.BAD_REQUEST).json({ statusCode: HttpStatus.BAD_REQUEST, message: 'Request body is not valid JSON' });
+      return;
+    }
+
     // Postgres / pg errors
     const pgError = exception as Record<string, unknown>;
     const pgCode = pgError?.code as string | undefined;

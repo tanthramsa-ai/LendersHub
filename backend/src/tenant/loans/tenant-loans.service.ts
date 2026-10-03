@@ -1,10 +1,11 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { TenantNotificationsService } from '../notifications/tenant-notifications.service';
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
 import { TenantLedgerPostingService, splitPrincipalInterest } from '../ledger/tenant-ledger-posting.service';
 import { safePagination } from '../../common/utils/pagination';
+import { parseMoneyAmount } from '../../common/utils/money';
 import { MANAGER_ROLES, FIELD_ROLES, UserRole } from '../common/roles';
 import { assertNoDigitsOrSpecialChars } from '../customers/customer-validation';
 import { assertHasLetter } from '../common/text-validation';
@@ -1409,6 +1410,22 @@ export class TenantLoansService {
       await client.query('BEGIN');
       let committed = false;
       try {
+        // Claim the loan before touching anything else. The status read above is outside
+        // this transaction, so two approvers can both see PENDING; the status guard here
+        // is what serialises them — the second blocks on the row lock, re-evaluates the
+        // guard against the committed APPROVED row and gets nothing back. Without it the
+        // schedule shifted twice and the notification and audit entries were duplicated.
+        // disbursed_at is only ever set here, not at creation — a PENDING loan hasn't
+        // actually disbursed anything yet, whatever the loan cycle's calculation type.
+        const claimed = await client.query(
+          `UPDATE loans SET status = 'APPROVED', disbursed_at = NOW(), updated_at = NOW()
+            WHERE id = $1 AND status = 'PENDING' AND deleted_at IS NULL RETURNING id`,
+          [loanId],
+        );
+        if (!claimed.rows[0]) {
+          throw new ConflictException('This loan was already approved or rejected by someone else');
+        }
+
         if (dto.firstDueDate && dto.firstDueDate !== toYmd(res.rows[0].first_due_date)) {
           await client.query(
             `UPDATE installments SET due_date = due_date + ($1::date - $2::date)
@@ -1418,14 +1435,11 @@ export class TenantLoansService {
           await client.query(`UPDATE loans SET first_due_date = $1 WHERE id = $2`, [dto.firstDueDate, loanId]);
         }
 
-        // disbursed_at is only ever set here, not at creation — a PENDING loan hasn't
-        // actually disbursed anything yet, whatever the loan cycle's calculation type.
         // This is the single point across every loan type where money actually
         // leaves — every createXLoan() method inserts as PENDING regardless of
         // what its return value claims — so it's the one place a DISBURSEMENT
         // ledger transaction needs to post (requirements doc §4.1/§15: "A new
         // loan disbursement immediately increases outstanding principal").
-        await client.query(`UPDATE loans SET status = 'APPROVED', disbursed_at = NOW(), updated_at = NOW() WHERE id = $1`, [loanId]);
         await this.ledgerPosting.postWithClient(client, user, {
           transactionType: 'DISBURSEMENT',
           loanId, customerId: res.rows[0].customer_id,
@@ -1510,10 +1524,16 @@ export class TenantLoansService {
       // No dedicated rejection-reason column exists; reuse close_comment, mirroring how the
       // close/reopen flow already stores its comment there. The customer is left as-is,
       // so the agent can fix their details and submit a new loan for them.
-      await client.query(
-        `UPDATE loans SET status = 'REJECTED', close_comment = $2, updated_at = NOW() WHERE id = $1`,
+      // Guarded on status so a reject racing an approve can't overwrite an approval
+      // that already posted its disbursement.
+      const rejected = await client.query(
+        `UPDATE loans SET status = 'REJECTED', close_comment = $2, updated_at = NOW()
+          WHERE id = $1 AND status = 'PENDING' RETURNING id`,
         [loanId, reason],
       );
+      if (!rejected.rows[0]) {
+        throw new ConflictException('This loan was already approved or rejected by someone else');
+      }
       await this.activity.record(client, user, {
         action: 'loan.rejected',
         entityType: 'loan',
@@ -3326,7 +3346,7 @@ export class TenantLoansService {
     }
 
     const VALID_METHODS = ['CASH', 'UPI', 'BANK_TRANSFER', 'CHEQUE', 'NEFT', 'RTGS'];
-    if (!dto.amount || dto.amount <= 0) throw new BadRequestException('Payment amount must be greater than zero');
+    dto = { ...dto, amount: parseMoneyAmount(dto.amount, 'Payment amount') };
     if (!dto.paymentMethod || !VALID_METHODS.includes(dto.paymentMethod)) {
       throw new BadRequestException(`paymentMethod must be one of: ${VALID_METHODS.join(', ')}`);
     }

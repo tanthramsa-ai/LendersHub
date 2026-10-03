@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
@@ -10,7 +11,13 @@ async function bootstrap() {
   // verify a provider's HMAC signature against the exact bytes it sent
   // (re-serializing the parsed JSON would not reproduce an identical byte
   // sequence and would make every signature check fail).
-  const app = await NestFactory.create(AppModule, { rawBody: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
+
+  // Documents (photo, Aadhaar, promissory note, security doc) travel inside the JSON body
+  // as base64 data URLs. The frontend allows 5 MB per customer file and 10 MB per loan file;
+  // base64 adds a third, so a loan with two 10 MB files is ~27 MB. Express's 100 KB default
+  // rejected every real upload. useBodyParser keeps the rawBody capture enabled above.
+  app.useBodyParser('json', { limit: '30mb' });
 
   app.enableCors({
     origin: [

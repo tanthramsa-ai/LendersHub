@@ -3,6 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { TenantActivityLogService } from '../activity-log/tenant-activity-log.service';
 import { LEDGER_ROLES, UserRole } from '../common/roles';
+import { parseMoneyAmount } from '../../common/utils/money';
 
 export interface CreateTransactionDto {
   transactionDate: string;   // YYYY-MM-DD
@@ -264,7 +265,7 @@ export class TenantLedgerService {
 
   async addTransaction(user: TenantJwtPayload, dto: CreateTransactionDto) {
     this.assertLedgerAccess(user);
-    if (!dto.amount || dto.amount <= 0) throw new BadRequestException('Amount must be positive');
+    dto = { ...dto, amount: parseMoneyAmount(dto.amount) };
 
     return this.withSchema(user.schemaName, async (client) => {
       await this.ensureTable(client, user.schemaName);
