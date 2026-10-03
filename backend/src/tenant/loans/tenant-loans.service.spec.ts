@@ -7,6 +7,9 @@ import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { receiptColumnEnsuredSchemas } from '../common/receipt-number';
 
+/** YYYY-MM-DD, `days` from now (negative = past). Dates in these tests must move with the clock. */
+const ymd = (days: number) => new Date(Date.now() + days * 864e5).toISOString().slice(0, 10);
+
 function makeUser(overrides: Partial<TenantJwtPayload> = {}): TenantJwtPayload {
   return {
     sub: 'u1', email: 'owner@acme.test', firstName: 'Ann', lastName: 'Owner', role: 'OWNER',
@@ -158,7 +161,7 @@ describe('TenantLoansService', () => {
         return { rows: [] };                                                                    // ...but the claim returns nothing
       });
 
-      await expect(svc.approveLoan(makeUser(), 'loan1', { firstDueDate: '2026-09-01' })).rejects.toThrow(ConflictException);
+      await expect(svc.approveLoan(makeUser(), 'loan1', { firstDueDate: ymd(30) })).rejects.toThrow(ConflictException);
 
       const sqls = query.mock.calls.map((c) => String(c[0]));
       expect(sqls).toContain('ROLLBACK');
@@ -173,7 +176,7 @@ describe('TenantLoansService', () => {
     it('claims the loan before shifting the schedule', async () => {
       answerApproval(newCustomerLoan);
 
-      await svc.approveLoan(makeUser(), 'loan1', { firstDueDate: '2026-09-01' });
+      await svc.approveLoan(makeUser(), 'loan1', { firstDueDate: ymd(30) });
 
       const sqls = query.mock.calls.map((c) => String(c[0]));
       const claim = sqls.findIndex((q) => q.includes(`status = 'APPROVED'`) && q.includes(`status = 'PENDING'`));
@@ -227,10 +230,115 @@ describe('TenantLoansService', () => {
     });
   });
 
+  describe('first due date must not be in the past', () => {
+    const weekly = (firstDueDate: string) => ({
+      customerId: 'cust1', principal: 10000, interestRate: 24, termWeeks: 10,
+      firstDueDate, calculationType: 'FLAT' as const, emiRounding: 0 as const,
+      promissoryNoteUrl: 'data:application/pdf;base64,xyz',
+    });
+    function mockReadyCustomer() {
+      query.mockImplementation(async (sql: string) => {
+        if (sql.includes('FROM customers WHERE id')) {
+          return { rows: [{ id: 'cust1', first_name: 'Ravi', last_name: 'Kumar', status: 'ACTIVE', has_aadhaar_doc: true, has_photo: true }] };
+        }
+        if (sql.includes('COUNT(*)')) return { rows: [{ n: '0' }] };
+        if (sql.includes('INSERT INTO loans')) return { rows: [{ id: 'loan1' }] };
+        return { rows: [] };
+      });
+    }
+    const agent = () => makeUser({ role: 'AGENT', sub: 'agent1' });
+
+    it.each([[-2], [-30], [-365]])('refuses a weekly loan first due %p days ago, before touching the database', async (days) => {
+      await expect(svc.createWeeklyLoan(agent(), weekly(ymd(days)))).rejects.toThrow('firstDueDate cannot be in the past');
+      expect(poolConnect).not.toHaveBeenCalled();
+    });
+
+    // One day of grace: the server date is UTC, a user in IST can be a calendar day ahead of it.
+    it.each([[-1], [0], [1], [90]])('accepts a first due date %p days from today', async (days) => {
+      mockReadyCustomer();
+      await expect(svc.createWeeklyLoan(agent(), weekly(ymd(days)))).resolves.toBeDefined();
+    });
+
+    it('applies to the other loan types too', async () => {
+      const base = { customerId: 'cust1', principal: 10000, interestRate: 24, firstDueDate: ymd(-10), promissoryNoteUrl: 'x' };
+      await expect(svc.createDailyLoan(agent(), { ...base, termDays: 30, calculationType: 'FLAT', emiRounding: 0, cycleType: 'DAILY_NO_SUNDAY' } as never)).rejects.toThrow('cannot be in the past');
+      await expect(svc.createMonthlyLoan(agent(), { ...base, termMonths: 6 } as never)).rejects.toThrow('cannot be in the past');
+      await expect(svc.createAgentRiskLoan(agent(), { ...base, termMonths: 6 } as never)).rejects.toThrow('cannot be in the past');
+    });
+
+    it('agent-risk loans now require a real date at all (they validated none before)', async () => {
+      const base = { customerId: 'cust1', principal: 10000, interestRate: 24, termMonths: 6, promissoryNoteUrl: 'x' };
+      await expect(svc.createAgentRiskLoan(agent(), base as never)).rejects.toThrow('firstDueDate must be YYYY-MM-DD');
+      await expect(svc.createAgentRiskLoan(agent(), { ...base, firstDueDate: '2026-02-31' } as never)).rejects.toThrow('firstDueDate must be YYYY-MM-DD');
+    });
+
+    describe('editing', () => {
+      const edit = (firstDueDate: string) => ({
+        principal: 10000, interestRate: 24, termWeeks: 10, firstDueDate, calculationType: 'FLAT' as const, emiRounding: 0 as const,
+      });
+      function mockStoredLoan(storedDue: string) {
+        query.mockImplementation(async (sql: string) => {
+          if (sql.includes('FROM loans WHERE id')) {
+            return { rows: [{ loan_number: 'WL-1', status: 'DISBURSED', cycle_type: 'WEEKLY', pending_closure: false, first_due_ymd: storedDue, loan_type_id: null, security_doc_url: null, promissory_note_url: null }] };
+          }
+          if (sql.includes('FROM payments')) return { rows: [{ n: '0' }] };
+          return { rows: [] };
+        });
+      }
+
+      it('still lets an old, unpaid loan be edited when its date is left alone', async () => {
+        const stored = ymd(-20);
+        mockStoredLoan(stored);
+        await expect(svc.updateWeeklyLoan(makeUser(), 'loan1', edit(stored))).resolves.toBeDefined();
+      });
+
+      it('refuses moving the date to a past one', async () => {
+        mockStoredLoan(ymd(-20));
+        await expect(svc.updateWeeklyLoan(makeUser(), 'loan1', edit(ymd(-5)))).rejects.toThrow('firstDueDate cannot be in the past');
+      });
+
+      it('allows moving it to a future one', async () => {
+        mockStoredLoan(ymd(-20));
+        await expect(svc.updateWeeklyLoan(makeUser(), 'loan1', edit(ymd(14)))).resolves.toBeDefined();
+      });
+    });
+
+    describe('approving', () => {
+      const loanRow = (due: string) => ({
+        id: 'loan1', status: 'PENDING', loan_number: 'WL-1', first_due_date: due, principal: '20000.00',
+        customer_id: 'cust1', cycle_type: 'WEEKLY', loan_officer_id: 'agent1',
+        customer_status: 'ACTIVE', customer_has_aadhaar_doc: true, customer_has_photo: true,
+        customer_name: 'Ravi Kumar', customer_code: 'CUST00007',
+      });
+      const answer = (due: string) => query.mockImplementation(async (sql: string) => {
+        if (sql.includes('FROM loans l JOIN customers c')) return { rows: [loanRow(due)] };
+        if (sql.includes(`status = 'APPROVED'`)) return { rows: [{ id: 'loan1' }] };
+        return { rows: [] };
+      });
+
+      it('lets a manager approve an old loan without picking a new date', async () => {
+        answer(ymd(-20));
+        await expect(svc.approveLoan(makeUser(), 'loan1')).resolves.toEqual(expect.objectContaining({ status: 'APPROVED' }));
+      });
+
+      it('refuses a past date chosen at approval', async () => {
+        answer(ymd(-20));
+        await expect(svc.approveLoan(makeUser(), 'loan1', { firstDueDate: ymd(-5) })).rejects.toThrow('firstDueDate cannot be in the past');
+        expect(ledgerPosting.postWithClient).not.toHaveBeenCalled();
+      });
+
+      it('accepts re-confirming the stored date even though it is past', async () => {
+        const stored = ymd(-20);
+        answer(stored);
+        await expect(svc.approveLoan(makeUser(), 'loan1', { firstDueDate: stored })).resolves.toBeDefined();
+      });
+    });
+  });
+
   describe('creating a loan for a customer who is not verified yet', () => {
     const weekly = {
       customerId: 'cust1', principal: 10000, interestRate: 24, termWeeks: 10,
-      firstDueDate: '2026-10-05', calculationType: 'FLAT' as const, emiRounding: 0 as const,
+      firstDueDate: ymd(7), calculationType: 'FLAT' as const, emiRounding: 0 as const,
       promissoryNoteUrl: 'data:application/pdf;base64,xyz',
     };
     function mockCustomer(overrides: { has_aadhaar_doc: boolean; has_photo: boolean }) {

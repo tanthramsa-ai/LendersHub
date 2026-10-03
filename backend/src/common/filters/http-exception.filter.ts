@@ -44,6 +44,7 @@ function uniqueFieldFromDetail(detail?: string | null): string | null {
 const PG_CODE_MAP: Record<string, { status: number; message: string }> = {
   '22P02': { status: 400, message: 'Invalid ID format' },                     // invalid_text_representation (bad UUID)
   '23503': { status: 400, message: 'Referenced record does not exist' },      // foreign_key_violation
+  '23514': { status: 400, message: 'A value is outside the allowed range' },    // check_violation (e.g. a NaN amount)
   '2201W': { status: 400, message: 'Invalid pagination parameters' },         // invalid_row_count_in_limit_or_offset_clause
   '2201X': { status: 400, message: 'Invalid pagination parameters' },         // invalid_row_count_in_result_offset_clause
   '22P06': { status: 400, message: 'Invalid field value' },

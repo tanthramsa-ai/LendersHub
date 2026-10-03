@@ -545,5 +545,35 @@ export function tenantSchemaDDL(s: string): string[] {
        ('CUSTOMER', 'view_collection', 'self'),
        ('CUSTOMER', 'add_collection',  'no')
      ON CONFLICT (role, permission_key) DO NOTHING`,
+
+    // ── money columns can never hold NaN ───────────────────────────────────────
+    // numeric accepts NaN, and NaN sorts above every number, so the existing `amount > 0`
+    // checks let it straight through. One bad request used to be enough to turn every SUM
+    // over the ledger into NaN. Application code validates amounts now; this is the backstop.
+    // (Infinity needs no check: a numeric(p,s) column cannot hold it.)
+    // NOT VALID: enforced for every new or changed row without rescanning, or failing on,
+    // rows that predate it.
+    ...noNanConstraints(q),
   ];
+}
+
+/** The money columns of each table that must never hold NaN. */
+const MONEY_COLUMNS: Record<string, string[]> = {
+  loans: ['principal', 'emi_amount'],
+  installments: ['principal_amount', 'interest_amount', 'total_amount', 'paid_amount'],
+  payments: ['amount'],
+  ledger_transactions: ['principal_amount', 'interest_amount', 'fee_amount', 'other_amount', 'total_amount'],
+  fund_transactions: ['amount'],
+  funder_transactions: ['amount'],
+  loan_funder_allocations: ['amount'],
+  incoming_payment_events: ['amount'],
+};
+
+function noNanConstraints(q: string): string[] {
+  return Object.entries(MONEY_COLUMNS).map(
+    ([table, columns]) => `DO $$ BEGIN
+       ALTER TABLE ${q}."${table}" ADD CONSTRAINT ck_${table}_no_nan
+         CHECK (${columns.map((c) => `${c} <> 'NaN'`).join(' AND ')}) NOT VALID;
+     EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+  );
 }
