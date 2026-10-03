@@ -2336,3 +2336,145 @@ export function getTenantActivity(params: {
   if (params.search) qs.set('search', params.search);
   return tenantFetch<TenantActivityPage>(`/api/v1/tenant/activity-log?${qs.toString()}`);
 }
+
+// ── Financial Ledger statement ───────────────────────────────────────────────
+
+export type StatementPeriod = 'monthly' | 'quarterly' | 'custom';
+export type StatementKind =
+  | 'DISBURSEMENT' | 'COLLECTION_PRINCIPAL' | 'COLLECTION_INTEREST' | 'COLLECTION_OTHER' | 'REFUND' | 'FEE_INCOME'
+  | 'CASH_IN' | 'CASH_OUT' | 'BANK_IN' | 'BANK_OUT' | 'TRANSFER' | 'ADJUSTMENT';
+
+export interface StatementParams {
+  fy?: number;
+  period?: StatementPeriod;
+  from?: string;
+  to?: string;
+  group?: 'principal' | 'interest' | 'cashbank';
+  kind?: string;
+  mode?: string;
+  agentId?: string;
+  branchId?: string;
+  loanId?: string;
+  q?: string;
+  order?: 'asc' | 'desc';
+  page?: number;
+  limit?: number;
+}
+
+export interface StatementBucket {
+  key: string; label: string; from: string; to: string;
+  disbursed: number; principal: number; interest: number; other: number;
+  moneyIn: number; moneyOut: number; net: number; collections: number;
+}
+
+export interface StatementCards {
+  financialYear: string;
+  totalCapital: number | null; fundAvailable: number | null;
+  totalLent: number | null; lentInPeriod: number | null;
+  outstandingPrincipal: number | null; outstandingInterest: number | null;
+  interestCollected: number; principalRecovered: number; otherCollected: number; collectionsCount: number;
+  cashInHand: number | null; bankBalance: number | null;
+}
+
+export interface StatementSummary {
+  fy: number; fyLabel: string; period: StatementPeriod;
+  range: { from: string; to: string };
+  availableFys: number[];
+  scope: 'full' | 'manager' | 'agent';
+  cards: StatementCards;
+  buckets: StatementBucket[];
+}
+
+export interface StatementRow {
+  id: string; date: string; kind: StatementKind; kindLabel: string;
+  loanId: string | null; loanNumber: string | null; loanType: string | null;
+  customerName: string | null; agentName: string | null; branchName: string | null;
+  debit: number | null; credit: number | null; runningBalance: number | null;
+  mode: string; accountName: string | null; referenceNo: string | null; remarks: string | null;
+  createdByName: string | null; source: 'LEDGER' | 'MANUAL'; sourceId: string; groupId: string | null;
+}
+
+export interface StatementPage {
+  fy: number; fyLabel: string; period: StatementPeriod;
+  range: { from: string; to: string };
+  openingBalance: number | null; closingBalance: number | null;
+  totalCredit: number; totalDebit: number;
+  rows: StatementRow[]; total: number; page: number; limit: number;
+}
+
+export interface StatementBreakdownRow {
+  key: string; label: string; disbursed: number; principalCollected: number; interestCollected: number;
+  otherCollected: number; moneyIn: number; moneyOut: number; net: number; loans: number;
+}
+
+function statementQuery(p: StatementParams & { dimension?: string }): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(p)) if (v !== undefined && v !== null && v !== '') q.set(k, String(v));
+  const s = q.toString();
+  return s ? `?${s}` : '';
+}
+
+export function getStatementSummary(p: StatementParams) {
+  return tenantFetch<StatementSummary>(`/api/v1/tenant/financial-ledger/summary${statementQuery(p)}`);
+}
+
+export function getStatementTransactions(p: StatementParams) {
+  return tenantFetch<StatementPage>(`/api/v1/tenant/financial-ledger/transactions${statementQuery(p)}`);
+}
+
+export function getStatementBreakdown(p: StatementParams, dimension: 'loan-type' | 'agent' | 'branch' | 'mode') {
+  return tenantFetch<{ dimension: string; rows: StatementBreakdownRow[] }>(
+    `/api/v1/tenant/financial-ledger/breakdown${statementQuery({ ...p, dimension })}`,
+  );
+}
+
+/**
+ * Downloads the statement as Excel or PDF for the same filters as the screen. A plain link can't
+ * be used: the file endpoint needs the Authorization header, so it is fetched and saved as a blob.
+ */
+export async function downloadStatement(kind: 'excel' | 'pdf', p: StatementParams): Promise<void> {
+  const token = getToken();
+  const filters: StatementParams = { ...p };
+  delete filters.page;
+  delete filters.limit;
+  const res = await fetch(`${BASE}/api/v1/tenant/financial-ledger/export/${kind}${statementQuery({ ...filters, order: 'asc' })}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (res.status === 401 && token) endSession();
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { message?: string | string[] };
+    const raw = body?.message;
+    throw new Error(Array.isArray(raw) ? raw.join('; ') : (raw ?? `Download failed: ${res.status}`));
+  }
+  const name = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? `ledger-statement.${kind === 'excel' ? 'xlsx' : 'pdf'}`;
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+export interface LedgerEntryInput {
+  date: string;
+  type: 'CASH_IN' | 'CASH_OUT' | 'BANK_IN' | 'BANK_OUT' | 'TRANSFER' | 'ADJUSTMENT';
+  amount: number;
+  accountName?: string;
+  fromAccount?: string;
+  toAccount?: string;
+  direction?: 'IN' | 'OUT';
+  referenceNo?: string;
+  remarks?: string;
+}
+
+export function createLedgerEntry(dto: LedgerEntryInput) {
+  return tenantFetch<{ ids: string[]; groupId: string | null }>('/api/v1/tenant/financial-ledger/entries', {
+    method: 'POST', body: JSON.stringify(dto),
+  });
+}
+
+export function deleteLedgerEntry(id: string, reason?: string) {
+  return tenantFetch<{ deleted: number }>(
+    `/api/v1/tenant/financial-ledger/entries/${encodeURIComponent(id)}${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`,
+    { method: 'DELETE' },
+  );
+}

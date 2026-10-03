@@ -62,6 +62,8 @@ export class TenantLedgerService {
     `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_${s}_ft_date ON ${q}."fund_transactions" (transaction_date DESC)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_${s}_ft_type ON ${q}."fund_transactions" (type, transaction_date DESC)`);
+    await client.query(`ALTER TABLE ${q}."fund_transactions" ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE ${q}."fund_transactions" ADD COLUMN IF NOT EXISTS deleted_by UUID`);
   }
 
   async listCredits(user: TenantJwtPayload, page: number, limit: number, month?: string) {
@@ -105,13 +107,13 @@ export class TenantLedgerService {
             ft.description, ft.reference_number, ft.category,
             'manual' AS source
           FROM fund_transactions ft
-          WHERE ft.type = 'CREDIT' ${monthFilterFt}
+          WHERE ft.type = 'CREDIT' AND ft.deleted_at IS NULL ${monthFilterFt}
           ORDER BY ft.transaction_date DESC
         `, month ? [month + '-01'] : []);
       const countRes = await client.query(`
           SELECT
             (SELECT COUNT(*) FROM payments p WHERE 1=1 ${monthFilter.replace('p.payment_date', 'p.payment_date')}) +
-            (SELECT COUNT(*) FROM fund_transactions ft WHERE ft.type = 'CREDIT' ${monthFilterFt}) AS total
+            (SELECT COUNT(*) FROM fund_transactions ft WHERE ft.type = 'CREDIT' AND ft.deleted_at IS NULL ${monthFilterFt}) AS total
         `, month ? [month + '-01'] : []);
 
       const combined = [
@@ -170,7 +172,7 @@ export class TenantLedgerService {
             ft.entity_name, ft.entity_type, ft.entity_id,
             ft.description, ft.reference_number, ft.category, 'manual' AS source
           FROM fund_transactions ft
-          WHERE ft.type = 'DEBIT' ${monthFilterFt}
+          WHERE ft.type = 'DEBIT' AND ft.deleted_at IS NULL ${monthFilterFt}
           ORDER BY ft.transaction_date DESC
         `, params);
 
@@ -313,11 +315,11 @@ export class TenantLedgerService {
           SELECT ft.*, u.first_name || ' ' || u.last_name AS created_by_name
           FROM fund_transactions ft
           LEFT JOIN users u ON u.id = ft.created_by
-          WHERE 1=1 ${monthFilter}
+          WHERE ft.deleted_at IS NULL ${monthFilter}
           ORDER BY ft.transaction_date DESC, ft.created_at DESC
           LIMIT $${limitIdx} OFFSET $${offsetIdx}
         `, params);
-      const countRes = await client.query(`SELECT COUNT(*) AS total FROM fund_transactions ft WHERE 1=1 ${monthFilter}`, month ? [month + '-01'] : []);
+      const countRes = await client.query(`SELECT COUNT(*) AS total FROM fund_transactions ft WHERE ft.deleted_at IS NULL ${monthFilter}`, month ? [month + '-01'] : []);
 
       return {
         data: dataRes.rows.map((r) => ({
