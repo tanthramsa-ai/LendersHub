@@ -38,6 +38,9 @@ async function bootstrap() {
       'http://localhost:3020',
     ],
     credentials: true,
+    // The statement download names its file in Content-Disposition; a cross-origin page can only
+    // read that header if it is exposed.
+    exposedHeaders: ['Content-Disposition'],
   });
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }));
   app.useGlobalFilters(new HttpExceptionFilter());

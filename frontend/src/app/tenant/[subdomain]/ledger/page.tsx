@@ -3,13 +3,14 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
+import StatementTab from './StatementTab';
 import {
   getLedgerCredits, getLedgerDebits, getLedgerPrincipal, getLedgerTransactions,
   addLedgerTransaction, getCustomers, getTenantSession, MANAGER_ROLES, LEDGER_ROLES,
-  getLedgerDashboard, LedgerEntry, PrincipalTxn, ManualTransaction, LedgerDashboard,
+  getLedgerDashboard, LedgerEntry, PrincipalTxn, ManualTransaction, LedgerDashboard, UserRole,
 } from '@/services/tenant-api';
 
-type Tab = 'credits' | 'debits' | 'principal' | 'transactions';
+type Tab = 'statement' | 'credits' | 'debits' | 'principal' | 'transactions';
 
 function fmt(n: number) {
   return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
@@ -53,12 +54,14 @@ export default function LedgerPage() {
   const session = getTenantSession();
   const canAdd = MANAGER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
   const canViewDashboard = LEDGER_ROLES.includes(session?.user.role ?? 'CUSTOMER');
+  const role = (session?.user.role ?? 'CUSTOMER') as UserRole;
 
   const [dashboard, setDashboard] = useState<LedgerDashboard | null>(null);
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [dashboardErr, setDashboardErr] = useState('');
 
-  const [tab, setTab] = useState<Tab>('credits');
+  // The Statement is the landing tab for everyone; Managers and Agents only ever get that one.
+  const [tab, setTab] = useState<Tab>('statement');
   const [month, setMonth] = useState(thisMonth());
   const [applyMonth, setApplyMonth] = useState(true);
   const [page, setPage] = useState(1);
@@ -91,6 +94,7 @@ export default function LedgerPage() {
   const limit = 50;
 
   const load = useCallback(async () => {
+    if (tab === 'statement') { setLoading(false); return; } // the Statement tab loads its own data
     setLoading(true);
     try {
       const m = applyMonth ? month : undefined;
@@ -155,12 +159,15 @@ export default function LedgerPage() {
     } finally { setTxnSubmitting(false); }
   }
 
-  const TABS: { key: Tab; label: string; color: string }[] = [
+  const ALL_TABS: { key: Tab; label: string; color: string }[] = [
+    { key: 'statement', label: 'Statement', color: 'text-blue-700' },
     { key: 'credits', label: 'Credits', color: 'text-green-700' },
     { key: 'debits', label: 'Debits', color: 'text-red-700' },
     { key: 'principal', label: 'Principal Fund', color: 'text-blue-700' },
     { key: 'transactions', label: 'Transactions', color: 'text-gray-700' },
   ];
+  // Credits/Debits/Principal/Transactions are the Owner/Admin books; others see only the Statement.
+  const TABS = ALL_TABS.filter((t) => canViewDashboard || t.key === 'statement');
 
   const creditTotal = credits.reduce((s, c) => s + c.amount, 0);
   const debitTotal = debits.reduce((s, d) => s + d.amount, 0);
@@ -172,9 +179,9 @@ export default function LedgerPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-gray-900">Financial Ledger</h1>
-          <p className="text-sm text-gray-500">Credits · Debits · Principal Fund</p>
+          <p className="text-sm text-gray-500">{canViewDashboard ? 'Statement · Credits · Debits · Principal Fund' : 'Statement'}</p>
         </div>
-        {canAdd && (
+        {canAdd && canViewDashboard && tab !== 'statement' && (
           <button onClick={() => setShowModal(true)}
             className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors">
             + Add Transaction
@@ -185,7 +192,7 @@ export default function LedgerPage() {
       {/* Dashboard — sourced from the immutable ledger_transactions posting engine
           plus funder capital (Total Fund / Available Fund), not fund_transactions
           (below, still the old manual credits/debits UI). */}
-      {canViewDashboard && (
+      {canViewDashboard && tab !== 'statement' && (
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-gray-700">Dashboard</h2>
@@ -217,6 +224,7 @@ export default function LedgerPage() {
       )}
 
       {/* Month filter */}
+      {tab !== 'statement' && (
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2">
           <input type="checkbox" id="applyMonth" checked={applyMonth} onChange={(e) => setApplyMonth(e.target.checked)}
@@ -228,6 +236,7 @@ export default function LedgerPage() {
             className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
         )}
       </div>
+      )}
 
       {/* Summary cards (credits/debits tab) */}
       {tab === 'credits' && credits.length > 0 && (
@@ -276,15 +285,18 @@ export default function LedgerPage() {
       )}
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-gray-100 p-1 rounded-xl w-fit">
+      <div className="flex gap-1 bg-gray-100 p-1 rounded-xl w-fit max-w-full overflow-x-auto">
         {TABS.map((t) => (
           <button key={t.key} onClick={() => setTab(t.key)}
-            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${tab === t.key ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
+            className={`px-4 py-2 text-sm font-medium rounded-lg whitespace-nowrap transition-colors ${tab === t.key ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
             {t.label}
           </button>
         ))}
       </div>
 
+      {tab === 'statement' ? (
+        <StatementTab subdomain={subdomain} role={role} />
+      ) : (
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
         {loading ? (
           <div className="py-16 text-center text-gray-400 text-sm">Loading…</div>
@@ -470,8 +482,10 @@ export default function LedgerPage() {
           </>
         )}
       </div>
+      )}
 
       {/* Add Transaction Modal */}
+
       {showModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto">

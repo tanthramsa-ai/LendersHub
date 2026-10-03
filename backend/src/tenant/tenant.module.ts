@@ -30,6 +30,8 @@ import { TenantLedgerController } from './ledger/tenant-ledger.controller';
 import { TenantLedgerPostingService } from './ledger/tenant-ledger-posting.service';
 import { TenantLedgerReportService } from './ledger/tenant-ledger-report.service';
 import { TenantLedgerReportController } from './ledger/tenant-ledger-report.controller';
+import { TenantFinancialLedgerService } from './ledger/tenant-financial-ledger.service';
+import { TenantFinancialLedgerController } from './ledger/tenant-financial-ledger.controller';
 import { TenantFundersService } from './funders/tenant-funders.service';
 import { TenantFundersController } from './funders/tenant-funders.controller';
 import { TenantReconciliationService } from './reconciliation/tenant-reconciliation.service';
@@ -65,6 +67,7 @@ import { TenantPermissionsController } from './permissions/tenant-permissions.co
     TenantLedgerService,
     TenantLedgerPostingService,
     TenantLedgerReportService,
+    TenantFinancialLedgerService,
     TenantFundersService,
     TenantReconciliationService,
     TenantPaymentWebhookService,
@@ -86,6 +89,7 @@ import { TenantPermissionsController } from './permissions/tenant-permissions.co
     TenantNotificationsController,
     TenantLedgerController,
     TenantLedgerReportController,
+    TenantFinancialLedgerController,
     TenantFundersController,
     TenantReconciliationController,
     TenantPaymentWebhookController,

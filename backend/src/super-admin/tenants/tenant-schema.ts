@@ -319,6 +319,9 @@ export function tenantSchemaDDL(s: string): string[] {
      )`,
     `CREATE INDEX IF NOT EXISTS idx_${s}_ft_date  ON ${q}."fund_transactions" (transaction_date DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_${s}_ft_type  ON ${q}."fund_transactions" (type, transaction_date DESC)`,
+    // Soft delete: a removed manual entry is flagged, never dropped, and leaves every ledger view.
+    `ALTER TABLE ${q}."fund_transactions" ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`,
+    `ALTER TABLE ${q}."fund_transactions" ADD COLUMN IF NOT EXISTS deleted_by UUID`,
 
     // ── ledger_transactions (immutable financial transaction ledger — source of
     // truth for principal/interest/fee splits, disbursements, collections,
