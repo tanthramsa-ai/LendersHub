@@ -69,6 +69,21 @@ describe('TenantCollectionsService', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
+    // A bare `!amount || amount <= 0` let these through: NaN comparisons are false, so "abc"
+    // reached the INSERT and numeric stored NaN, poisoning every later SUM over the ledger.
+    it.each([['"abc"', 'abc'], ['a boolean', true], ['an array', [5]], ['NaN', NaN], ['Infinity', Infinity]])(
+      'rejects %s as the amount, for both the agent and the office path',
+      async (_label, amount) => {
+        await expect(
+          svc.collectPayment(makeUser(), 'inst-1', { amount: amount as number, paymentMethod: 'CASH' }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        await expect(
+          svc.recordPayment(makeUser({ role: 'MANAGER' }), 'inst-1', { amount: amount as number, paymentMethod: 'CASH' }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(poolConnect).not.toHaveBeenCalled();
+      },
+    );
+
     it('rejects a CUSTOMER role before touching the database', async () => {
       await expect(
         svc.collectPayment(makeUser({ role: 'CUSTOMER' }), 'inst-1', { amount: 100, paymentMethod: 'CASH' }),
