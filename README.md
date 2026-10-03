@@ -124,6 +124,8 @@ First build takes ~5 minutes (Next.js compile is the longest step).
 | PostgreSQL | 5433 | `postgresql://localhost:5433/lendershub` |
 | Redis | 6380 | `redis://localhost:6380` |
 
+> **These ports are published to `127.0.0.1` only** — reachable from the machine running Docker, not from the network. Redis has no password, so it must never be exposed publicly. On a server, only Caddy (80/443) and SSH (22) should be reachable from the internet; the app talks to Postgres, Redis and the backend over the Docker network by service name, so nothing else needs a public port. Keep any cloud/host firewall allowing just TCP 22, 80 and 443.
+
 ### 4. Seed the super-admin (first run only)
 
 ```bash
