@@ -236,7 +236,7 @@ One row per loan. Supports multiple repayment cycle types.
 | `interest_rate` | NUMERIC(6,4) | NOT NULL | — | % per annum |
 | `term_months` | SMALLINT | NOT NULL | — | Tenure (weeks for weekly loans) |
 | `emi_amount` | NUMERIC(14,2) | ✓ | — | Calculated EMI / weekly / daily instalment |
-| `cycle_type` | TEXT | NOT NULL | `MONTHLY` | `WEEKLY`, `DAILY`, `MONTHLY`, `AGENT_RISK`, `TERM_LOAN` |
+| `cycle_type` | TEXT | NOT NULL | `MONTHLY` | `WEEKLY`, `DAILY`, `MONTHLY`, `AGENT_RISK` (`TERM_LOAN` is legacy: no longer created, existing rows still work) |
 | `calculation_type` | TEXT | NOT NULL | `REDUCING` | `REDUCING`, `FLAT`, or `PER_1000_PER_DAY` (weekly only) |
 | `interest_per_1000_per_day` | NUMERIC(6,2) | ✓ | — | ₹ per ₹1,000 per day; set only for `PER_1000_PER_DAY`. `interest_rate` then holds the equivalent flat % p.a. (rate × 36.4) |
 | `status` | `loan_status` | NOT NULL | `PENDING` | Lifecycle state |
@@ -250,7 +250,7 @@ One row per loan. Supports multiple repayment cycle types.
 | `created_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | |
 
-**Loan number prefixes:** `LN` (standard), `WL` (weekly), `DL` (daily), `ML` (monthly), `AR` (agent-risk), `TL` (term loan)
+**Loan number prefixes:** `LN` (standard), `WL` (weekly), `DL` (daily), `ML` (monthly), `AR` (agent-risk), `TL` (legacy term loan, no longer issued)
 
 **Indexes:** `UNIQUE (loan_number)`, `idx_*_loans_customer`, `idx_*_loans_officer`, `idx_*_loans_status`
 

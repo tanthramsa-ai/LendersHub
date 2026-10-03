@@ -4,10 +4,9 @@ import { NpaBadge } from '@/components/NpaBadge';
 import { useEffect, useState } from 'react';
 import { useParams, useRouter, useSearchParams, usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { getTermLoan, closeLoan, reopenLoan, recordPayment, undoInstallmentPayment, deleteInstallment, approveLoan, rejectLoan, approveCloseLoan, assignLoanAgent, getOfficers, updateTermLoan, getBranches, getTenantSession, MANAGER_ROLES, LOAN_DETAIL_PAYMENT_ROLES, COLLECTION_ROLES, TermLoanDetail, TermInstallment, Officer, TenantBranch } from '@/services/tenant-api';
+import { getTermLoan, closeLoan, reopenLoan, recordPayment, undoInstallmentPayment, deleteInstallment, approveLoan, rejectLoan, approveCloseLoan, assignLoanAgent, getOfficers, getTenantSession, MANAGER_ROLES, LOAN_DETAIL_PAYMENT_ROLES, COLLECTION_ROLES, TermLoanDetail, TermInstallment, Officer } from '@/services/tenant-api';
 import { CloseLoanModal, CloseCommentBanner, ReopenLoanModal } from '@/components/CloseLoanModal';
 import { ApproveLoanModal } from '@/components/ApproveLoanModal';
-import { EditLoanModal } from '@/components/EditLoanModal';
 import { AddInstallmentModal } from '@/components/AddInstallmentModal';
 import { refreshNotificationBell } from '@/lib/notifications-bus';
 
@@ -94,9 +93,6 @@ export default function TermLoanDetailPage() {
   const [showAssignAgent, setShowAssignAgent] = useState(false);
   const [selectedOfficerId, setSelectedOfficerId] = useState('');
   const [assigningAgent, setAssigningAgent] = useState(false);
-  const [branches, setBranches] = useState<TenantBranch[]>([]);
-  const [showEditLoan, setShowEditLoan] = useState(false);
-  const [savingEdit, setSavingEdit] = useState(false);
   const [showAddInstallment, setShowAddInstallment] = useState(false);
 
   async function load() {
@@ -104,17 +100,6 @@ export default function TermLoanDetailPage() {
       const data = await getTermLoan(id);
       setLoan(data);
     } finally { setLoading(false); }
-  }
-
-  async function handleSaveEdit(dto: Record<string, unknown>) {
-    setSavingEdit(true); setErr('');
-    try {
-      await updateTermLoan(id, dto as Parameters<typeof updateTermLoan>[1]);
-      setShowEditLoan(false);
-      await load();
-    } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : 'Failed to save loan');
-    } finally { setSavingEdit(false); }
   }
 
   useEffect(() => { load(); }, [id]);
@@ -133,7 +118,6 @@ export default function TermLoanDetailPage() {
 
   useEffect(() => {
     if (canClose) getOfficers().then(setOfficers).catch(() => setOfficers([]));
-    getBranches().then((b) => setBranches(b.filter((br) => br.isActive))).catch(() => setBranches([]));
   }, [canClose]);
 
   async function handleAssignAgent() {
@@ -283,7 +267,7 @@ export default function TermLoanDetailPage() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <Link href={`/${subdomain}/loans`} className="text-sm text-blue-600 hover:underline whitespace-nowrap">← All Loans</Link>
+          <Link href={`/${subdomain}/dashboard`} className="text-sm text-blue-600 hover:underline whitespace-nowrap">← Dashboard</Link>
           <div>
             <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-xl font-bold text-gray-900 font-mono">{loan.loanNumber}</h1>
@@ -324,12 +308,6 @@ export default function TermLoanDetailPage() {
             <button onClick={() => openPayModal()}
               className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors">
               + Record Payment
-            </button>
-          )}
-          {canClose && isActive && loan.payments.length === 0 && !loan.pendingClosure && (
-            <button onClick={() => { setErr(''); setShowEditLoan(true); }}
-              className="px-4 py-2 border border-gray-300 text-gray-700 hover:bg-gray-50 text-sm font-medium rounded-lg transition-colors">
-              Edit Loan
             </button>
           )}
           {canClose && isActive && (
@@ -697,27 +675,6 @@ export default function TermLoanDetailPage() {
         />
       )}
 
-      {showEditLoan && (
-        <EditLoanModal
-          cycleType="TERM_LOAN"
-          loanNumber={loan.loanNumber}
-          branches={branches}
-          saving={savingEdit}
-          error={err}
-          initial={{
-            principal: loan.principal,
-            interestRate: loan.interestRate,
-            term: loan.termMonths,
-            firstDueDate: loan.firstDueDate ?? '',
-            purpose: loan.purpose,
-            branchId: loan.branchId,
-            calculationType: loan.calculationType,
-          }}
-          onCancel={() => { setShowEditLoan(false); setErr(''); }}
-          onSave={handleSaveEdit}
-        />
-      )}
-
       {showApprove && (
         <ApproveLoanModal
           loanNumber={loan.loanNumber}
@@ -746,8 +703,8 @@ export default function TermLoanDetailPage() {
 
       {/* Back — repeated at the foot so it is reachable after scrolling the schedule */}
       <div className="flex items-center justify-between">
-        <Link href={`/${subdomain}/loans`} className="text-sm text-blue-600 hover:underline">
-          ← Back to All Loans
+        <Link href={`/${subdomain}/dashboard`} className="text-sm text-blue-600 hover:underline">
+          ← Back to Dashboard
         </Link>
       </div>
     </div>

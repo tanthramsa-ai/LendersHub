@@ -7,7 +7,7 @@ A multi-tenant SaaS platform for lending companies. Each tenant (lender) gets an
 | Module | What it does |
 |---|---|
 | **Multi-tenant auth** | JWT login with 2-step SMS OTP for users who have a phone; forgot / reset password via OTP |
-| **Loan types** | Weekly, daily (with/without Sunday), monthly interest-only, agent-risk, and standard term loans — each with EMI preview before creation |
+| **Loan types** | Weekly, daily (with/without Sunday), monthly interest-only, and agent-risk loans — each with EMI preview before creation |
 | **Collections** | Agent-facing installment list (today / overdue), payment capture with receipt photo, offline queue that syncs when online |
 | **Customers** | Full KYC profile — PAN / Aadhaar, alt contact, locality, occupation; branch assignment |
 | **Branch management** | Create branches, assign team members per branch, view member / customer / loan counts |
