@@ -128,6 +128,11 @@ export async function setBiometricEnabled(enabled: boolean): Promise<void> {
   await SecureStore.setItemAsync(KEYS.BIOMETRIC_ENABLED, enabled ? 'true' : 'false');
 }
 
+/** The current session token, for requests apiRequest cannot make (binary downloads). */
+export async function getAuthToken(): Promise<string | null> {
+  return SecureStore.getItemAsync(KEYS.TOKEN);
+}
+
 // ─── API fetch wrapper ────────────────────────────────────────────────────────
 
 export async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
