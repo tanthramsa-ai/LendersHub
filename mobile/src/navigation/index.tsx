@@ -17,6 +17,8 @@ import HomeScreen from '../screens/home/HomeScreen';
 import CollectionsNavigator from './CollectionsNavigator';
 import CustomersNavigator from './CustomersNavigator';
 import ProfileScreen from '../screens/profile/ProfileScreen';
+import LedgerScreen from '../screens/ledger/LedgerScreen';
+import { canViewLedger } from '../utils/ledger';
 
 import {
   RootStackParamList,
@@ -34,6 +36,7 @@ function TabIcon({ name, focused }: { name: string; focused: boolean }) {
     Home: '⊞',
     Collections: '📋',
     Customers: '👥',
+    Ledger: '📒',
     Profile: '👤',
   };
   return (
@@ -44,6 +47,7 @@ function TabIcon({ name, focused }: { name: string; focused: boolean }) {
 }
 
 function MainTabs() {
+  const role = useAuthStore((s) => s.session?.user.role);
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
@@ -67,6 +71,7 @@ function MainTabs() {
       <Tab.Screen name="Home" component={HomeScreen} options={{ title: 'Dashboard' }} />
       <Tab.Screen name="Collections" component={CollectionsNavigator} options={{ title: 'Collect' }} />
       <Tab.Screen name="Customers" component={CustomersNavigator} options={{ title: 'Customers' }} />
+      {canViewLedger(role) && <Tab.Screen name="Ledger" component={LedgerScreen} />}
       <Tab.Screen name="Profile" component={ProfileScreen} />
     </Tab.Navigator>
   );

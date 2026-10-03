@@ -46,6 +46,7 @@
       "expo-sqlite",
       "expo-status-bar",
       "expo-secure-store",
+      "expo-sharing",
       [
         "expo-camera",
         {

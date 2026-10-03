@@ -152,6 +152,7 @@ export type MainTabParamList = {
   Home: undefined;
   Collections: undefined;
   Customers: undefined;
+  Ledger: undefined;
   Profile: undefined;
 };
 
