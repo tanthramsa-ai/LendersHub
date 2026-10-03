@@ -231,7 +231,7 @@ export default function TenantDashboardPage() {
   // ── Quick actions per role ────────────────────────────────────────────────────
   const quickActions = [
     canCreateLoan && { label: 'Add Customer', sub: 'Register new borrower', href: `/tenant/${subdomain}/customers/new`, icon: <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" /></svg>, color: BRAND },
-    canCreateLoan && { label: 'New Loan', sub: 'Create loan application', href: `/tenant/${subdomain}/loans/new`, icon: <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>, color: '#10B981' },
+    canCreateLoan && { label: 'New Loan', sub: 'Create loan application', href: `/tenant/${subdomain}/weekly-loans/new`, icon: <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>, color: '#10B981' },
     { label: 'Collections', sub: isCollector ? 'My assigned dues' : 'Manage field agents', href: `/tenant/${subdomain}/collections`, icon: <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>, color: '#8B5CF6' },
   ].filter(Boolean) as { label: string; sub: string; href: string; icon: React.ReactNode; color: string }[];
 
@@ -538,12 +538,9 @@ export default function TenantDashboardPage() {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <Link href={`/tenant/${subdomain}/loans`} className="text-xs font-medium px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors">
-              View all
-            </Link>
             {canCreateLoan && (
-              <Link href={`/tenant/${subdomain}/loans/new`} className="text-xs font-medium px-3 py-1.5 rounded-lg text-white transition-colors" style={{ backgroundColor: BRAND }}>
-                + New Term Loan
+              <Link href={`/tenant/${subdomain}/weekly-loans/new`} className="text-xs font-medium px-3 py-1.5 rounded-lg text-white transition-colors" style={{ backgroundColor: BRAND }}>
+                + New Loan
               </Link>
             )}
           </div>
@@ -554,7 +551,7 @@ export default function TenantDashboardPage() {
             {isCollector
               ? 'No loans assigned to you yet.'
               : canCreateLoan
-                ? <>No disbursed loans yet. <Link href={`/tenant/${subdomain}/loans/new`} className="hover:underline" style={{ color: BRAND }}>Create the first one</Link></>
+                ? <>No disbursed loans yet. <Link href={`/tenant/${subdomain}/weekly-loans/new`} className="hover:underline" style={{ color: BRAND }}>Create the first one</Link></>
                 : 'No disbursed loans found.'}
           </div>
         ) : (

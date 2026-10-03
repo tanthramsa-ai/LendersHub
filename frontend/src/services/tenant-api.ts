@@ -1093,50 +1093,6 @@ export interface TermLoanDetail extends TermLoan, NpaDetailFields {
   payments: Array<{ id: string; amount: number; method: string; referenceNumber?: string; paymentDate: string; createdAt: string }>;
 }
 
-export interface TermSchedulePreview {
-  emi: number; totalInterest: number; totalAmount: number;
-  schedule: Array<{ number: number; dueDate: string; principalAmount: number; interestAmount: number; totalAmount: number }>;
-}
-
-export function getTermLoans(page = 1, limit = 20, filters: { search?: string; branchId?: string; status?: string } = {}) {
-  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
-  if (filters.search) params.set('search', filters.search);
-  if (filters.branchId) params.set('branchId', filters.branchId);
-  if (filters.status) params.set('status', filters.status);
-  return tenantFetch<{ data: TermLoan[]; total: number; page: number; limit: number }>(`/api/v1/tenant/loans/term-loan?${params}`);
-}
-
-export function previewTermLoanSchedule(dto: {
-  principal: number; interestRate: number; termMonths: number;
-  firstDueDate: string; calculationType: 'REDUCING' | 'FLAT'; emiRounding: number;
-}) {
-  return tenantFetch<TermSchedulePreview>('/api/v1/tenant/loans/term-loan/preview', {
-    method: 'POST', body: JSON.stringify(dto),
-  });
-}
-
-export function createTermLoan(dto: {
-  customerId: string; principal: number; interestRate: number; termMonths: number;
-  firstDueDate: string; calculationType: 'REDUCING' | 'FLAT'; emiRounding: number;
-  branchId?: string; purpose?: string; loanTypeId?: string; loanOfficerId?: string;
-  securityDocUrl?: string; promissoryNoteUrl?: string;
-}) {
-  return tenantFetch<{ id: string; loanNumber: string; emi: number }>('/api/v1/tenant/loans/term-loan', {
-    method: 'POST', body: JSON.stringify(dto),
-  });
-}
-
-export function updateTermLoan(id: string, dto: {
-  principal: number; interestRate: number; termMonths: number;
-  firstDueDate: string; calculationType: 'REDUCING' | 'FLAT'; emiRounding: number;
-  branchId?: string; purpose?: string; loanTypeId?: string;
-  securityDocUrl?: string; promissoryNoteUrl?: string;
-}) {
-  return tenantFetch<{ id: string; loanNumber: string; emi: number }>(`/api/v1/tenant/loans/term-loan/${id}`, {
-    method: 'PATCH', body: JSON.stringify(dto),
-  });
-}
-
 export function getTermLoan(id: string) {
   return tenantFetch<TermLoanDetail>(`/api/v1/tenant/loans/${id}`);
 }

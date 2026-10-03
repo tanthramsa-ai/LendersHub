@@ -21,7 +21,6 @@ const CAN_WRITE_CUSTOMERS: UserRole[] = ['OWNER', 'ADMIN', 'MANAGER', 'AGENT', '
 // Checked before the NAV-level guard — first match wins.
 const SUBROUTE_PERMISSIONS: { suffix: string; roles: UserRole[] }[] = [
   { suffix: '/customers/new',        roles: CAN_WRITE_CUSTOMERS },
-  { suffix: '/loans/new',            roles: CAN_CREATE_LOANS },
 ];
 
 const BRAND = '#0F4C81';
@@ -43,10 +42,6 @@ const LOANS_GROUP_ICON = (
 );
 
 const LOANS_GROUP_ITEMS: NavItem[] = [
-  {
-    href: 'loans', label: 'Term Loans', roles: ALL_ROLES,
-    icon: LOANS_GROUP_ICON,
-  },
   {
     href: 'weekly-loans', label: 'Weekly Loans', roles: CAN_CREATE_LOANS,
     icon: (
@@ -90,8 +85,8 @@ const LOANS_GROUP_ITEMS: NavItem[] = [
 ];
 
 // Loan-type list hrefs that each have their own /new creation page -- the header's
-// global "New Loan" button should go inert on any of them, not just Term Loan's.
-const LOAN_CREATE_HREFS = ['loans', 'weekly-loans', 'daily-loans', 'monthly-loans', 'agent-risk-loans'];
+// global "New Loan" button should go inert on any of them.
+const LOAN_CREATE_HREFS = ['weekly-loans', 'daily-loans', 'monthly-loans', 'agent-risk-loans'];
 
 // Rendered before the collapsible Loans group.
 const NAV_TOP: NavItem[] = [
@@ -668,7 +663,7 @@ export default function TenantLayout({ children }: { children: React.ReactNode }
               </span>
             ) : (
               <Link
-                href={`/${subdomain}/loans/new`}
+                href={`/${subdomain}/weekly-loans/new`}
                 className="hidden sm:flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-lg transition-colors"
                 style={{ backgroundColor: BRAND }}
               >

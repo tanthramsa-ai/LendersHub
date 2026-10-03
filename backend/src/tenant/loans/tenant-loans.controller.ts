@@ -1,5 +1,5 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, Request, ParseIntPipe, DefaultValuePipe } from '@nestjs/common';
-import { TenantLoansService, CreateLoanDto, CreateWeeklyLoanDto, CreateDailyLoanDto, CreateMonthlyLoanDto, CreateAgentRiskLoanDto, CreateTermLoanDto, UpdateWeeklyLoanDto, UpdateDailyLoanDto, UpdateMonthlyLoanDto, UpdateAgentRiskLoanDto, UpdateTermLoanDto, RecordPaymentDto, MissResolution } from './tenant-loans.service';
+import { TenantLoansService, CreateLoanDto, CreateWeeklyLoanDto, CreateDailyLoanDto, CreateMonthlyLoanDto, CreateAgentRiskLoanDto, UpdateWeeklyLoanDto, UpdateDailyLoanDto, UpdateMonthlyLoanDto, UpdateAgentRiskLoanDto, RecordPaymentDto, MissResolution } from './tenant-loans.service';
 import { TenantJwtGuard } from '../auth/guards/tenant-jwt.guard';
 import { TenantJwtPayload } from '../auth/strategies/tenant-jwt.strategy';
 
@@ -158,40 +158,6 @@ export class TenantLoansController {
     @Body() dto: UpdateMonthlyLoanDto,
   ) {
     return this.svc.updateMonthlyLoan(req.user, id, dto);
-  }
-
-  @Get('term-loan')
-  listTermLoans(
-    @Request() req: { user: TenantJwtPayload },
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
-    @Query('search') search?: string,
-    @Query('branchId') branchId?: string,
-    @Query('status') status?: string,
-  ) {
-    return this.svc.listTermLoans(req.user, page, Math.min(limit, 100), { search, branchId, status });
-  }
-
-  @Post('term-loan/preview')
-  previewTermLoan(
-    @Request() _req: { user: TenantJwtPayload },
-    @Body() dto: Pick<CreateTermLoanDto, 'principal' | 'interestRate' | 'termMonths' | 'firstDueDate' | 'calculationType' | 'emiRounding'>,
-  ) {
-    return this.svc.previewTermLoanSchedule(dto);
-  }
-
-  @Post('term-loan')
-  createTermLoan(@Request() req: { user: TenantJwtPayload }, @Body() dto: CreateTermLoanDto) {
-    return this.svc.createTermLoan(req.user, dto);
-  }
-
-  @Patch('term-loan/:id')
-  updateTermLoan(
-    @Request() req: { user: TenantJwtPayload },
-    @Param('id') id: string,
-    @Body() dto: UpdateTermLoanDto,
-  ) {
-    return this.svc.updateTermLoan(req.user, id, dto);
   }
 
   @Get('pending-applications')

@@ -7,16 +7,16 @@ import { TenantBranch, WeeklyCalculationType } from '@/services/tenant-api';
 
 const inputCls = 'w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-gray-900';
 
-export type EditLoanCycleType = 'WEEKLY' | 'DAILY' | 'MONTHLY' | 'AGENT_RISK' | 'TERM_LOAN';
+export type EditLoanCycleType = 'WEEKLY' | 'DAILY' | 'MONTHLY' | 'AGENT_RISK';
 
 const TERM_LABEL: Record<EditLoanCycleType, string> = {
-  WEEKLY: 'weeks', DAILY: 'days', MONTHLY: 'months', AGENT_RISK: 'months', TERM_LOAN: 'months',
+  WEEKLY: 'weeks', DAILY: 'days', MONTHLY: 'months', AGENT_RISK: 'months',
 };
 const TERM_MAX: Record<EditLoanCycleType, number> = {
-  WEEKLY: 99, DAILY: 3650, MONTHLY: 360, AGENT_RISK: 360, TERM_LOAN: 360,
+  WEEKLY: 99, DAILY: 3650, MONTHLY: 360, AGENT_RISK: 360,
 };
 const CYCLE_LABEL: Record<EditLoanCycleType, string> = {
-  WEEKLY: 'Weekly', DAILY: 'Daily', MONTHLY: 'Monthly', AGENT_RISK: 'Agent Risk', TERM_LOAN: 'Term Loan',
+  WEEKLY: 'Weekly', DAILY: 'Daily', MONTHLY: 'Monthly', AGENT_RISK: 'Agent Risk',
 };
 
 export type EditLoanInitial = {
@@ -26,7 +26,7 @@ export type EditLoanInitial = {
   firstDueDate: string;
   purpose?: string | null;
   branchId?: string | null;
-  /** WEEKLY/DAILY: REDUCING | FLAT | PER_1000_PER_DAY. TERM_LOAN: REDUCING | FLAT. Unused for MONTHLY/AGENT_RISK. */
+  /** WEEKLY/DAILY: REDUCING | FLAT | PER_1000_PER_DAY. Unused for MONTHLY/AGENT_RISK. */
   calculationType?: string;
   interestPerDay?: number | null;
   /** DAILY only. */
@@ -45,11 +45,11 @@ type EditLoanModalProps = {
 };
 
 /**
- * Shared edit form for all 5 loan cycle types. Only usable pre-payment (server re-checks
+ * Shared edit form for the 4 loan cycle types that can still be created. Only usable pre-payment (server re-checks
  * this), since saving deletes and regenerates the entire installment schedule.
  */
 export function EditLoanModal({ cycleType, loanNumber, branches, initial, saving = false, error, onCancel, onSave }: EditLoanModalProps) {
-  const hasCalcType = cycleType === 'WEEKLY' || cycleType === 'DAILY' || cycleType === 'TERM_LOAN';
+  const hasCalcType = cycleType === 'WEEKLY' || cycleType === 'DAILY';
   const hasPerDayOption = cycleType === 'WEEKLY' || cycleType === 'DAILY';
 
   const [form, setForm] = useState({
@@ -108,12 +108,6 @@ export function EditLoanModal({ cycleType, loanNumber, branches, initial, saving
         ...base, termDays: term, calculationType: form.calculationType,
         emiRounding: parseInt(form.emiRounding, 10), cycleType: form.dailyCycleType,
         ...(isPerDay && { interestPerDay }),
-      });
-    } else if (cycleType === 'TERM_LOAN') {
-      onSave({
-        ...base, termMonths: term,
-        calculationType: form.calculationType === 'PER_1000_PER_DAY' ? 'REDUCING' : form.calculationType,
-        emiRounding: parseInt(form.emiRounding, 10),
       });
     } else {
       onSave({ ...base, termMonths: term });

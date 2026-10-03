@@ -24,7 +24,7 @@ npm run start:dev   # http://localhost:4001
 | Collections | `src/tenant/collections/` | Installment lists, record payment, role scoping |
 | Customers | `src/tenant/customers/` | Full KYC CRUD |
 | Dashboard | `src/tenant/dashboard/` | Role-aware stats, recent activity, active loans |
-| Loans | `src/tenant/loans/` | Weekly / daily / monthly / agent-risk / term loans |
+| Loans | `src/tenant/loans/` | Weekly / daily / monthly / agent-risk loans |
 | Notifications | `src/tenant/notifications/` | In-app notification inbox |
 | Loan Types | `src/tenant/loan-types/` | Loan product catalogue |
 | Ledger | `src/tenant/ledger/` | Fund transaction ledger |
